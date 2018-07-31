@@ -1,7 +1,7 @@
 set(ASan_LIB_NAME ASan)
 
 find_library(ASan_LIBRARY
-  NAMES libasan.so libasan.so.4
+  NAMES libasan.so libasan.so.0 libasan.so.1 libasan.so.2 libasan.so.3 libasan.so.4
   PATHS /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib)
 
 include(FindPackageHandleStandardArgs)

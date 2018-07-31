@@ -149,9 +149,33 @@ if [ ${TASK} == "cpp_test" ]; then
     make cover
 fi
 
+
 if [ ${TASK} == "distributed_test" ]; then
     set -e
     make all || exit -1
     cd tests/distributed
     ./runtests.sh
+fi
+
+if [ ${TASK} == "sanitizer_test" ]; then
+    set -e
+    # Build gtest via cmake
+    wget -nc https://github.com/google/googletest/archive/release-1.7.0.zip
+    unzip -n release-1.7.0.zip
+    mv googletest-release-1.7.0 gtest && cd gtest
+    cmake . && make
+    mkdir lib && mv libgtest.a lib
+    cd ..
+    rm -rf release-1.7.0.zip
+
+    mkdir build && cd build
+    cmake .. -DGOOGLE_TEST=ON -DGTEST_ROOT=$PWD/../gtest/ -DUSE_SANITIZER=ON \
+	  -DENABLED_SANITIZERS="address" -DCMAKE_BUILD_TYPE=Debug
+    make
+    cd ..
+    # Sanitizer returns 1 as long as we don't fix all alarms. Lets silence the
+    # return code for now.
+    ./testxgboost || true
+    rm -rf build
+    exit 0
 fi
