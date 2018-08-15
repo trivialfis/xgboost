@@ -66,6 +66,8 @@ addons:
       - graphviz
       - gcc-4.8
       - g++-4.8
+      - gcc-7
+      - g++-7
 
 before_install:
   - source dmlc-core/scripts/travis/travis_setup_env.sh

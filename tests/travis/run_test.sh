@@ -163,14 +163,21 @@ if [ ${TASK} == "sanitizer_test" ]; then
     wget -nc https://github.com/google/googletest/archive/release-1.7.0.zip
     unzip -n release-1.7.0.zip
     mv googletest-release-1.7.0 gtest && cd gtest
-    cmake . && make
+    CC=gcc-7 CXX=g++-7 cmake -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=gold"
+    make
     mkdir lib && mv libgtest.a lib
     cd ..
     rm -rf release-1.7.0.zip
 
     mkdir build && cd build
-    cmake .. -DGOOGLE_TEST=ON -DGTEST_ROOT=$PWD/../gtest/ -DUSE_SANITIZER=ON \
-	  -DENABLED_SANITIZERS="address" -DCMAKE_BUILD_TYPE=Debug
+    find /usr/lib -iname "*libasan*" > find_asan.log
+    cat find_asan.log
+    CC=gcc-7 CXX=g++-7 cmake .. -DGOOGLE_TEST=ON -DGTEST_ROOT=$PWD/../gtest/ \
+      -DUSE_SANITIZER=ON -DENABLED_SANITIZERS="address" \
+      -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=gold" \
+      -DSANITIZER_PATH=/usr/lib/x86_64-linux-gnu/ \
+      -DCMAKE_C_LINK_EXECUTABLE="gold" \
+      -DCMAKE_CXX_LINK_EXECUTABLE="gold"
     make
     cd ..
     # Sanitizer returns 1 as long as we don't fix all alarms. Lets silence the
