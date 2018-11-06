@@ -220,6 +220,28 @@ TEST(Objective, DeclareUnifiedTest(TweedieRegressionBasic)) {
   delete obj;
 }
 
+TEST(Objective, DeclareUnifiedTest(L1RegressionBasic)) {
+  xgboost::ObjFunction * obj = xgboost::ObjFunction::Create("reg:absolute");
+  std::vector<std::pair<std::string, std::string> > args;
+  obj->Configure(args);
+  CheckObjFunction(obj,
+                   {0.0, 0.2, 0.3, 0.4, 0.5, 2.2, 0.7, 0.8},   // preds
+                   {0.0, 1.4, 1.5, 1.6, 2.1, 0.6, 2.3, 2.1},   // labels
+                   {1,   1,   1,   1,   1,   1,   1,   1  },   // weights
+                   {0. , -1.2, -1.2, -1.2, -1.2,  1.2, -1.2, -1.2}, // out_grad
+                   {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f});  // out_hess
+  // residue:     [ 0. , 1.2, 1.2, 1.2, 1.6, -1.6, 1.6, 1.3]
+  // gradient:    [ 0,  1,  1,  1,  1, -1,  1,  1]
+  // running_sum: [ 0, -1, -1, -1, -1,  1, -1, -1]
+  CheckObjFunction(obj,
+                   {0.0, 0.2, 0.3, 0.4, 0.5, 2.2, 0.7, 0.8},   // preds
+                   {0.0, 1.4, 1.5, 1.6, 2.1, 0.6, 2.3, 2.1},   // labels
+                   {},                                         // Empty weight
+                   { 0.  , -1.24, -1.24, -1.24, -1.24,  1.24, -1.24, -1.24},
+                   {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}); // out_hess
+  // running_sum:  [ 0. , -1.2, -1.2, -1.2, -1.2,  1.2, -1.2, -1.2]
+  delete obj;
+}
 
 // CoxRegression not implemented in GPU code, no need for testing.
 #if !defined(__CUDACC__)

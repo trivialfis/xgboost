@@ -367,8 +367,8 @@ struct BernoulliRng {
 };
 
 // Set gradient pair to 0 with p = 1 - subsample
-inline void SubsampleGradientPair(dh::DVec<GradientPair>* p_gpair, float subsample,
-                            int offset = 0) {
+inline void SubsampleGradientPair(dh::DVec<GradientPair> *p_gpair, float subsample,
+                                  int offset = 0) {
   if (subsample == 1.0) {
     return;
   }

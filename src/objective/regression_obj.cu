@@ -145,6 +145,7 @@ XGBOOST_REGISTER_OBJECTIVE(LogisticRaw, "binary:logitraw")
           "before logistic transformation.")
 .set_body([]() { return new RegLossObj<LogisticRaw>(); });
 
+
 // Deprecated GPU functions
 XGBOOST_REGISTER_OBJECTIVE(GPULinearRegression, "gpu:reg:linear")
 .describe("Deprecated. Linear regression (computed on GPU).")
@@ -171,6 +172,128 @@ XGBOOST_REGISTER_OBJECTIVE(GPULogisticRaw, "gpu:binary:logitraw")
     LOG(WARNING) << "gpu:binary:logitraw is now deprecated, use binary:logitraw instead.";
     return new RegLossObj<LogisticRaw>(); });
 // End deprecated
+
+struct L1RegLossParam : public dmlc::Parameter<L1RegLossParam> {
+  bst_float l1_gamma;
+  float scale_pos_weight;
+  int n_gpus;
+  int gpu_id;
+  // declare parameters
+  DMLC_DECLARE_PARAMETER(L1RegLossParam) {
+    // FIXME: Better description.
+    DMLC_DECLARE_FIELD(l1_gamma).set_default(0.2f).set_lower_bound(0.0f)
+        .describe("Look ahead.");
+    DMLC_DECLARE_FIELD(scale_pos_weight).set_default(1.0f).set_lower_bound(0.0f)
+        .describe("Scale the weight of positive examples by this factor");
+    DMLC_DECLARE_FIELD(n_gpus).set_default(1).set_lower_bound(-1)
+        .describe("Number of GPUs to use for multi-gpu algorithms.");
+    DMLC_DECLARE_FIELD(gpu_id)
+        .set_lower_bound(0)
+        .set_default(0)
+        .describe("gpu to use for objective function evaluation");
+  }
+};
+
+DMLC_REGISTER_PARAMETER(L1RegLossParam);
+
+class L1RegLossObj : public ObjFunction {
+ protected:
+  HostDeviceVector<bst_float> momentum_;
+
+  HOST_DEV_INLINE bst_float Momentum(
+      bst_float* running_sum, bst_float const gamma, bst_float const grad) {
+    // g_t = gamma * g_(t-1) - Delta(L(F_t))
+    bst_float running = gamma * (*running_sum) - grad;
+    *running_sum = running;
+    // result = gamma * g_t - Delta(L(F_t))
+    bst_float result = *running_sum * gamma - grad;
+    return result;
+  }
+
+  HOST_DEV_INLINE bst_float FirstOrderGradient(
+      bst_float const pred, bst_float const label) {
+    bst_float residue = label - pred;
+    // The original gradient.
+    bst_float gradient = (0 < residue) - (residue < 0);
+    return gradient;
+  }
+
+ public:
+  L1RegLossObj() = default;
+
+  void Configure(
+      const std::vector<std::pair<std::string, std::string> >& args) override {
+    param_.InitAllowUnknown(args);
+    devices_ = GPUSet::All(param_.gpu_id, param_.n_gpus);
+  }
+
+  void GetGradient(const HostDeviceVector<bst_float>& preds,
+                   const MetaInfo &info,
+                   int iter,
+                   HostDeviceVector<GradientPair>* out_gpair) override {
+    CHECK_NE(info.labels_.Size(), 0U) << "label set cannot be empty";
+    CHECK_EQ(preds.Size(), info.labels_.Size())
+        << "labels are not correctly provided"
+        << "preds.size=" << preds.Size() << ", label.size=" << info.labels_.Size();
+    size_t ndata = preds.Size();
+    out_gpair->Resize(ndata);
+    if (momentum_.Size() == 0) {
+      momentum_.Resize(ndata);
+      momentum_.Fill(0);
+    }
+
+    bool is_null_weight = info.weights_.Size() == 0;
+    auto scale_pos_weight = param_.scale_pos_weight;
+    bst_float const l1_gamma = param_.l1_gamma;
+
+    common::Transform<>::Init(
+        [=] XGBOOST_DEVICE(size_t _idx,
+                           common::Span<GradientPair> _out_gpair,
+                           common::Span<bst_float> _momentum,
+                           common::Span<const bst_float> _preds,
+                           common::Span<const bst_float> _labels,
+                           common::Span<const bst_float> _weights) {
+          bst_float p = Transform(_preds[_idx]);
+          bst_float w = is_null_weight ? 1.0f : _weights[_idx];
+          bst_float label = _labels[_idx];
+          if (label == 1.0f) {
+            w *= scale_pos_weight;
+          }
+          bst_float g = FirstOrderGradient(p, label);
+          g = Momentum(&(_momentum[_idx]), l1_gamma, g);
+          // We leave hess to be 1.0 for L1 Regression.
+          _out_gpair[_idx] = GradientPair(g * w, 1.0f);
+        },
+        common::Range{0, static_cast<int64_t>(ndata)}, devices_)
+        .Eval(out_gpair, &momentum_, &preds, &info.labels_, &info.weights_);
+  }
+
+  XGBOOST_DEVICE bst_float Transform(bst_float x) { return x; }
+
+  const char* DefaultEvalMetric() const override {
+    return "mae";
+  }
+
+  void PredTransform(HostDeviceVector<float> *io_preds) override {
+    common::Transform<>::Init(
+        [this] XGBOOST_DEVICE(size_t _idx, common::Span<float> _preds) {
+          _preds[_idx] = Transform(_preds[_idx]);
+        }, common::Range{0, static_cast<int64_t>(io_preds->Size())},
+        devices_).Eval(io_preds);
+  }
+
+  float ProbToMargin(float base_score) const override {
+    return base_score;
+  }
+
+ protected:
+  L1RegLossParam param_;
+  GPUSet devices_;
+};
+
+XGBOOST_REGISTER_OBJECTIVE(AbsoluteRegression, "reg:absolute")
+.describe("Absolute regression.")
+.set_body([]() { return new L1RegLossObj(); });
 
 // declare parameter
 struct PoissonRegressionParam : public dmlc::Parameter<PoissonRegressionParam> {

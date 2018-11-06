@@ -201,7 +201,7 @@ class GBTree : public GradientBooster {
       auto nsize = static_cast<bst_omp_uint>(tmp.Size());
       for (int gid = 0; gid < ngroup; ++gid) {
         std::vector<GradientPair>& tmp_h = tmp.HostVector();
-        #pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static)
         for (bst_omp_uint i = 0; i < nsize; ++i) {
           tmp_h[i] = gpair_h[i * ngroup + gid];
         }
@@ -298,7 +298,7 @@ class GBTree : public GradientBooster {
     // update the trees
     for (auto& up : updaters_) {
       up->Update(gpair, p_fmat, new_trees);
-}
+    }
   }
 
   // commit new trees all at once

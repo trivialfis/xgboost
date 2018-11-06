@@ -14,7 +14,7 @@ DMLC_REGISTRY_FILE_TAG(cpu_predictor);
 
 class CPUPredictor : public Predictor {
  protected:
-  static bst_float PredValue(const  SparsePage::Inst& inst,
+  static bst_float PredValue(const SparsePage::Inst& inst,
                              const std::vector<std::unique_ptr<RegTree>>& trees,
                              const std::vector<int>& tree_info, int bst_group,
                              unsigned root_index, RegTree::FVec* p_feats,
@@ -82,7 +82,7 @@ class CPUPredictor : public Predictor {
       for (bst_omp_uint i = nsize - rest; i < nsize; ++i) {
         RegTree::FVec& feats = thread_temp[0];
         const auto ridx = static_cast<int64_t>(batch.base_rowid + i);
-         auto inst = batch[i];
+        auto inst = batch[i];
         for (int gid = 0; gid < num_group; ++gid) {
           const size_t offset = ridx * num_group + gid;
           preds[offset] +=
