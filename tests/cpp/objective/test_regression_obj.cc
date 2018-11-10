@@ -222,7 +222,9 @@ TEST(Objective, DeclareUnifiedTest(TweedieRegressionBasic)) {
 
 TEST(Objective, DeclareUnifiedTest(L1RegressionBasic)) {
   xgboost::ObjFunction * obj = xgboost::ObjFunction::Create("reg:absolute");
-  std::vector<std::pair<std::string, std::string> > args;
+  std::vector<std::pair<std::string, std::string> > args {
+    {"learning_rate", "1.0"}
+  };
   obj->Configure(args);
   CheckObjFunction(obj,
                    {0.0, 0.2, 0.3, 0.4, 0.5, 2.2, 0.7, 0.8},   // preds

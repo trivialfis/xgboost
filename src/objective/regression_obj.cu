@@ -18,6 +18,8 @@
 #include "../common/host_device_vector.h"
 #include "./regression_loss.h"
 
+// FIXME: Remove this after experiments
+#include <fstream>
 
 namespace xgboost {
 namespace obj {
@@ -175,7 +177,9 @@ XGBOOST_REGISTER_OBJECTIVE(GPULogisticRaw, "gpu:binary:logitraw")
 
 struct L1RegLossParam : public dmlc::Parameter<L1RegLossParam> {
   bst_float l1_gamma;
-  float scale_pos_weight;
+  bst_float scale_pos_weight;
+  bst_float learning_rate;
+
   int n_gpus;
   int gpu_id;
   // declare parameters
@@ -185,6 +189,10 @@ struct L1RegLossParam : public dmlc::Parameter<L1RegLossParam> {
         .describe("Look ahead.");
     DMLC_DECLARE_FIELD(scale_pos_weight).set_default(1.0f).set_lower_bound(0.0f)
         .describe("Scale the weight of positive examples by this factor");
+    DMLC_DECLARE_FIELD(learning_rate)
+        .set_lower_bound(0.0f)
+        .set_default(0.5f)
+        .describe("Learning rate(step size) of update.");
     DMLC_DECLARE_FIELD(n_gpus).set_default(1).set_lower_bound(-1)
         .describe("Number of GPUs to use for multi-gpu algorithms.");
     DMLC_DECLARE_FIELD(gpu_id)
@@ -201,12 +209,14 @@ class L1RegLossObj : public ObjFunction {
   HostDeviceVector<bst_float> momentum_;
 
   HOST_DEV_INLINE bst_float Momentum(
-      bst_float* running_sum, bst_float const gamma, bst_float const grad) {
+      bst_float* running_sum, bst_float const gamma, bst_float const lr,
+      bst_float grad) {
     // g_t = gamma * g_(t-1) - Delta(L(F_t))
     bst_float running = gamma * (*running_sum) - grad;
     *running_sum = running;
     // result = gamma * g_t - Delta(L(F_t))
     bst_float result = *running_sum * gamma - grad;
+    // result *= lr;
     return result;
   }
 
@@ -235,16 +245,18 @@ class L1RegLossObj : public ObjFunction {
     CHECK_EQ(preds.Size(), info.labels_.Size())
         << "labels are not correctly provided"
         << "preds.size=" << preds.Size() << ", label.size=" << info.labels_.Size();
-    size_t ndata = preds.Size();
+    size_t const ndata = preds.Size();
+    // LOG(INFO) << "ndata: " << ndata;
     out_gpair->Resize(ndata);
     if (momentum_.Size() == 0) {
       momentum_.Resize(ndata);
       momentum_.Fill(0);
     }
 
-    bool is_null_weight = info.weights_.Size() == 0;
-    auto scale_pos_weight = param_.scale_pos_weight;
+    bool const is_null_weight = info.weights_.Size() == 0;
+    bst_float const scale_pos_weight = param_.scale_pos_weight;
     bst_float const l1_gamma = param_.l1_gamma;
+    bst_float const lr = param_.learning_rate;
 
     common::Transform<>::Init(
         [=] XGBOOST_DEVICE(size_t _idx,
@@ -260,12 +272,21 @@ class L1RegLossObj : public ObjFunction {
             w *= scale_pos_weight;
           }
           bst_float g = FirstOrderGradient(p, label);
-          g = Momentum(&(_momentum[_idx]), l1_gamma, g);
+          g = Momentum(&(_momentum[_idx]), l1_gamma, lr, g);
           // We leave hess to be 1.0 for L1 Regression.
           _out_gpair[_idx] = GradientPair(g * w, 1.0f);
         },
         common::Range{0, static_cast<int64_t>(ndata)}, devices_)
         .Eval(out_gpair, &momentum_, &preds, &info.labels_, &info.weights_);
+
+    // FIXME: Remove this after experiments
+    // auto& h_momentum = momentum_.HostVector();
+    // std::ofstream momentum_log("momentum_log", std::ios::app);
+    // for (auto v : h_momentum) {
+    //   momentum_log << v << " ";
+    // }
+    // momentum_log << std::endl;
+    // momentum_log.close();
   }
 
   XGBOOST_DEVICE bst_float Transform(bst_float x) { return x; }
@@ -274,13 +295,7 @@ class L1RegLossObj : public ObjFunction {
     return "mae";
   }
 
-  void PredTransform(HostDeviceVector<float> *io_preds) override {
-    common::Transform<>::Init(
-        [this] XGBOOST_DEVICE(size_t _idx, common::Span<float> _preds) {
-          _preds[_idx] = Transform(_preds[_idx]);
-        }, common::Range{0, static_cast<int64_t>(io_preds->Size())},
-        devices_).Eval(io_preds);
-  }
+  void PredTransform(HostDeviceVector<float> *io_preds) override {}
 
   float ProbToMargin(float base_score) const override {
     return base_score;
