@@ -245,6 +245,28 @@ TEST(Objective, DeclareUnifiedTest(L1RegressionBasic)) {
   delete obj;
 }
 
+TEST(Objective, DeclareUnifiedTest(QuantileRegressionBasic)) {
+  xgboost::ObjFunction * obj = xgboost::ObjFunction::Create("reg:quantile");
+  std::vector<std::pair<std::string, std::string> > args {
+    {"quantile", "0.9"}, {"n_gpus", "0"}};
+
+  obj->Configure(args);
+  CheckObjFunction(obj,
+                   {2.2,  0.2,  0.3,  2.4,  0.5,  2.2,  0.7,  0.8},   // preds
+                   {0.0,  1.4,  1.5,  1.6,  2.1,  0.6,  2.3,  2.1},   // labels
+                   {1,    1,    1,    1,    1,    1,    1,    1  },   // weights
+                   {0.1,  0.9,  0.9,  0.1,  0.9,  0.1,  0.9,  0.9},    // out_grad
+                   {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f});  // out_hess
+  // residue:      [1, 0, 0, 1, 0, 0, 0, 0]
+  CheckObjFunction(obj,
+                   {2.2, 0.2, 0.3, 2.4, 0.5, 2.2, 0.7, 0.8},   // preds
+                   {0.0, 1.4, 1.5, 1.6, 2.1, 0.6, 2.3, 2.1},   // labels
+                   {},                                         // Empty weight
+                   {0.1,  0.9,  0.9,  0.1,  0.9,  0.1,  0.9,  0.9},    // out_grad
+                   {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f});  // out_hess
+  delete obj;
+}
+
 // CoxRegression not implemented in GPU code, no need for testing.
 #if !defined(__CUDACC__)
 TEST(Objective, CoxRegressionGPair) {

@@ -188,17 +188,17 @@ struct L1RegLossParam : public dmlc::Parameter<L1RegLossParam> {
     DMLC_DECLARE_FIELD(l1_gamma).set_default(0.2f).set_lower_bound(0.0f)
         .describe("Look ahead.");
     DMLC_DECLARE_FIELD(scale_pos_weight).set_default(1.0f).set_lower_bound(0.0f)
-        .describe("Scale the weight of positive examples by this factor");
+        .describe("Scale the weight of positive examples by this factor.");
     DMLC_DECLARE_FIELD(learning_rate)
         .set_lower_bound(0.0f)
         .set_default(0.5f)
         .describe("Learning rate(step size) of update.");
-    DMLC_DECLARE_FIELD(n_gpus).set_default(1).set_lower_bound(-1)
-        .describe("Number of GPUs to use for multi-gpu algorithms.");
+    DMLC_DECLARE_FIELD(n_gpus).set_default(1).set_lower_bound(GPUSet::kAll)
+      .describe("Number of GPUs to use for multi-gpu algorithms.");
     DMLC_DECLARE_FIELD(gpu_id)
         .set_lower_bound(0)
-        .set_default(0)
-        .describe("gpu to use for objective function evaluation");
+        .set_default(1)
+        .describe("gpu to use for objective function evaluation.");
   }
 };
 
@@ -278,15 +278,6 @@ class L1RegLossObj : public ObjFunction {
         },
         common::Range{0, static_cast<int64_t>(ndata)}, devices_)
         .Eval(out_gpair, &momentum_, &preds, &info.labels_, &info.weights_);
-
-    // FIXME: Remove this after experiments
-    // auto& h_momentum = momentum_.HostVector();
-    // std::ofstream momentum_log("momentum_log", std::ios::app);
-    // for (auto v : h_momentum) {
-    //   momentum_log << v << " ";
-    // }
-    // momentum_log << std::endl;
-    // momentum_log.close();
   }
 
   XGBOOST_DEVICE bst_float Transform(bst_float x) { return x; }
@@ -309,6 +300,75 @@ class L1RegLossObj : public ObjFunction {
 XGBOOST_REGISTER_OBJECTIVE(AbsoluteRegression, "reg:absolute")
 .describe("Absolute regression.")
 .set_body([]() { return new L1RegLossObj(); });
+
+struct QuantileLossParam : public dmlc::Parameter<QuantileLossParam> {
+  float quantile;
+  int n_gpus;
+  int gpu_id;
+
+  DMLC_DECLARE_PARAMETER(QuantileLossParam) {
+    DMLC_DECLARE_FIELD(quantile).set_default(0.9f).set_lower_bound(0.0f)
+        .describe("Quantile.");
+    DMLC_DECLARE_FIELD(n_gpus).set_default(1).set_lower_bound(GPUSet::kAll)
+      .describe("Number of GPUs to use for multi-gpu algorithms.");
+    DMLC_DECLARE_FIELD(gpu_id)
+        .set_lower_bound(0)
+        .set_default(1)
+        .describe("gpu to use for quantile objective function evaluation.");
+  }
+};
+DMLC_REGISTER_PARAMETER(QuantileLossParam);
+
+class QuantileLossObj : public ObjFunction {
+ public:
+  void Configure(
+      const std::vector<std::pair<std::string, std::string> >& args) override {
+    param_.InitAllowUnknown(args);
+    devices_ = GPUSet::All(param_.gpu_id, param_.n_gpus);
+  }
+
+  const char* DefaultEvalMetric() const override {
+    return "Quantile";
+  }
+
+  void GetGradient(const HostDeviceVector<bst_float>& preds,
+                   const MetaInfo& info,
+                   int iter,
+                   HostDeviceVector<GradientPair> *out_gpair) override {
+    CHECK_NE(info.labels_.Size(), 0U) << "label set cannot be empty";
+    CHECK_EQ(preds.Size(), info.labels_.Size())
+        << "labels are not correctly provided"
+        << "preds.size=" << preds.Size() << ", label.size=" << info.labels_.Size();
+    size_t const ndata = preds.Size();
+    out_gpair->Resize(ndata);
+
+    bool const is_null_weight = info.weights_.Size() == 0;
+    bst_float const quantile = param_.quantile;
+    common::Transform<>::Init(
+        [=] XGBOOST_DEVICE(size_t _idx,
+                           common::Span<GradientPair> _out_gpair,
+                           common::Span<const bst_float> _preds,
+                           common::Span<const bst_float> _labels,
+                           common::Span<const bst_float> _weights) {
+          bst_float p = _preds[_idx];
+          bst_float w = is_null_weight ? 1.0f : _weights[_idx];
+          bst_float label = _labels[_idx];
+          bst_float g = (p - label) >= 0 ? 1 - quantile : quantile;
+          _out_gpair[_idx] = GradientPair(g, 1.0f);
+        },
+        common::Range{0, static_cast<int64_t>(ndata)}, devices_).Eval(
+            out_gpair, &preds, &info.labels_, &info.weights_);
+  }
+
+ protected:
+  QuantileLossParam param_;
+  GPUSet devices_;
+};
+
+XGBOOST_REGISTER_OBJECTIVE(QuantileLossObj, "reg:quantile")
+.describe("Quantile regression loss.")
+.set_body([]() { return new QuantileLossObj(); });
+
 
 // declare parameter
 struct PoissonRegressionParam : public dmlc::Parameter<PoissonRegressionParam> {
