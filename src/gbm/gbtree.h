@@ -175,6 +175,10 @@ class GBTree : public GradientBooster {
         tparam_.tree_method == TreeMethod::kGPUExact;
   }
 
+  GBTreeTrainParam const& GetTrainParam() const {
+    return tparam_;
+  }
+
   void Load(dmlc::Stream* fi) override {
     model_.Load(fi);
 
@@ -183,13 +187,12 @@ class GBTree : public GradientBooster {
                             common::ToString(model_.param.num_feature));
   }
 
-  GBTreeTrainParam const& GetTrainParam() const {
-    return tparam_;
-  }
+  void Load(Json const& in) override;
 
   void Save(dmlc::Stream* fo) const override {
     model_.Save(fo);
   }
+  void Save(Json* p_out) const override;
 
   bool AllowLazyCheckPoint() const override {
     return model_.param.num_output_group == 1 ||

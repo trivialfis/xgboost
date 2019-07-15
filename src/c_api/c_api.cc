@@ -1,4 +1,4 @@
-// Copyright (c) 2014 by Contributors
+// Copyright (c) 2014-2019 by Contributors
 
 #include <xgboost/data.h>
 #include <xgboost/learner.h>
@@ -11,16 +11,20 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <algorithm>
 #include <vector>
 #include <string>
 #include <memory>
 
+#include "xgboost/json.h"
+#include "xgboost/json_io.h"
 #include "./c_api_error.h"
 #include "../data/simple_csr_source.h"
 #include "../common/math.h"
 #include "../common/io.h"
 #include "../common/group_data.h"
+#include "../common/timer.h"
 
 
 namespace xgboost {
@@ -891,23 +895,55 @@ XGB_DLL int XGBoosterPredict(BoosterHandle handle,
 XGB_DLL int XGBoosterLoadModel(BoosterHandle handle, const char* fname) {
   API_BEGIN();
   CHECK_HANDLE();
-  std::unique_ptr<dmlc::Stream> fi(dmlc::Stream::Create(fname, "r"));
-  static_cast<Learner*>(handle)->Load(fi.get());
+  common::Monitor monitor;
+  monitor.Init(__func__);
+  monitor.Start(__func__);
+  auto splited = common::Split(fname, '.');
+  if (splited.size() > 1 && splited.back() == "json") {
+    LOG(WARNING) << "Json serialization is still experimental."
+        "  Output schema is subject to change in the future.";
+    std::string buffer = LoadFile(fname);
+    JsonReader reader(StringView{buffer.c_str(), buffer.size()});
+    Json model {Json::Load(&reader)};
+    static_cast<Learner*>(handle)->Load(model);
+  } else {
+    std::unique_ptr<dmlc::Stream> fi(dmlc::Stream::Create(fname, "r"));
+    static_cast<Learner*>(handle)->Load(fi.get());
+  }
+  monitor.Stop(__func__);
   API_END();
 }
 
 XGB_DLL int XGBoosterSaveModel(BoosterHandle handle, const char* fname) {
   API_BEGIN();
   CHECK_HANDLE();
-  std::unique_ptr<dmlc::Stream> fo(dmlc::Stream::Create(fname, "w"));
-  auto *bst = static_cast<Learner*>(handle);
-  bst->Save(fo.get());
+  common::Monitor monitor;
+  monitor.Init(__func__);
+  monitor.Start(__func__);
+  auto splited = common::Split(fname, '.');
+  if (splited.size() > 1 && splited.back() == "json") {
+    // Save as json document.
+    LOG(WARNING) << "Json serialization is still experimental."
+        "  Output schema is subject to change in the future.";
+    Json model { Object() };
+    auto *bst = static_cast<Learner*>(handle);
+    bst->Save(&model);
+    std::ofstream fout(std::string{fname});
+    CHECK(fout) << "Failed to open: " << fname;
+    Json::Dump(model, &fout, false);
+  } else {
+    // Save as binary format
+    std::unique_ptr<dmlc::Stream> fo(dmlc::Stream::Create(fname, "w"));
+    auto *bst = static_cast<Learner*>(handle);
+    bst->Save(fo.get());
+  }
+  monitor.Stop(__func__);
   API_END();
 }
 
 XGB_DLL int XGBoosterLoadModelFromBuffer(BoosterHandle handle,
-                                 const void* buf,
-                                 xgboost::bst_ulong len) {
+                                         const void* buf,
+                                         xgboost::bst_ulong len) {
   API_BEGIN();
   CHECK_HANDLE();
   common::MemoryFixSizeBuffer fs((void*)buf, len);  // NOLINT(*)

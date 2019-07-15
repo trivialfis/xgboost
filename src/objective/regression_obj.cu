@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 
+#include "xgboost/json.h"
 #include "../common/span.h"
 #include "../common/transform.h"
 #include "../common/common.h"
@@ -111,6 +112,16 @@ class RegLossObj : public ObjFunction {
 
   float ProbToMargin(float base_score) const override {
     return Loss::ProbToMargin(base_score);
+  }
+
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String(Loss::Name());
+    out["reg_loss_param"] = toJson(param_);
+  }
+
+  void Load(Json const& in) override {
+    param_.InitAllowUnknown(fromJson(get<Object const>(in["reg_loss_param"])));
   }
 
  protected:
@@ -251,6 +262,16 @@ class PoissonRegression : public ObjFunction {
     return "poisson-nloglik";
   }
 
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("PoissonRegression");
+    out["poisson_regression_param"] = toJson(param_);
+  }
+
+  void Load(Json const& in) override {
+    param_.InitAllowUnknown(fromJson(get<Object const>(in["poisson_regression_param"])));
+  }
+
  private:
   PoissonRegressionParam param_;
   HostDeviceVector<int> label_correct_;
@@ -345,6 +366,12 @@ class CoxRegression : public ObjFunction {
   const char* DefaultEvalMetric() const override {
     return "cox-nloglik";
   }
+
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("CoxRegression");
+  }
+  void Load(Json const&) override {}
 };
 
 // register the objective function
@@ -415,6 +442,11 @@ class GammaRegression : public ObjFunction {
   const char* DefaultEvalMetric() const override {
     return "gamma-nloglik";
   }
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("GammaRegression");
+  }
+  void Load(Json const&) override {}
 
  private:
   HostDeviceVector<int> label_correct_;
@@ -507,6 +539,15 @@ class TweedieRegression : public ObjFunction {
 
   const char* DefaultEvalMetric() const override {
     return metric_.c_str();
+  }
+
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("TweedieRegression");
+    out["tweedie_regression_param"] = toJson(param_);
+  }
+  void Load(Json const& in) override {
+    param_.InitAllowUnknown(fromJson(get<Object const>(in["tweedie_regression_param"])));
   }
 
  private:

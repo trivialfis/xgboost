@@ -2,6 +2,7 @@
 #include <xgboost/generic_parameters.h>
 #include "../helpers.h"
 #include "../../../src/gbm/gbtree.h"
+#include "test_gbm.h"
 
 namespace xgboost {
 TEST(GBTree, SelectTreeMethod) {
@@ -51,4 +52,52 @@ TEST(GBTree, SelectTreeMethod) {
 
   delete p_shared_ptr_dmat;
 }
+
+// Some other parts of test are in `Tree.Json_IO'.
+TEST(GBTree, Json_IO) {
+  size_t constexpr kRows = 16, kCols = 16;
+  auto gbm = ConstructGBM("gbtree",
+                          {{"num_feature", std::to_string(kCols)}},
+                          kRows, kCols);
+
+  Json model {Object()};
+  gbm->Save(&model);
+
+  std::stringstream ss;
+  Json::Dump(model, &ss);
+
+  auto model_str = ss.str();
+  model = Json::Load({model_str.c_str(), model_str.size()}, true);
+  ASSERT_EQ(get<String>(model["name"]), "gbtree");
+  auto j_param = model["gbtree_train_param"];
+  ASSERT_EQ(get<String>(j_param["num_parallel_tree"]), "1");
+}
+
+TEST(Dart, Json_IO) {
+  size_t constexpr kRows = 16, kCols = 16;
+  auto gbm = ConstructGBM("dart",
+                          {{"num_feature", std::to_string(kCols)}},
+                          kRows, kCols);
+
+  Json model {Object()};
+  gbm->Save(&model);
+
+  std::stringstream ss;
+  Json::Dump(model, &ss);
+
+  auto model_str = ss.str();
+  model = Json::Load({model_str.c_str(), model_str.size()}, true);
+  ASSERT_EQ(get<String>(model["name"]), "dart");
+
+  {
+    auto const& gbtree = model["gbtree"];
+    ASSERT_TRUE(IsA<Object>(gbtree));
+  }
+
+  ASSERT_EQ(get<String>(model["dart_train_param"]["sample_type"]), "uniform");
+
+  auto j_weight_drop = get<Array>(model["weight_drop"]);
+  ASSERT_EQ(j_weight_drop.size(), 1);  // One tree is trained.
+}
+
 }  // namespace xgboost

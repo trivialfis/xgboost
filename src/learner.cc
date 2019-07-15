@@ -19,6 +19,8 @@
 #include <ios>
 #include <utility>
 #include <vector>
+
+#include "xgboost/json.h"
 #include "./common/common.h"
 #include "./common/host_device_vector.h"
 #include "./common/io.h"
@@ -298,6 +300,45 @@ class LearnerImpl : public Learner {
     }
 
     this->configured_ = true;
+  }
+
+  void Save(Json* p_out) const override {
+    Json& out = *p_out;
+    out["version"] = Json(Array{std::vector<Json>({Json{String{"1"}},
+                                                   Json{String{"0"}}})});
+
+    out["Learner"] = Object();
+    auto& learner = out["Learner"];
+
+    learner["learner_model_param"] = toJson(mparam_);
+    learner["learner_train_param"] = toJson(tparam_);
+
+    learner["gradient_booster"] = Object();
+    auto& gradient_booster = learner["gradient_booster"];
+    gbm_->Save(&gradient_booster);
+
+    learner["objective"] = Object();
+    auto& objective_fn = learner["objective"];
+    obj_->Save(&objective_fn);
+  }
+
+  void Load(Json const& in) override {
+    std::string major, minor;
+    std::tie(major, minor) = std::make_pair(get<String>(get<Array>(in["version"])[0]),
+                                            get<String>(get<Array>(in["version"])[1]));
+    LOG(INFO) << "Loading XGBoost " << major << ", " << minor << " model";
+    auto const& learner = get<Object>(in["Learner"]);
+    mparam_.InitAllowUnknown(fromJson(get<Object const>(learner.at("learner_model_param"))));
+    tparam_.InitAllowUnknown(fromJson(get<Object const>(learner.at("learner_train_param"))));
+
+    auto const& gradient_booster = learner.at("gradient_booster");
+    gbm_.reset(GradientBooster::Create(get<String>(gradient_booster["name"]), &generic_param_,
+                                       cache_, mparam_.base_score));
+    gbm_->Load(gradient_booster);
+
+    auto const& objective_fn = learner.at("objective");
+    obj_.reset(ObjFunction::Create(tparam_.objective, &generic_param_));
+    obj_->Load(objective_fn);
   }
 
   // rabit save model to rabit checkpoint

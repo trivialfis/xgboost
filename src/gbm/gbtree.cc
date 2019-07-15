@@ -25,7 +25,7 @@
 #include "gbtree.h"
 #include "gbtree_model.h"
 #include "../common/timer.h"
-
+#include "xgboost/json_io.h"
 
 namespace xgboost {
 namespace gbm {
@@ -253,6 +253,24 @@ void GBTree::CommitModel(std::vector<std::vector<std::unique_ptr<RegTree>>>&& ne
   GetPredictor()->UpdatePredictionCache(model_, &updaters_, num_new_trees);
 }
 
+void GBTree::Load(Json const& in) {
+  tparam_.InitAllowUnknown(fromJson(get<Object>(in["gbtree_train_param"])));
+  model_.Load(in["model"]);
+}
+
+void GBTree::Save(Json* p_out) const {
+  auto& out = *p_out;
+  out["name"] = String("gbtree");
+  // FIXME(trivialfis); num_boosting_round
+
+  out["gbtree_train_param"] = toJson(tparam_);
+
+  // model
+  out["model"] = Object();
+  auto& model = out["model"];
+  model_.Save(&model);
+}
+
 
 // dart
 class Dart : public GBTree {
@@ -273,12 +291,35 @@ class Dart : public GBTree {
       fi->Read(&weight_drop_);
     }
   }
+  void Load(Json const& in) override {
+    auto const& gbtree = in["gbtree"];
+    GBTree::Load(gbtree);
+    auto j_weight_drop = get<Array>(in["weight_drop"]);
+    weight_drop_.resize(j_weight_drop.size());
+    dparam_.InitAllowUnknown(fromJson(get<Object>(in["dart_train_param"])));
+    for (size_t i = 0; i < weight_drop_.size(); ++i) {
+      weight_drop_[i] = get<Number>(j_weight_drop[i]);
+    }
+  }
 
   void Save(dmlc::Stream* fo) const override {
     GBTree::Save(fo);
     if (weight_drop_.size() != 0) {
       fo->Write(weight_drop_);
     }
+  }
+  void Save(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("dart");
+    out["dart_train_param"] = toJson(dparam_);
+    out["gbtree"] = Object();
+    auto& gbtree = out["gbtree"];
+    GBTree::Save(&gbtree);
+    std::vector<Json> j_weight_drop(weight_drop_.size());
+    for (size_t i = 0; i < weight_drop_.size(); ++i) {
+      j_weight_drop[i] = Number(weight_drop_[i]);
+    }
+    out["weight_drop"] = Array(j_weight_drop);
   }
 
   // predict the leaf scores with dropout if ntree_limit = 0
@@ -565,5 +606,53 @@ XGBOOST_REGISTER_GBM(Dart, "dart")
     GBTree* p = new Dart(base_margin);
     return p;
   });
+
+
+// FIXME: Better error handling.
+class TreeSelectRaw : public JsonReader {
+  size_t* pre_pos_ {nullptr};
+
+ public:
+  TreeSelectRaw(StringView str, size_t* pos) :
+      JsonReader{str}, pre_pos_{pos} {
+    JsonReader::SetCursor(*pos);
+  }
+
+  Json ParseRaw() {
+    SkipSpaces();
+    auto beg = cursor_.Pos();
+    while (true) {
+      char ch = GetNextChar();
+      while (ch != ']' && ch != -1) { ch = GetNextChar(); }
+      ch = GetNextNonSpaceChar();
+      if (ch == ']') {
+        break;
+      }
+    }
+    if (cursor_.Pos() == raw_str_.size()) {
+      Expect(']', EOF);
+    }
+    auto end = cursor_.Pos();
+    *pre_pos_ = cursor_.Pos();
+    return Json(JsonRaw(raw_str_.substr(beg, end - beg)));
+  }
+};
+
+static auto DMLC_ATTRIBUTE_UNUSED __stat_raw_parser_ = JsonReader::registry(
+    "stats",
+    [](StringView str, size_t* pos) {
+      TreeSelectRaw parser(str, pos);
+      auto ret = parser.ParseRaw();
+      return ret;
+    });
+
+static auto DMLC_ATTRIBUTE_UNUSED __node_raw_parser_ = JsonReader::registry(
+    "nodes",
+    [](StringView str, size_t* pos) {
+      TreeSelectRaw parser(str, pos);
+      auto ret = parser.ParseRaw();
+      return ret;
+    });
+
 }  // namespace gbm
 }  // namespace xgboost

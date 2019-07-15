@@ -77,7 +77,7 @@ void ConsoleLogger::Configure(Args const& args) {
 }
 
 ConsoleLogger::LogVerbosity ConsoleLogger::DefaultVerbosity() {
-  return LogVerbosity::kWarning;
+  return LogVerbosity::kDebug;
 }
 
 ConsoleLogger::LogVerbosity ConsoleLogger::GlobalVerbosity() {
