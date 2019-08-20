@@ -5,12 +5,11 @@
  * \author Tianqi Chen
  */
 #include <dmlc/io.h>
-#include <dmlc/timer.h>
-#include <dmlc/any.h>
 #include <xgboost/feature_map.h>
 #include <xgboost/learner.h>
 #include <xgboost/logging.h>
 #include <xgboost/generic_parameters.h>
+
 #include <algorithm>
 #include <iomanip>
 #include <limits>
@@ -19,11 +18,12 @@
 #include <ios>
 #include <utility>
 #include <vector>
-#include "./common/common.h"
-#include "./common/host_device_vector.h"
-#include "./common/io.h"
-#include "./common/random.h"
-#include "./common/timer.h"
+
+#include "common/common.h"
+#include "common/host_device_vector.h"
+#include "common/io.h"
+#include "common/random.h"
+#include "common/monitor.h"
 
 namespace {
 

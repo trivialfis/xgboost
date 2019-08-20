@@ -18,7 +18,7 @@
 #include "row_set.h"
 #include "../tree/param.h"
 #include "./quantile.h"
-#include "./timer.h"
+#include "monitor.h"
 #include "random.h"
 
 namespace xgboost {

@@ -96,6 +96,26 @@ TEST(bulkAllocator, Test) {
   TestAllocator();
 }
 
+TEST(DeviceHelper, DeviceAllocator) {
+  using DeviceMemoryStat = xgboost::common::DeviceMemoryStat;
+  DeviceMemoryStat::Ins().Reset();
+  DeviceMemoryStat::Ins().SetProfiling(true);
+
+  std::vector<dh::detail::ProfilingDeviceAllocator<float>> allocators(2);
+  auto ptr = allocators[0].allocate(12);
+  allocators[1] = allocators[0];
+  auto usage = DeviceMemoryStat::Ins().GetPtrUsage(&allocators[1]);
+
+  ASSERT_EQ(usage.GetPeak(), sizeof(float)*12);
+  ASSERT_EQ(usage.GetAllocCount(), 1);
+  ASSERT_EQ(usage.GetRunningSum(), sizeof(float)*12);
+
+  // allocators[0].this is replaced.
+  EXPECT_ANY_THROW(allocators[0].deallocate(ptr, 12));
+
+  DeviceMemoryStat::Ins().SetProfiling(false);
+}
+
  // Test thread safe max reduction
 #if defined(XGBOOST_USE_NCCL)
 TEST(AllReducer, MGPU_HostMaxAllReduce) {

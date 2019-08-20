@@ -10,7 +10,7 @@
 #include "../common/common.h"
 #include "../common/span.h"
 #include "../common/device_helpers.cuh"
-#include "../common/timer.h"
+#include "../common/monitor.h"
 #include "./param.h"
 #include "coordinate_common.h"
 

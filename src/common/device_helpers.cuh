@@ -23,7 +23,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include "timer.h"
+#include "monitor.h"
 
 #ifdef XGBOOST_USE_NCCL
 #include "nccl.h"
@@ -351,12 +351,67 @@ struct XGBCachingDeviceAllocatorImpl : thrust::device_malloc_allocator<T> {
      GetGlobalCachingAllocator().DeviceFree(ptr.get());
    }
   __host__ __device__
-    void construct(T *)
+  void construct(T *)
   {
     // no-op
   }
 };
+
+inline cudaError_t ProfilingCudaMalloc(void **devPtr, size_t size_bytes) {
+  cudaError_t error_code = cudaMalloc(devPtr, size_bytes);
+  xgboost::common::DeviceMemoryStat::Ins().Allocate(*devPtr, size_bytes);
+  return error_code;
+}
+inline cudaError_t ProfilingCudaFree(void* devPtr) {
+  xgboost::common::DeviceMemoryStat::Ins().Deallocate(devPtr);
+  return cudaFree(devPtr);
+}
+
+template <typename T>
+class ProfilingDeviceAllocator : public thrust::device_malloc_allocator<T> {
+  using Allocator = thrust::device_malloc_allocator<T>;
+  using Stat = xgboost::common::DeviceMemoryStat;
+
+ public:
+  using pointer = thrust::device_ptr<T>;              // NOLINT
+  using const_pointer = thrust::device_ptr<const T>;  // NOLINT
+  using size_type = typename Allocator::size_type;    // NOLINT
+
+  ~ProfilingDeviceAllocator() = default;
+  ProfilingDeviceAllocator() = default;
+
+  ProfilingDeviceAllocator(ProfilingDeviceAllocator&& other) = delete;
+  ProfilingDeviceAllocator& operator=(
+      ProfilingDeviceAllocator&& other) = delete;
+
+  // These two are the move functions, NOT copy!. Thrust doesn't use
+  // move constructors internally, we have to bend it a little bit.
+  ProfilingDeviceAllocator(ProfilingDeviceAllocator const& other) {
+    Stat::Ins().Replace(this, &other);
+  }
+  ProfilingDeviceAllocator& operator=(ProfilingDeviceAllocator const& other) {
+    Stat::Ins().Replace(this, &other);
+    return *this;
+  }
+
+  pointer allocate(size_type cnt,  // NOLINT
+                   const_pointer=const_pointer(static_cast<T*>(0))) {
+    size_t size_bytes = sizeof(T) * cnt;
+    xgboost::common::DeviceMemoryStat::Ins().Allocate(this, size_bytes);
+    return Allocator::allocate(cnt);
+  }
+
+  void deallocate(pointer p, size_type cnt) {  // NOLINT
+    size_t size_bytes = sizeof(T) * cnt;
+    xgboost::common::DeviceMemoryStat::Ins().Deallocate(this, size_bytes);
+    return Allocator::deallocate(p, cnt);
+  }
 };
+};
+
+
+template <typename T>
+using DeviceVector = thrust::device_vector<T, detail::ProfilingDeviceAllocator<T>>;
 
 // Declare xgboost allocators
 // Replacement of allocator with custom backend should occur here

@@ -19,7 +19,7 @@
 #include "../common/device_helpers.cuh"
 #include "../common/hist_util.h"
 #include "../common/host_device_vector.h"
-#include "../common/timer.h"
+#include "../common/monitor.h"
 #include "../common/span.h"
 #include "param.h"
 #include "updater_gpu_common.cuh"

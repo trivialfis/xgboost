@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <xgboost/logging.h>
 #include <string>
-#include "../../../src/common/timer.h"
+#include "../../../src/common/monitor.h"
 
 namespace xgboost {
 namespace common {

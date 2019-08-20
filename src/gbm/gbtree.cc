@@ -6,7 +6,6 @@
  */
 #include <dmlc/omp.h>
 #include <dmlc/parameter.h>
-#include <dmlc/timer.h>
 #include <xgboost/logging.h>
 #include <xgboost/gbm.h>
 #include <xgboost/predictor.h>
@@ -22,9 +21,10 @@
 #include "../common/common.h"
 #include "../common/host_device_vector.h"
 #include "../common/random.h"
+#include "../common/monitor.h"
+
 #include "gbtree.h"
 #include "gbtree_model.h"
-#include "../common/timer.h"
 
 
 namespace xgboost {
