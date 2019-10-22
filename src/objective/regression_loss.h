@@ -6,8 +6,14 @@
 
 #include <dmlc/omp.h>
 #include <xgboost/logging.h>
+#include <xgboost/data.h>
+
 #include <algorithm>
 #include "../common/math.h"
+#include "../common/quantile.h"
+#include "../common/selection.h"
+#include "xgboost/span.h"
+#include "xgboost/tree_updater.h"
 
 namespace xgboost {
 namespace obj {
@@ -36,6 +42,10 @@ struct LinearSquareLoss {
   static const char* DefaultEvalMetric() { return "rmse"; }
 
   static const char* Name() { return "reg:squarederror"; }
+
+  static bool HasHessian() { return true; }
+  static float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                    common::Span<size_t const> rids) { return 0; }
 };
 
 struct SquaredLogError {
@@ -61,6 +71,10 @@ struct SquaredLogError {
   static const char* DefaultEvalMetric() { return "rmsle"; }
 
   static const char* Name() { return "reg:squaredlogerror"; }
+
+  static bool HasHessian() { return true; }
+  static float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                    common::Span<size_t const> rids) { return 0; }
 };
 
 // logistic loss for probability regression task
@@ -96,6 +110,10 @@ struct LogisticRegression {
   static const char* DefaultEvalMetric() { return "rmse"; }
 
   static const char* Name() { return "reg:logistic"; }
+
+  static bool HasHessian() { return true; }
+  static float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                    common::Span<size_t const> rids) { return 0; }
 };
 
 // logistic loss for binary classification task
@@ -134,6 +152,56 @@ struct LogisticRaw : public LogisticRegression {
   static const char* DefaultEvalMetric() { return "auc"; }
 
   static const char* Name() { return "binary:logitraw"; }
+  static float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                    common::Span<size_t const> rids) { return 0; }
+};
+
+struct AbsError {
+  XGBOOST_DEVICE static bst_float PredTransform(bst_float x) { return x; }
+  XGBOOST_DEVICE static bool CheckLabel(bst_float x) { return true; }
+  XGBOOST_DEVICE static bst_float FirstOrderGradient(bst_float predt, bst_float label) {
+    bst_float residue = predt - label;
+    // The original gradient.
+    bst_float gradient = (0 < residue) - (residue < 0);
+    return gradient;
+  }
+  XGBOOST_DEVICE static bst_float SecondOrderGradient(bst_float predt, bst_float label) {
+    return 1.0f;
+  }
+  template <typename T>
+  static T PredTransform(T x) { return x; }
+  template <typename T>
+  static T FirstOrderGradient(T predt, T label) { return predt - label; }
+  template <typename T>
+  static T SecondOrderGradient(T predt, T label) { return T(1.0f); }
+  static bst_float ProbToMargin(bst_float base_score) { return base_score; }
+  static const char* LabelErrorMsg() { return ""; }
+  static const char* DefaultEvalMetric() { return "mae"; }
+
+  static const char* Name() { return "reg:abs"; }
+
+  static bool HasHessian() { return false; }
+  static float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                    common::Span<size_t const> rids) {
+    auto const& h_predts = common::Span<float const>{
+      predts->ConstHostVector().data(), predts->ConstHostVector().size()};
+    auto const& h_labels = common::Span<float const>{
+      info.labels_.ConstHostVector().data(), info.labels_.ConstHostVector().size()};
+    CHECK_EQ(h_predts.size(), h_labels.size());
+    std::vector<float> weighted_residue (rids.size());
+
+#pragma omp parallel for if (rids.size() > 1e4)
+    for (size_t i = 0; i < rids.size(); ++i) {
+      auto const rid = rids[i];
+      weighted_residue[i] = (h_labels[rid] - h_predts[rid]) * info.GetWeight(rid);
+    }
+
+    size_t const median_ind = weighted_residue.size() / 2;
+    Select(0, weighted_residue.begin(),
+           (weighted_residue.begin() + median_ind),
+           weighted_residue.end());
+    return weighted_residue.at(median_ind);
+  }
 };
 
 }  // namespace obj

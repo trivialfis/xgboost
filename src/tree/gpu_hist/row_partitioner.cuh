@@ -2,6 +2,7 @@
  * Copyright 2017-2019 XGBoost contributors
  */
 #pragma once
+#include "xgboost/tree_updater.h"
 #include "../../common/device_helpers.cuh"
 
 namespace xgboost {
@@ -32,7 +33,7 @@ class RowPartitioner {
  public:
   using TreePositionT = int32_t;
   using RowIndexT = bst_uint;
-  struct Segment;
+  using Segment = TreeUpdater::Segment;
 
  private:
   int device_idx;
@@ -77,6 +78,10 @@ class RowPartitioner {
    */
   common::Span<const RowIndexT> GetRows();
 
+  common::Span<Segment> GetRowSegments() {
+    return common::Span<Segment>{ridx_segments.data(), ridx_segments.size()};
+  }
+
   /**
    * \brief Gets the tree position of all training instances.
    */
@@ -108,7 +113,7 @@ class RowPartitioner {
   void UpdatePosition(TreePositionT nidx, TreePositionT left_nidx,
                       TreePositionT right_nidx, UpdatePositionOpT op) {
     dh::safe_cuda(cudaSetDevice(device_idx));
-    Segment segment = ridx_segments.at(nidx);  // rows belongs to node nidx
+    Segment segment = ridx_segments.at(nidx);  // rows belong to node nidx
     auto d_ridx = ridx.CurrentSpan();
     auto d_position = position.CurrentSpan();
     if (left_counts.size() <= nidx) {
@@ -139,7 +144,7 @@ class RowPartitioner {
     dh::safe_cuda(cudaStreamSynchronize(streams[0]));
     CHECK_LE(left_count, segment.Size());
     CHECK_GE(left_count, 0);
-    ridx_segments.resize(std::max(int(ridx_segments.size()),
+    ridx_segments.resize(std::max(int32_t(ridx_segments.size()),
                                   std::max(left_nidx, right_nidx) + 1));
     ridx_segments[left_nidx] =
         Segment(segment.begin, segment.begin + left_count);
@@ -183,19 +188,6 @@ class RowPartitioner {
   void SortPositionAndCopy(const Segment& segment, TreePositionT left_nidx,
                            TreePositionT right_nidx, int64_t* d_left_count,
                            cudaStream_t stream);
-  /** \brief Used to demarcate a contiguous set of row indices associated with
-   * some tree node. */
-  struct Segment {
-    size_t begin;
-    size_t end;
-
-    Segment() : begin{0}, end{0} {}
-
-    Segment(size_t begin, size_t end) : begin(begin), end(end) {
-      CHECK_GE(end, begin);
-    }
-    size_t Size() const { return end - begin; }
-  };
 };
 };  // namespace tree
 };  // namespace xgboost

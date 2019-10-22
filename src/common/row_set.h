@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "xgboost/span.h"
+
 namespace xgboost {
 namespace common {
 
@@ -21,93 +23,83 @@ class RowSetCollection {
    *  rows (instances) associated with a particular node in a decision
    *  tree. */
   struct Elem {
-    const size_t* begin{nullptr};
-    const size_t* end{nullptr};
-    int node_id{-1};
+    size_t begin {0};
+    size_t end {0};
       // id of node associated with this instance set; -1 means uninitialized
-    Elem()
-         = default;
-    Elem(const size_t* begin_,
-         const size_t* end_,
-         int node_id_)
-        : begin(begin_), end(end_), node_id(node_id_) {}
+    Elem() = default;
+    Elem(const size_t begin_, const size_t end_)
+        : begin(begin_), end(end_) {}
+    Elem(Elem&& other) : begin{other.begin}, end{other.end} {}
+    Elem(Elem const& other) : begin{other.begin}, end{other.end} {}
+
+    Elem& operator=(Elem const&) = default;
+    Elem& operator=(Elem&&) = default;
 
     inline size_t Size() const {
       return end - begin;
     }
-  };
-  /* \brief specifies how to split a rowset into two */
-  struct Split {
-    std::vector<size_t> left;
-    std::vector<size_t> right;
   };
 
   size_t Size(unsigned node_id) {
     return elem_of_each_node_[node_id].Size();
   }
 
-  inline std::vector<Elem>::const_iterator begin() const {  // NOLINT
-    return elem_of_each_node_.begin();
+  std::vector<Elem>::const_iterator cbegin() const {  // NOLINT
+    return elem_of_each_node_.cbegin();
   }
 
-  inline std::vector<Elem>::const_iterator end() const {  // NOLINT
-    return elem_of_each_node_.end();
+  std::vector<Elem>::const_iterator cend() const {  // NOLINT
+    return elem_of_each_node_.cend();
   }
 
   /*! \brief return corresponding element set given the node_id */
-  inline Elem operator[](unsigned node_id) const {
-    const Elem e = elem_of_each_node_[node_id];
-    return e;
+  common::Span<size_t const> operator[](unsigned node_id) const {
+    const Elem e { elem_of_each_node_[node_id] };
+    return common::Span<size_t const>{row_indices_.data(), row_indices_.size()}.subspan(
+        e.begin, e.Size());
+  }
+  common::Span<size_t> operator[](unsigned node_id) {
+    const Elem e { elem_of_each_node_[node_id] };
+    return common::Span<size_t>{row_indices_.data(), row_indices_.size()}.subspan(
+        e.begin, e.Size());
   }
 
-
   // clear up things
-  inline void Clear() {
+  void Clear() {
     elem_of_each_node_.clear();
   }
   // initialize node id 0->everything
-  inline void Init() {
+  void Init() {
     CHECK_EQ(elem_of_each_node_.size(), 0U);
-
-    if (row_indices_.empty()) {  // edge case: empty instance set
-      // assign arbitrary address here, to bypass nullptr check
-      // (nullptr usually indicates a nonexistent rowset, but we want to
-      //  indicate a valid rowset that happens to have zero length and occupies
-      //  the whole instance set)
-      // this is okay, as BuildHist will compute (end-begin) as the set size
-      const size_t* begin = reinterpret_cast<size_t*>(20);
-      const size_t* end = begin;
-      elem_of_each_node_.emplace_back(Elem(begin, end, 0));
-      return;
-    }
-
-    const size_t* begin = dmlc::BeginPtr(row_indices_);
-    const size_t* end = dmlc::BeginPtr(row_indices_) + row_indices_.size();
-    elem_of_each_node_.emplace_back(Elem(begin, end, 0));
+    // FIXME(trivialfis): https://github.com/dmlc/xgboost/issues/2800
+    const size_t begin = 0;
+    const size_t end = row_indices_.size();
+    elem_of_each_node_.emplace_back(Elem(begin, end));
   }
 
   // split rowset into two
-  inline void AddSplit(unsigned node_id,
-                       size_t iLeft,
-                       unsigned left_node_id,
-                       unsigned right_node_id) {
+  void AddSplit(unsigned node_id,
+                size_t iLeft,
+                unsigned left_node_id,
+                unsigned right_node_id) {
     Elem e = elem_of_each_node_[node_id];
 
-    CHECK(e.begin != nullptr);
+    // CHECK(e.begin != 0);
 
-    size_t* begin = const_cast<size_t*>(e.begin);
-    size_t* split_pt = begin + iLeft;
+    size_t begin = e.begin;
+    size_t split_pt = begin + iLeft;
 
     if (left_node_id >= elem_of_each_node_.size()) {
-      elem_of_each_node_.resize((left_node_id + 1)*2, Elem(nullptr, nullptr, -1));
+      elem_of_each_node_.resize((left_node_id + 1)*2, Elem(0, 0));
     }
     if (right_node_id >= elem_of_each_node_.size()) {
-      elem_of_each_node_.resize((right_node_id + 1)*2, Elem(nullptr, nullptr, -1));
+      elem_of_each_node_.resize((right_node_id + 1)*2, Elem(0, 0));
     }
 
-    elem_of_each_node_[left_node_id] = Elem(begin, split_pt, left_node_id);
-    elem_of_each_node_[right_node_id] = Elem(split_pt, e.end, right_node_id);
-    elem_of_each_node_[node_id] = Elem(begin, e.end, -1);
+    // elem_of_each_node_.
+    elem_of_each_node_[left_node_id] = Elem(begin, split_pt);
+    elem_of_each_node_[right_node_id] = Elem(split_pt, e.end);
+    elem_of_each_node_[node_id] = Elem(begin, e.end);
   }
 
   // stores the row indices in the set

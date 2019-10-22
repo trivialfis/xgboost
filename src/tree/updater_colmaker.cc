@@ -1,5 +1,5 @@
 /*!
- * Copyright 2014 by Contributors
+ * Copyright 2014-2019 by Contributors
  * \file updater_colmaker.cc
  * \brief use columnwise update to construct a tree
  * \author Tianqi Chen
@@ -774,7 +774,7 @@ class DistColMaker : public ColMaker {
  public:
   void Configure(const Args& args) override {
     param_.UpdateAllowUnknown(args);
-    pruner_.reset(TreeUpdater::Create("prune", tparam_));
+    pruner_.reset(TreeUpdater::Create("prune", this->index_cache_, tparam_));
     pruner_->Configure(args);
     spliteval_.reset(SplitEvaluator::Create(param_.split_evaluator));
     spliteval_->Init(args);

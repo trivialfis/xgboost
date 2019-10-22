@@ -264,6 +264,8 @@ class RegTree : public Model {
     this->ChangeToLeaf(rid, value);
   }
 
+  std::vector<int32_t> Leaves() const;
+
   /*! \brief model parameter */
   TreeParam param;
   /*! \brief constructor */
@@ -279,11 +281,11 @@ class RegTree : public Model {
     }
   }
   /*! \brief get node given nid */
-  Node& operator[](int nid) {
+  Node& operator[](int32_t nid) {
     return nodes_[nid];
   }
   /*! \brief get node given nid */
-  const Node& operator[](int nid) const {
+  const Node& operator[](int32_t nid) const {
     return nodes_[nid];
   }
 
@@ -385,7 +387,7 @@ class RegTree : public Model {
   }
 
   /*! \brief number of extra nodes besides the root */
-  int NumExtraNodes() const {
+  int32_t NumExtraNodes() const {
     return param.num_nodes - param.num_roots - param.num_deleted;
   }
 
@@ -505,6 +507,11 @@ class RegTree : public Model {
    * \brief calculate the mean value for each node, required for feature contributions
    */
   void FillNodeMeanValues();
+
+  struct Segment {
+    size_t begin;
+    size_t size;
+  };
 
  private:
   // vector of nodes

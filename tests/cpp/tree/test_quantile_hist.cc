@@ -18,15 +18,16 @@ namespace xgboost {
 namespace tree {
 
 class QuantileHistMock : public QuantileHistMaker {
-  static double constexpr kEps = 1e-6;
+  LeaveIndexCache test_index_cache_;
 
   struct BuilderMock : public QuantileHistMaker::Builder {
     using RealImpl = QuantileHistMaker::Builder;
 
     BuilderMock(const TrainParam& param,
                 std::unique_ptr<TreeUpdater> pruner,
-                std::unique_ptr<SplitEvaluator> spliteval)
-        : RealImpl(param, std::move(pruner), std::move(spliteval)) {}
+                std::unique_ptr<SplitEvaluator> spliteval,
+                TreeUpdater::LeaveIndexCache* cache)
+        : RealImpl(param, std::move(pruner), std::move(spliteval), cache) {}
 
    public:
     void TestInitData(const GHistIndexMatrix& gmat,
@@ -131,8 +132,8 @@ class QuantileHistMock : public QuantileHistMaker {
       // Now validate the computed histogram returned by BuildHist
       for (size_t i = 0; i < hist_[nid].size(); ++i) {
         GradientPairPrecise sol = histogram_expected[i];
-        ASSERT_NEAR(sol.GetGrad(), hist_[nid][i].GetGrad(), kEps);
-        ASSERT_NEAR(sol.GetHess(), hist_[nid][i].GetHess(), kEps);
+        ASSERT_NEAR(sol.GetGrad(), hist_[nid][i].GetGrad(), kRtEps);
+        ASSERT_NEAR(sol.GetHess(), hist_[nid][i].GetHess(), kRtEps);
       }
     }
 
@@ -249,7 +250,8 @@ class QuantileHistMock : public QuantileHistMaker {
         new BuilderMock(
             param_,
             std::move(pruner_),
-            std::unique_ptr<SplitEvaluator>(spliteval_->GetHostClone())));
+            std::unique_ptr<SplitEvaluator>(spliteval_->GetHostClone()),
+            &this->test_index_cache_));
     dmat_ = CreateDMatrix(kNRows, kNCols, 0.8, 3);
   }
   ~QuantileHistMock() override { delete dmat_; }

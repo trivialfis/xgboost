@@ -30,7 +30,8 @@ TEST(Updater, Refresh) {
   auto lparam = CreateEmptyGenericParam(GPUIDX);
   tree.param.UpdateAllowUnknown(cfg);
   std::vector<RegTree*> trees {&tree};
-  std::unique_ptr<TreeUpdater> refresher(TreeUpdater::Create("refresh", &lparam));
+  TreeUpdater::LeaveIndexCache cache;
+  std::unique_ptr<TreeUpdater> refresher(TreeUpdater::Create("refresh", &cache, &lparam));
 
   tree.ExpandNode(0, 2, 0.2f, false, 0.0, 0.2f, 0.8f, 0.0f, 0.0f);
   int cleft = tree[0].LeftChild();

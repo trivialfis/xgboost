@@ -126,6 +126,15 @@ class RegLossObj : public ObjFunction {
     fromJson(in["reg_loss_param"], &param_);
   }
 
+  bool HasHessian() const override { return Loss::HasHessian(); }
+
+  float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                             common::Span<size_t const> rids) override {
+    return Loss::ReestimatePrediction(info, predts, rids);
+  }
+
+  const char* DefaultLeafEstimator() const { return Loss::DefaultLeafEstimator(); }
+
  protected:
   RegLossParam param_;
 };
@@ -136,6 +145,10 @@ DMLC_REGISTER_PARAMETER(RegLossParam);
 XGBOOST_REGISTER_OBJECTIVE(SquaredLossRegression, LinearSquareLoss::Name())
 .describe("Regression with squared error.")
 .set_body([]() { return new RegLossObj<LinearSquareLoss>(); });
+
+XGBOOST_REGISTER_OBJECTIVE(AbsError, AbsError::Name())
+.describe("Regression with mean absolute error.")
+.set_body([]() { return new RegLossObj<AbsError>(); });
 
 XGBOOST_REGISTER_OBJECTIVE(SquareLogError, SquaredLogError::Name())
 .describe("Regression with root mean squared logarithmic error.")

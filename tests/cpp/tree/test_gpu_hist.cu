@@ -98,9 +98,11 @@ void TestBuildHist(bool use_shared_memory_histograms) {
   };
   param.Init(args);
   auto page = BuildEllpackPage(kNRows, kNCols);
-  GPUHistMakerDevice<GradientSumT> maker(0, page.get(), kNRows, param, kNCols, kNCols);
+  TreeUpdater::LeaveIndexCache index_cache;
+  GPUHistMakerDevice<GradientSumT> maker(0, page.get(), &index_cache,
+                                         kNRows, param, kNCols, kNCols);
   maker.InitHistogram();
-  
+
   xgboost::SimpleLCG gen;
   xgboost::SimpleRealUniformDistribution<bst_float> dist(0.0f, 1.0f);
   std::vector<GradientPair> h_gpair(kNRows);
@@ -199,7 +201,9 @@ TEST(GpuHist, EvaluateSplits) {
 
   // Initialize GPUHistMakerDevice
   auto page = BuildEllpackPage(kNRows, kNCols);
-  GPUHistMakerDevice<GradientPairPrecise> maker(0, page.get(), kNRows, param, kNCols, kNCols);
+  TreeUpdater::LeaveIndexCache index_cache;
+  GPUHistMakerDevice<GradientPairPrecise> maker(0, page.get(), &index_cache,
+                                                kNRows, param, kNCols, kNCols);
   // Initialize GPUHistMakerDevice::node_sum_gradients
   maker.node_sum_gradients = {{6.4f, 12.8f}};
 
@@ -262,8 +266,10 @@ void TestHistogramIndexImpl() {
 
   int constexpr kNRows = 1000, kNCols = 10;
 
+  TreeUpdater::LeaveIndexCache index_cache;
   // Build 2 matrices and build a histogram maker with that
-  tree::GPUHistMakerSpecialised<GradientPairPrecise> hist_maker, hist_maker_ext;
+  tree::GPUHistMakerSpecialised<GradientPairPrecise> hist_maker(&index_cache),
+      hist_maker_ext(&index_cache);
   std::unique_ptr<DMatrix> hist_maker_dmat(
     CreateSparsePageDMatrixWithRC(kNRows, kNCols, 0, true));
 
@@ -321,7 +327,8 @@ int32_t TestMinSplitLoss(DMatrix* dmat, float gamma, HostDeviceVector<GradientPa
     {"gamma", std::to_string(gamma)}
   };
 
-  tree::GPUHistMakerSpecialised<GradientPairPrecise> hist_maker;
+  TreeUpdater::LeaveIndexCache index_cache;
+  tree::GPUHistMakerSpecialised<GradientPairPrecise> hist_maker(&index_cache);
   GenericParameter generic_param(CreateEmptyGenericParam(0));
   hist_maker.Configure(args, &generic_param);
 

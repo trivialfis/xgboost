@@ -358,8 +358,8 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_num_bins) {
     // block is parallelized on anything other than the batch/block size,
     // it should be reassigned
     const size_t batch_threads = std::min(batch.Size(), static_cast<size_t>(omp_get_max_threads()));
-    MemStackAllocator<size_t, 128> partial_sums(batch_threads);
-    size_t* p_part = partial_sums.Get();
+    SmallVector<size_t, 128> partial_sums(batch_threads);
+    size_t* p_part = partial_sums.data();
 
     size_t block_size =  batch.Size() / batch_threads;
 

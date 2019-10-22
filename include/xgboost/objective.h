@@ -13,6 +13,7 @@
 #include <xgboost/model.h>
 #include <xgboost/generic_parameters.h>
 #include <xgboost/host_device_vector.h>
+#include <xgboost/tree_updater.h>
 
 #include <vector>
 #include <utility>
@@ -49,6 +50,7 @@ class ObjFunction : public Configurable {
   /*! \return the default evaluation metric for the objective */
   virtual const char* DefaultEvalMetric() const = 0;
   // the following functions are optional, most of time default implementation is good enough
+  virtual bool HasHessian() const { return true; }
   /*!
    * \brief transform prediction values, this is only called when Prediction is called
    * \param io_preds prediction values, saves to this vector as well
@@ -72,6 +74,11 @@ class ObjFunction : public Configurable {
   virtual bst_float ProbToMargin(bst_float base_score) const {
     return base_score;
   }
+
+  virtual float ReestimatePrediction(MetaInfo const& info, HostDeviceVector<float>* predts,
+                                     common::Span<size_t const> rids) {
+    return 0.0f; }
+
   /*!
    * \brief Create an objective function according to name.
    * \param tparam Generic parameters.

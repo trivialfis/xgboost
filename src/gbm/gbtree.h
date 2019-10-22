@@ -145,7 +145,9 @@ class GBTree : public GradientBooster {
   explicit GBTree(bst_float base_margin) : model_(base_margin) {}
 
   void InitCache(const std::vector<std::shared_ptr<DMatrix> > &cache) {
-    cache_ = cache;
+    for (const std::shared_ptr<DMatrix>& d : cache) {
+      predt_cache_[d.get()].data = d;
+    }
   }
 
   void Configure(const Args& cfg) override;
@@ -278,7 +280,14 @@ class GBTree : public GradientBooster {
 
   // commit new trees all at once
   virtual void CommitModel(
-      std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees);
+      std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees,
+      DMatrix* p_fmat,
+      ObjFunction* obj);
+
+  struct PredictionCacheEntry {
+    std::shared_ptr<DMatrix> data;
+    HostDeviceVector<bst_float> predictions;
+  };
 
   // --- data structure ---
   GBTreeModel model_;
@@ -292,8 +301,12 @@ class GBTree : public GradientBooster {
   Args cfg_;
   // the updaters that can be applied to each of tree
   std::vector<std::unique_ptr<TreeUpdater>> updaters_;
+  // leaf estimator used to implement MART
+  TreeUpdater::LeaveIndexCache index_cache_;  // FIXME
+
   // Cached matrices
-  std::vector<std::shared_ptr<DMatrix>> cache_;
+  std::unordered_map<DMatrix*, Predictor::PredictionCacheEntry> predt_cache_;
+
   std::unique_ptr<Predictor> cpu_predictor_;
 #if defined(XGBOOST_USE_CUDA)
   std::unique_ptr<Predictor> gpu_predictor_;

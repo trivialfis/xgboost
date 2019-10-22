@@ -44,6 +44,17 @@ class Predictor {
   GenericParameter const* learner_param_;
 
  public:
+  /**
+   * \struct  PredictionCacheEntry
+   *
+   * \brief Contains pointer to input matrix and associated cached predictions.
+   */
+  struct PredictionCacheEntry {
+    std::shared_ptr<DMatrix> data;
+    HostDeviceVector<bst_float> predictions;
+  };
+
+ public:
   virtual ~Predictor() = default;
 
   /**
@@ -56,8 +67,7 @@ class Predictor {
    * \param cache Vector of DMatrix's to be used in prediction.
    */
 
-  virtual void Configure(const std::vector<std::pair<std::string, std::string>>& cfg,
-                         const std::vector<std::shared_ptr<DMatrix>>& cache);
+  virtual void Configure(const std::vector<std::pair<std::string, std::string>>& cfg);
 
   /**
    * \brief Generate batch predictions for a given feature matrix. May use
@@ -93,7 +103,7 @@ class Predictor {
   virtual void UpdatePredictionCache(
       const gbm::GBTreeModel& model,
       std::vector<std::unique_ptr<TreeUpdater>>* updaters,
-      int num_new_trees) = 0;
+      size_t num_new_trees) = 0;
 
   /**
    * \fn  virtual void Predictor::PredictInstance( const SparsePage::Inst&
@@ -175,24 +185,18 @@ class Predictor {
    *
    */
 
-  static Predictor* Create(std::string const& name, GenericParameter const*);
-
+  static Predictor* Create(std::string const& name,
+                           std::unordered_map<DMatrix*, PredictionCacheEntry>* _cache,
+                           GenericParameter const*);
  protected:
-  /**
-   * \struct  PredictionCacheEntry
-   *
-   * \brief Contains pointer to input matrix and associated cached predictions.
-   */
-  struct PredictionCacheEntry {
-    std::shared_ptr<DMatrix> data;
-    HostDeviceVector<bst_float> predictions;
-  };
-
+  void SetCache(std::unordered_map<DMatrix*, PredictionCacheEntry>* _cache) {
+    cache_ = _cache;
+  }
   /**
    * \brief Map of matrices and associated cached predictions to facilitate
    * storing and looking up predictions.
    */
-  std::unordered_map<DMatrix*, PredictionCacheEntry> cache_;
+  std::unordered_map<DMatrix*, PredictionCacheEntry>* cache_;
 };
 
 /*!

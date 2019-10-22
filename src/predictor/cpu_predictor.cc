@@ -109,8 +109,8 @@ class CPUPredictor : public Predictor {
                         unsigned ntree_limit) {
     if (ntree_limit == 0 ||
         ntree_limit * model.param.num_output_group >= model.trees.size()) {
-      auto it = cache_.find(dmat);
-      if (it != cache_.end()) {
+      auto it = cache_->find(dmat);
+      if (it != cache_->end()) {
         const HostDeviceVector<bst_float>& y = it->second.predictions;
         if (y.Size() != 0) {
           out_preds->Resize(y.Size());
@@ -175,14 +175,16 @@ class CPUPredictor : public Predictor {
   void UpdatePredictionCache(
       const gbm::GBTreeModel& model,
       std::vector<std::unique_ptr<TreeUpdater>>* updaters,
-      int num_new_trees) override {
+      size_t num_new_trees) override {
     int old_ntree = model.trees.size() - num_new_trees;
     // update cache entry
-    for (auto& kv : cache_) {
+    for (auto& kv : *cache_) {
       PredictionCacheEntry& e = kv.second;
 
       if (e.predictions.Size() == 0) {
+        // FIXME(trivialfis): InitOutPredts needs only model parameter, not the model.
         InitOutPredictions(e.data->Info(), &(e.predictions), model);
+        // This one requires trees and tree_info.
         PredLoopInternal(e.data.get(), &(e.predictions.HostVector()), model, 0,
                          model.trees.size());
       } else if (model.param.num_output_group == 1 && updaters->size() > 0 &&

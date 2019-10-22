@@ -22,7 +22,7 @@ DMLC_REGISTRY_FILE_TAG(updater_prune);
 class TreePruner: public TreeUpdater {
  public:
   TreePruner() {
-    syncher_.reset(TreeUpdater::Create("sync", tparam_));
+    syncher_.reset(TreeUpdater::Create("sync", this->index_cache_, tparam_));
   }
   char const* Name() const override {
     return "prune";

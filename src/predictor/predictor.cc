@@ -9,19 +9,17 @@ DMLC_REGISTRY_ENABLE(::xgboost::PredictorReg);
 }  // namespace dmlc
 namespace xgboost {
 void Predictor::Configure(
-    const std::vector<std::pair<std::string, std::string>>& cfg,
-    const std::vector<std::shared_ptr<DMatrix>>& cache) {
-  for (const std::shared_ptr<DMatrix>& d : cache) {
-    cache_[d.get()].data = d;
-  }
-}
-Predictor* Predictor::Create(std::string const& name, GenericParameter const* learner_param) {
+    const std::vector<std::pair<std::string, std::string>>& cfg) {}
+Predictor* Predictor::Create(std::string const& name,
+                             std::unordered_map<DMatrix*, PredictionCacheEntry>* _cache,
+                             GenericParameter const* learner_param) {
   auto* e = ::dmlc::Registry<PredictorReg>::Get()->Find(name);
   if (e == nullptr) {
     LOG(FATAL) << "Unknown predictor type " << name;
   }
   auto p_predictor =  (e->body)();
   p_predictor->learner_param_ = learner_param;
+  p_predictor->SetCache(_cache);
   return p_predictor;
 }
 }  // namespace xgboost

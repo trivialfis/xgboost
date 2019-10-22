@@ -8,6 +8,8 @@
 
 #include <xgboost/tree_model.h>
 #include <xgboost/logging.h>
+
+#include <stack>
 #include <sstream>
 #include <limits>
 #include <cmath>
@@ -646,6 +648,30 @@ void RegTree::SaveModel(dmlc::Stream* fo) const {
   fo->Write(dmlc::BeginPtr(stats_), sizeof(RTreeNodeStat) * nodes_.size());
 }
 
+std::vector<int32_t> RegTree::Leaves() const {
+  std::vector<int32_t> leaves;
+
+  auto &tree = *this;
+  std::stack<int32_t> stack;
+  stack.push(0);
+  while (true) {
+    if (stack.empty()) {
+      break;
+    }
+
+    auto cur = stack.top();
+    stack.pop();
+    if (tree[cur].IsLeaf()) {
+      leaves.emplace_back(cur);
+    } else {
+      stack.push(tree[cur].LeftChild());
+      stack.push(tree[cur].RightChild());
+    }
+  };
+
+  return leaves;
+};
+
 void RegTree::FillNodeMeanValues() {
   size_t num_nodes = this->param.num_nodes;
   if (this->node_mean_values_.size() == num_nodes) {
@@ -879,10 +905,9 @@ void RegTree::CalculateContributions(const RegTree::FVec &feat,
 
   // Preallocate space for the unique path data
   const int maxd = this->MaxDepth(root_id) + 2;
-  auto *unique_path_data = new PathElement[(maxd * (maxd + 1)) / 2];
+  std::vector<PathElement> unique_path_data((maxd * (maxd + 1)) / 2);
 
-  TreeShap(feat, out_contribs, root_id, 0, unique_path_data,
+  TreeShap(feat, out_contribs, root_id, 0, unique_path_data.data(),
            1, 1, -1, condition, condition_feature, 1);
-  delete[] unique_path_data;
 }
 }  // namespace xgboost

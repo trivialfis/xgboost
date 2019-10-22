@@ -471,6 +471,8 @@ struct GPUHistMakerDevice {
   common::ColumnSampler column_sampler;
   FeatureInteractionConstraint interaction_constraints;
 
+  TreeUpdater::LeaveIndexCache* index_cache_;
+
   using ExpandQueue =
       std::priority_queue<ExpandEntry, std::vector<ExpandEntry>,
                           std::function<bool(ExpandEntry, ExpandEntry)>>;
@@ -478,12 +480,14 @@ struct GPUHistMakerDevice {
 
   GPUHistMakerDevice(int _device_id,
                      EllpackPageImpl* _page,
+                     TreeUpdater::LeaveIndexCache* _index_cache,
                      bst_uint _n_rows,
                      TrainParam _param,
                      uint32_t column_sampler_seed,
                      uint32_t n_features)
       : device_id(_device_id),
         page(_page),
+        index_cache_{_index_cache},
         n_rows(_n_rows),
         param(std::move(_param)),
         prediction_cache_initialised(false),
@@ -692,6 +696,18 @@ struct GPUHistMakerDevice {
           }
           return new_position;
         });
+
+    // MART
+    auto d_ridx = row_partitioner->GetRows();
+    CHECK(this->index_cache_);
+    this->index_cache_->row_index.SetDevice(device_id);
+    this->index_cache_->row_index.Resize(d_ridx.size());
+    thrust::copy(thrust::device_ptr<uint32_t const>(d_ridx.data()),
+                 thrust::device_ptr<uint32_t const>(d_ridx.data() + d_ridx.size()),
+                 thrust::device_ptr<size_t>(this->index_cache_->row_index.DevicePointer()));
+    auto row_segments = row_partitioner->GetRowSegments();
+    this->index_cache_->ridx_segments.resize(row_segments.size());
+    std::copy(row_segments.cbegin(), row_segments.cend(), this->index_cache_->ridx_segments.begin());
   }
 
   // After tree update is finished, update the position of all training
@@ -741,7 +757,7 @@ struct GPUHistMakerDevice {
         cudaMemcpyAsync(node_sum_gradients_d.data(), node_sum_gradients.data(),
                         sizeof(GradientPair) * node_sum_gradients.size(),
                         cudaMemcpyHostToDevice));
-    auto d_position = row_partitioner->GetPosition();
+    common::Span<const RowPartitioner::TreePositionT> d_position = row_partitioner->GetPosition();
     auto d_ridx = row_partitioner->GetRows();
     auto d_node_sum_gradients = node_sum_gradients_d.data();
     auto d_prediction_cache = prediction_cache.data();
@@ -902,12 +918,16 @@ struct GPUHistMakerDevice {
 
       int left_child_nidx = tree[candidate.nid].LeftChild();
       int right_child_nidx = tree[candidate.nid].RightChild();
+
+      // FIXME(trivialfis): Don't force this for non-valid child as UpdatePosition is
+      // quite expensive.
+      monitor.StartCuda("UpdatePosition");
+      this->UpdatePosition(candidate.nid, (*p_tree)[candidate.nid]);
+      monitor.StopCuda("UpdatePosition");
+
       // Only create child entries if needed
       if (ExpandEntry::ChildIsValid(param, tree.GetDepth(left_child_nidx),
                                     num_leaves)) {
-        monitor.StartCuda("UpdatePosition");
-        this->UpdatePosition(candidate.nid, (*p_tree)[candidate.nid]);
-        monitor.StopCuda("UpdatePosition");
 
         monitor.StartCuda("BuildHist");
         this->BuildHistLeftRight(candidate, left_child_nidx, right_child_nidx, reducer);
@@ -926,7 +946,7 @@ struct GPUHistMakerDevice {
                                    splits.at(1), timestamp++));
       }
     }
-
+    LOG(DEBUG) << "num_leaves: " << num_leaves;
     monitor.StartCuda("FinalisePosition");
     this->FinalisePosition(p_tree);
     monitor.StopCuda("FinalisePosition");
@@ -968,7 +988,9 @@ inline void GPUHistMakerDevice<GradientSumT>::InitHistogram() {
 template <typename GradientSumT>
 class GPUHistMakerSpecialised {
  public:
-  GPUHistMakerSpecialised() : initialised_{false}, p_last_fmat_{nullptr} {}
+  GPUHistMakerSpecialised(TreeUpdater::LeaveIndexCache* _index_cache) :
+    initialised_{false}, p_last_fmat_{nullptr}, index_cache_{_index_cache} {}
+
   void Configure(const Args& args, GenericParameter const* generic_param) {
     param_.UpdateAllowUnknown(args);
     generic_param_ = generic_param;
@@ -1025,6 +1047,7 @@ class GPUHistMakerSpecialised {
     dh::safe_cuda(cudaSetDevice(device_));
     maker.reset(new GPUHistMakerDevice<GradientSumT>(device_,
                                                      page,
+                                                     this->index_cache_,
                                                      info_->num_row_,
                                                      param_,
                                                      column_sampling_seed,
@@ -1096,6 +1119,7 @@ class GPUHistMakerSpecialised {
 
   GPUHistMakerTrainParam hist_maker_param_;
   GenericParameter const* generic_param_;
+  TreeUpdater::LeaveIndexCache* index_cache_;
 
   dh::AllReducer reducer_;
 
@@ -1107,15 +1131,16 @@ class GPUHistMakerSpecialised {
 
 class GPUHistMaker : public TreeUpdater {
  public:
+  GPUHistMaker() = default;
   void Configure(const Args& args) override {
     hist_maker_param_.UpdateAllowUnknown(args);
     float_maker_.reset();
     double_maker_.reset();
     if (hist_maker_param_.single_precision_histogram) {
-      float_maker_.reset(new GPUHistMakerSpecialised<GradientPair>());
+      float_maker_.reset(new GPUHistMakerSpecialised<GradientPair>(this->index_cache_));
       float_maker_->Configure(args, tparam_);
     } else {
-      double_maker_.reset(new GPUHistMakerSpecialised<GradientPairPrecise>());
+      double_maker_.reset(new GPUHistMakerSpecialised<GradientPairPrecise>(this->index_cache_));
       double_maker_->Configure(args, tparam_);
     }
   }

@@ -46,14 +46,14 @@ void GBTree::Configure(const Args& cfg) {
   // configure predictors
   if (!cpu_predictor_) {
     cpu_predictor_ = std::unique_ptr<Predictor>(
-        Predictor::Create("cpu_predictor", this->learner_param_));
-    cpu_predictor_->Configure(cfg, cache_);
+        Predictor::Create("cpu_predictor", &predt_cache_, this->learner_param_));
+    cpu_predictor_->Configure(cfg);
   }
 #if defined(XGBOOST_USE_CUDA)
   if (!gpu_predictor_) {
     gpu_predictor_ = std::unique_ptr<Predictor>(
-        Predictor::Create("gpu_predictor", this->learner_param_));
-    gpu_predictor_->Configure(cfg, cache_);
+        Predictor::Create("gpu_predictor", &predt_cache_, this->learner_param_));
+    gpu_predictor_->Configure(cfg);
   }
 #endif  // defined(XGBOOST_USE_CUDA)
 
@@ -176,23 +176,55 @@ void GBTree::DoBoost(DMatrix* p_fmat,
                      HostDeviceVector<GradientPair>* in_gpair,
                      ObjFunction* obj) {
   std::vector<std::vector<std::unique_ptr<RegTree> > > new_trees;
-  const int ngroup = model_.param.num_output_group;
+
+  const uint32_t ngroup = static_cast<uint32_t>(model_.param.num_output_group);
   ConfigureWithKnownData(this->cfg_, p_fmat);
   monitor_.Start("BoostNewTrees");
+
   if (ngroup == 1) {
     std::vector<std::unique_ptr<RegTree> > ret;
     BoostNewTrees(in_gpair, p_fmat, 0, &ret);
+    if (!obj->HasHessian() && this->index_cache_.ridx_segments.size() != 0) {
+      if (this->predt_cache_.at(p_fmat).predictions.Size() == 0) {
+        GetPredictor()->UpdatePredictionCache(model_, &updaters_, ret.size());
+      }
+      for (auto &p_tree : ret) {
+        // FIXME(trivialfis): After sorting out the order of init predt cache
+        // and update, we don't need to call Leaves() as it's already encoded in
+        // indices.
+        // FIXME(trivailfis): Don't force index cache for leaves in GPU Hist.
+        auto leaves = p_tree->Leaves();
+        for (auto i : leaves) {
+          auto const &segments = this->index_cache_.ridx_segments;
+          auto const &leaf_seg = segments.at(i);
+          std::vector<size_t> const &indices =
+              this->index_cache_.row_index.HostVector();
+          CHECK_NE(indices.size(), 0);
+          auto const rids =
+              common::Span<size_t const>{indices.data(), indices.size()}
+                  .subspan(leaf_seg.begin, leaf_seg.end - leaf_seg.begin);
+          auto new_leaf = obj->ReestimatePrediction(
+              p_fmat->Info(), &(this->predt_cache_.at(p_fmat).predictions),
+              rids);
+          (*p_tree)[i].SetLeaf(new_leaf);
+
+          for (size_t rid : rids) {
+            this->predt_cache_.at(p_fmat).predictions.HostVector()[rid] +=
+                new_leaf;
+          }
+        }
+      }
+    }
     new_trees.push_back(std::move(ret));
   } else {
-    CHECK_EQ(in_gpair->Size() % ngroup, 0U)
-        << "must have exactly ngroup*nrow gpairs";
+    CHECK_EQ(in_gpair->Size() % ngroup, 0U) << "must have exactly ngroup * nrow gpairs";
     // TODO(canonizer): perform this on GPU if HostDeviceVector has device set.
     HostDeviceVector<GradientPair> tmp(in_gpair->Size() / ngroup,
                                        GradientPair(),
                                        in_gpair->DeviceIdx());
     const auto& gpair_h = in_gpair->ConstHostVector();
-    auto nsize = static_cast<bst_omp_uint>(tmp.Size());
-    for (int gid = 0; gid < ngroup; ++gid) {
+    auto const nsize = static_cast<bst_omp_uint>(tmp.Size());
+    for (uint32_t gid = 0; gid < ngroup; ++gid) {
       std::vector<GradientPair>& tmp_h = tmp.HostVector();
 #pragma omp parallel for schedule(static)
       for (bst_omp_uint i = 0; i < nsize; ++i) {
@@ -204,7 +236,7 @@ void GBTree::DoBoost(DMatrix* p_fmat,
     }
   }
   monitor_.Stop("BoostNewTrees");
-  this->CommitModel(std::move(new_trees));
+  this->CommitModel(std::move(new_trees), p_fmat, obj);
 }
 
 void GBTree::InitUpdater(Args const& cfg) {
@@ -239,7 +271,9 @@ void GBTree::InitUpdater(Args const& cfg) {
   }
 
   for (const std::string& pstr : ups) {
-    std::unique_ptr<TreeUpdater> up(TreeUpdater::Create(pstr.c_str(), learner_param_));
+    std::unique_ptr<TreeUpdater> up(TreeUpdater::Create(pstr.c_str(),
+                                                        &this->index_cache_,
+                                                        learner_param_));
     up->Configure(cfg);
     updaters_.push_back(std::move(up));
   }
@@ -274,15 +308,20 @@ void GBTree::BoostNewTrees(HostDeviceVector<GradientPair>* gpair,
   }
 }
 
-void GBTree::CommitModel(std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees) {
+void GBTree::CommitModel(std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees,
+                         DMatrix* p_fmat,
+                         ObjFunction* obj) {
   monitor_.Start("CommitModel");
-  int num_new_trees = 0;
+  size_t num_new_trees = 0;
   for (int gid = 0; gid < model_.param.num_output_group; ++gid) {
     num_new_trees += new_trees[gid].size();
     model_.CommitModel(std::move(new_trees[gid]), gid);
   }
   CHECK(configured_);
-  GetPredictor()->UpdatePredictionCache(model_, &updaters_, num_new_trees);
+
+  if (obj->HasHessian()) {
+    GetPredictor()->UpdatePredictionCache(model_, &updaters_, num_new_trees);
+  }
   monitor_.Stop("CommitModel");
 }
 
@@ -445,7 +484,9 @@ class Dart : public GBTree {
 
   // commit new trees all at once
   void
-  CommitModel(std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees) override {
+  CommitModel(std::vector<std::vector<std::unique_ptr<RegTree>>>&& new_trees,
+              DMatrix* p_fmat,
+              ObjFunction* obj) override {
     int num_new_trees = 0;
     for (int gid = 0; gid < model_.param.num_output_group; ++gid) {
       num_new_trees += new_trees[gid].size();

@@ -37,13 +37,18 @@ TEST(gpu_predictor, Test) {
   auto cpu_lparam = CreateEmptyGenericParam(-1);
   auto gpu_lparam = CreateEmptyGenericParam(0);
 
-  std::unique_ptr<Predictor> gpu_predictor =
-      std::unique_ptr<Predictor>(Predictor::Create("gpu_predictor", &gpu_lparam));
-  std::unique_ptr<Predictor> cpu_predictor =
-      std::unique_ptr<Predictor>(Predictor::Create("cpu_predictor", &cpu_lparam));
+  std::unordered_map<DMatrix*, Predictor::PredictionCacheEntry> cpu_predt_cache;
+  std::unique_ptr<Predictor> gpu_predictor {
+    Predictor::Create("gpu_predictor", &cpu_predt_cache, &gpu_lparam)
+  };
 
-  gpu_predictor->Configure({}, {});
-  cpu_predictor->Configure({}, {});
+  std::unordered_map<DMatrix*, Predictor::PredictionCacheEntry> gpu_predt_cache;
+  std::unique_ptr<Predictor> cpu_predictor {
+    Predictor::Create("cpu_predictor", &gpu_predt_cache, &cpu_lparam)
+  };
+
+  gpu_predictor->Configure({});
+  cpu_predictor->Configure({});
 
   for (size_t i = 1; i < 33; i *= 2) {
     int n_row = i, n_col = i;
@@ -71,9 +76,11 @@ TEST(gpu_predictor, Test) {
 
 TEST(gpu_predictor, ExternalMemoryTest) {
   auto lparam = CreateEmptyGenericParam(0);
-  std::unique_ptr<Predictor> gpu_predictor =
-      std::unique_ptr<Predictor>(Predictor::Create("gpu_predictor", &lparam));
-  gpu_predictor->Configure({}, {});
+  std::unordered_map<DMatrix*, Predictor::PredictionCacheEntry> gpu_predt_cache;
+  std::unique_ptr<Predictor> gpu_predictor {
+    Predictor::Create("gpu_predictor", &gpu_predt_cache, &lparam)
+  };
+  gpu_predictor->Configure({});
   gbm::GBTreeModel model = CreateTestModel();
   model.param.num_feature = 3;
   const int n_classes = 3;

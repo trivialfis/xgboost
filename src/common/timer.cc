@@ -14,8 +14,8 @@ namespace xgboost {
 namespace common {
 
 std::vector<Monitor::StatMap> Monitor::CollectFromOtherRanks() const {
-  // Since other nodes might have started timers that this one haven't, so
-  // we can't simply call all reduce.
+  // Since other nodes might have started timers that this one hasn't, so we can't simply
+  // call all reduce.
   size_t const world_size = rabit::GetWorldSize();
   size_t const rank = rabit::GetRank();
 

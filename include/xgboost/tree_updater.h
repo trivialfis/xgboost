@@ -25,9 +25,6 @@ namespace xgboost {
  * \brief interface of tree update module, that performs update of a tree.
  */
 class TreeUpdater {
- protected:
-  GenericParameter const* tparam_;
-
  public:
   /*! \brief virtual destructor */
   virtual ~TreeUpdater() = default;
@@ -66,11 +63,88 @@ class TreeUpdater {
 
   virtual char const* Name() const = 0;
 
+  struct LeaveIndexCache;
+
   /*!
    * \brief Create a tree updater given name
    * \param name Name of the tree updater.
    */
-  static TreeUpdater* Create(const std::string& name, GenericParameter const* tparam);
+  static TreeUpdater* Create(const std::string& name, LeaveIndexCache* cache,
+                             GenericParameter const* tparam);
+
+  /** \brief Used to demarcate a contiguous set of row indices associated with
+   * some tree node. */
+  struct Segment {
+    size_t begin;
+    size_t end;
+
+    Segment(size_t begin, size_t end) : begin(begin), end(end) {
+      CHECK_GE(end, begin);
+    }
+    Segment() = default;
+    size_t Size() const { return end - begin; }
+  };
+
+  struct LeaveIndexCache {
+    HostDeviceVector<size_t> row_index;
+    std::vector<Segment> ridx_segments;
+
+   public:
+    using const_iterator = typename std::vector<Segment>::const_iterator;
+    using iterator = typename std::vector<Segment>::iterator;
+    using value_type = Segment;
+    using pointer = value_type*;
+    using reference = value_type&;
+    using index_type = int32_t;  // Node ID type
+
+    LeaveIndexCache() = default;
+
+    std::vector<Segment>::const_iterator cbegin() const {
+      return ridx_segments.cbegin();
+    }
+    std::vector<Segment>::const_iterator cend() const {
+      return ridx_segments.cend();
+    }
+
+    /*! \brief return corresponding element set given the node_id */
+    common::Span<size_t const> operator[](unsigned node_id) const;
+    common::Span<size_t> operator[](unsigned node_id);
+
+    void Init() {
+      CHECK_EQ(ridx_segments.size(), 0U);
+      // FIXME(trivialfis): https://github.com/dmlc/xgboost/issues/2800
+      const size_t begin = 0;
+      const size_t end = row_index.Size();
+      CHECK_NE(row_index.Size(), 0);
+      ridx_segments.emplace_back(begin, end);
+    }
+
+    common::Span<size_t> GetRows() {
+      auto* ptr = row_index.HostVector().data();
+      auto size = row_index.HostVector().size();
+      return common::Span<size_t>{ ptr, size };
+    }
+    std::vector<size_t>& HostRowIndices() {
+      return this->row_index.HostVector();
+    }
+
+    void AddSplit(unsigned node_id, size_t iLeft, unsigned left_node_id,
+                  unsigned right_node_id);
+
+    void Clear() {
+      this->row_index.Resize(0);
+      this->ridx_segments.clear();
+    }
+  };
+
+ protected:
+  void SetCache(LeaveIndexCache* cache) {
+    this->index_cache_ = cache;
+  }
+
+ protected:
+  GenericParameter const* tparam_ {nullptr};
+  LeaveIndexCache* index_cache_ {nullptr};
 };
 
 /*!

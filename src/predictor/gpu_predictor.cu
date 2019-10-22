@@ -337,8 +337,8 @@ class GPUPredictor : public xgboost::Predictor {
                         const gbm::GBTreeModel& model, unsigned ntree_limit) {
     if (ntree_limit == 0 ||
         ntree_limit * model.param.num_output_group >= model.trees.size()) {
-      auto it = cache_.find(dmat);
-      if (it != cache_.end()) {
+      auto it = cache_->find(dmat);
+      if (it != cache_->end()) {
         const HostDeviceVector<bst_float>& y = it->second.predictions;
         if (y.Size() != 0) {
           monitor_.StartCuda("PredictFromCache");
@@ -356,10 +356,10 @@ class GPUPredictor : public xgboost::Predictor {
   void UpdatePredictionCache(
       const gbm::GBTreeModel& model,
       std::vector<std::unique_ptr<TreeUpdater>>* updaters,
-      int num_new_trees) override {
+      size_t num_new_trees) override {
     auto old_ntree = model.trees.size() - num_new_trees;
     // update cache entry
-    for (auto& kv : cache_) {
+    for (auto& kv : *cache_) {
       PredictionCacheEntry& e = kv.second;
       DMatrix* dmat = kv.first;
       HostDeviceVector<bst_float>& predictions = e.predictions;
@@ -411,9 +411,8 @@ class GPUPredictor : public xgboost::Predictor {
                << " is not implemented in GPU Predictor.";
   }
 
-  void Configure(const std::vector<std::pair<std::string, std::string>>& cfg,
-                 const std::vector<std::shared_ptr<DMatrix>>& cache) override {
-    Predictor::Configure(cfg, cache);
+  void Configure(const std::vector<std::pair<std::string, std::string>>& cfg) override {
+    Predictor::Configure(cfg);
 
     int device = learner_param_->gpu_id;
     if (device >= 0) {

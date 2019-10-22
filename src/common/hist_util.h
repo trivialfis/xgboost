@@ -29,32 +29,26 @@ namespace xgboost {
  * heap-allocated.
  */
 template<typename T, size_t MaxStackSize>
-class MemStackAllocator {
+class SmallVector {
  public:
-  explicit MemStackAllocator(size_t required_size): required_size_(required_size) {
+  explicit SmallVector(size_t required_size): ptr_{stack_mem_} {
+    if (MaxStackSize >= required_size) {
+      ptr_ = new T[required_size];
+    }
   }
 
-  T* Get() {
-    if (!ptr_) {
-      if (MaxStackSize >= required_size_) {
-        ptr_ = stack_mem_;
-      } else {
-        ptr_ =  reinterpret_cast<T*>(malloc(required_size_ * sizeof(T)));
-        do_free_ = true;
-      }
-    }
-
+  T* data() {  // NOLINT
     return ptr_;
   }
 
-  ~MemStackAllocator() {
-    if (do_free_) free(ptr_);
+  ~SmallVector() {
+    if (ptr_ != stack_mem_) {
+      delete ptr_;
+    }
   }
 
  private:
-  T* ptr_ = nullptr;
-  bool do_free_ = false;
-  size_t required_size_;
+  T* ptr_;
   T stack_mem_[MaxStackSize];
 };
 
@@ -490,15 +484,15 @@ class GHistBuilder {
   }
 
   void BuildBlockHist(const std::vector<GradientPair>& gpair,
-                                    const RowSetCollection::Elem row_indices,
-                                    const GHistIndexBlockMatrix& gmatb,
-                                    GHistRow hist) {
+                      const common::Span<size_t const> row_indices,
+                      const GHistIndexBlockMatrix& gmatb,
+                      GHistRow hist) {
     constexpr int kUnroll = 8;  // loop unrolling factor
     const int32_t nblock = gmatb.GetNumBlock();
-    const size_t nrows = row_indices.end - row_indices.begin;
+    const size_t nrows = row_indices.size();
     const size_t rest = nrows % kUnroll;
 
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int32_t bid = 0; bid < nblock; ++bid) {
       auto gmat = gmatb[bid];
 
@@ -508,7 +502,7 @@ class GHistBuilder {
         size_t iend[kUnroll];
         GradientPair stat[kUnroll];
         for (int k = 0; k < kUnroll; ++k) {
-          rid[k] = row_indices.begin[i + k];
+          rid[k] = row_indices[i + k];
         }
         for (int k = 0; k < kUnroll; ++k) {
           ibegin[k] = gmat.row_ptr[rid[k]];
@@ -525,7 +519,7 @@ class GHistBuilder {
         }
       }
       for (size_t i = nrows - rest; i < nrows; ++i) {
-        const size_t rid = row_indices.begin[i];
+        const size_t rid = row_indices[i];
         const size_t ibegin = gmat.row_ptr[rid];
         const size_t iend = gmat.row_ptr[rid + 1];
         const GradientPair stat = gpair[rid];
