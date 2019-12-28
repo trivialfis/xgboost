@@ -358,6 +358,27 @@ class RegTree : public Model {
     this->Stat(nid).sum_hess = sum_hess;
   }
 
+  void ExpandNode(bst_node_t node_id, bst_feature_t split_index, float split_value, bool default_left,
+                  std::vector<float> base_weight,
+                  std::vector<float> left_leaf_weight,
+                  std::vector<float> right_leaf_weight,
+                  bst_float loss_change,
+                  std::vector<float> sum_hess) {
+    int pleft = this->AllocNode();
+    int pright = this->AllocNode();
+    auto &node = nodes_[node_id];
+    CHECK(node.IsLeaf());
+    node.SetLeftChild(pleft);
+    node.SetRightChild(pright);
+    nodes_[node.LeftChild()].SetParent(node_id, true);
+    nodes_[node.RightChild()].SetParent(node_id, false);
+    node.SetSplit(split_index, split_value,
+                  default_left);
+
+    this->SetLeaf(pleft, left_leaf_weight);
+    this->SetLeaf(pright, right_leaf_weight);
+  }
+
   /*!
    * \brief get current depth
    * \param nid node id
@@ -441,6 +462,21 @@ class RegTree : public Model {
     };
     std::vector<Entry> data_;
   };
+
+  std::vector<float> leaf_values;
+  bst_feature_t targets;
+  common::Span<float const> LeafValueVector(bst_node_t node_id) const {
+    return common::Span<float const> {leaf_values.data() + node_id * targets, targets};
+  }
+  void SetLeaf(bst_node_t node_id, std::vector<float> weights) {
+    leaf_values.resize(leaf_values.size() + node_id * targets);
+    auto beg = targets * node_id;
+    auto end = beg + targets;
+    for (size_t i = beg; i < end; ++i) {
+      leaf_values[i] = weights[i];
+    }
+  }
+
   /*!
    * \brief get the leaf index
    * \param feat dense feature vector, if the feature is missing the field is set to NaN
