@@ -18,7 +18,7 @@ DMLC_REGISTRY_FILE_TAG(cpu_predictor);
 
 class CPUPredictor : public Predictor {
  protected:
-  static bst_float PredValue(const  SparsePage::Inst& inst,
+  static bst_float PredValue(const SparsePage::Inst& inst,
                              const std::vector<std::unique_ptr<RegTree>>& trees,
                              const std::vector<int>& tree_info, int bst_group,
                              RegTree::FVec* p_feats,

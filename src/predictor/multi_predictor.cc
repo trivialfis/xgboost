@@ -17,6 +17,7 @@ class NotImplementedError : public dmlc::Error {
 
 class CPUMultiPredictor : public Predictor {
   void PredictLeafValue(common::Span<Entry const> row,
+                        bst_feature_t n_targets,
                         const std::vector<std::unique_ptr<RegTree>>& trees,
                         const std::vector<int>& tree_info,
                         unsigned tree_begin, unsigned tree_end,
@@ -35,7 +36,9 @@ class CPUMultiPredictor : public Predictor {
       }
 
       for (size_t i = 0; i < prediction.size(); ++i) {
-        prediction[i] += tree.LeafValueVector(node_id)[i];
+        for (size_t j = 0; j < n_targets; ++j) {
+          prediction[i * n_targets + j] += tree.LeafValueVector(node_id)[j];
+        }
       }
     }
   }
@@ -48,10 +51,13 @@ class CPUMultiPredictor : public Predictor {
                     const gbm::GBTreeModel& model, int tree_begin,
                     unsigned ntree_limit = 0) override {
     auto& h_predt = out_preds->HostVector();
+    h_predt.resize(dmat->Info().multi_labels_.n_rows * dmat->Info().multi_labels_.n_cols);
+    LOG(WARNING) << "h_predt: " << h_predt.size();
     common::Span<float> predictions {h_predt};
     for (const auto& batch : dmat->GetBatches<SparsePage>()) {
       for (size_t i = 0; i < batch.Size(); ++i) {
         this->PredictLeafValue(batch[i],
+                               dmat->Info().multi_labels_.n_cols,
                                model.trees, model.tree_info,
                                tree_begin, ntree_limit, predictions);
       }

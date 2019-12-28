@@ -46,9 +46,17 @@ void GBTree::Configure(const Args& cfg) {
 
   // configure predictors
   if (!cpu_predictor_) {
-    cpu_predictor_ = std::unique_ptr<Predictor>(
-        Predictor::Create("cpu_predictor", this->generic_param_, cache_));
+    if (tparam_.predictor == PredictorType::kMulti) {
+      cpu_predictor_ = std::unique_ptr<Predictor>{
+        Predictor::Create("multi_predictor", this->generic_param_, cache_)
+      };
+    } else {
+      cpu_predictor_ = std::unique_ptr<Predictor>{
+        Predictor::Create("cpu_predictor", this->generic_param_, cache_)
+      };
+    }
   }
+  CHECK(cpu_predictor_);
   cpu_predictor_->Configure(cfg);
 #if defined(XGBOOST_USE_CUDA)
   auto n_gpus = common::AllVisibleGPUs();

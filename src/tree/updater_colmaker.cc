@@ -244,7 +244,7 @@ class ColMaker: public TreeUpdater {
       const MetaInfo& info = fmat.Info();
       // setup position
       const auto ndata = static_cast<bst_omp_uint>(info.num_row_);
-      #pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static)
       for (bst_omp_uint ridx = 0; ridx < ndata; ++ridx) {
         const int tid = omp_get_thread_num();
         if (position_[ridx] < 0) continue;

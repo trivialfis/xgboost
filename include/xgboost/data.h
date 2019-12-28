@@ -32,8 +32,8 @@ enum DataType {
 
 struct LabelMatrix {
   std::vector<float> values_;
-  size_t n_rows;
-  size_t n_cols;
+  bst_row_t n_rows;
+  bst_feature_t n_cols;
 
   size_t num_targets_ {0};
 };
