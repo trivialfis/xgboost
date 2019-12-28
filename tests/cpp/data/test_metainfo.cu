@@ -47,26 +47,26 @@ TEST(MetaInfo, FromInterface) {
   std::string str = PrepareData<float>("<f4", &d_data);
 
   MetaInfo info;
-  info.SetInfo("label", str.c_str());
+  info.SetInfo(1, "label", str.c_str());
 
   auto const& h_label = info.labels_.HostVector();
   for (size_t i = 0; i < d_data.size(); ++i) {
     ASSERT_EQ(h_label[i], d_data[i]);
   }
 
-  info.SetInfo("weight", str.c_str());
+  info.SetInfo(1, "weight", str.c_str());
   auto const& h_weight = info.weights_.HostVector();
   for (size_t i = 0; i < d_data.size(); ++i) {
     ASSERT_EQ(h_weight[i], d_data[i]);
   }
 
-  info.SetInfo("base_margin", str.c_str());
+  info.SetInfo(1, "base_margin", str.c_str());
   auto const& h_base_margin = info.base_margin_.HostVector();
   for (size_t i = 0; i < d_data.size(); ++i) {
     ASSERT_EQ(h_base_margin[i], d_data[i]);
   }
 
-  EXPECT_ANY_THROW({info.SetInfo("group", str.c_str());});
+  EXPECT_ANY_THROW({info.SetInfo(1, "group", str.c_str());});
 }
 
 TEST(MetaInfo, Group) {
@@ -76,7 +76,7 @@ TEST(MetaInfo, Group) {
 
   MetaInfo info;
 
-  info.SetInfo("group", str.c_str());
+  info.SetInfo(1, "group", str.c_str());
   auto const& h_group = info.group_ptr_;
   ASSERT_EQ(h_group.size(), d_data.size() + 1);
   for (size_t i = 1; i < h_group.size(); ++i) {

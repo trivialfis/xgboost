@@ -33,7 +33,7 @@ void CopyInfoImpl(std::map<std::string, Json> const& column, HostDeviceVector<fl
   });
 }
 
-void MetaInfo::SetInfo(const char * c_key, std::string const& interface_str) {
+void MetaInfo::SetInfoDevice(const char * c_key, std::string const& interface_str) {
   Json j_interface = Json::Load({interface_str.c_str(), interface_str.size()});
   auto const& j_arr = get<Array>(j_interface);
   CHECK_EQ(j_arr.size(), 1) << "MetaInfo: " << c_key << ". " << ColumnarErrors::Dimension(1);;

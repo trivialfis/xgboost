@@ -119,8 +119,8 @@ class MetaInfo {
    *
    *        Right now only 1 column is permitted.
    */
-  void SetInfo(const char* c_key, std::string const& interface_str);
-  void SetInfoHost(const char* c_key, std::string const& interface_str);
+  void SetInfo(bool on_device, const char* c_key, std::string const& interface_str);
+  void SetInfoDevice(const char* c_key, std::string const& interface_str);
 
  private:
   /*! \brief argsort of labels */

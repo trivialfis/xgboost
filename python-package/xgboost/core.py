@@ -692,10 +692,15 @@ class DMatrix(object):
                                                c_data,
                                                c_bst_ulong(len(data))))
 
-    def set_interface_info(self, field, data):
+    def set_interface_info(self, device, field, data):
         """Set info type peoperty into DMatrix."""
-        interfaces = _extract_interface_from_cudf(data)
+        if device == 1:
+            interfaces = _extract_interface_from_cudf(data)
+        else:
+            interfaces = data.__array_interface__
+            interfaces = bytes(json.dumps(interfaces), 'utf-8')
         _check_call(_LIB.XGDMatrixSetInfoFromInterface(self.handle,
+                                                       c_bst_ulong(device),
                                                        c_str(field),
                                                        interfaces))
 
@@ -777,9 +782,9 @@ class DMatrix(object):
             The label information to be set into DMatrix
         """
         if isinstance(label, np.ndarray):
-            self.set_label_npy2d(label)
+            self.set_interface_info(0, 'label', label)
         elif _use_columnar_initializer(label):
-            self.set_interface_info('label', label)
+            self.set_interface_info(1, 'label', label)
         else:
             self.set_float_info('label', label)
 
@@ -812,7 +817,7 @@ class DMatrix(object):
         if isinstance(weight, np.ndarray):
             self.set_weight_npy2d(weight)
         elif _use_columnar_initializer(weight):
-            self.set_interface_info('weight', weight)
+            self.set_interface_info(1, 'weight', weight)
         else:
             self.set_float_info('weight', weight)
 
@@ -849,7 +854,7 @@ class DMatrix(object):
             Prediction margin of each datapoint
         """
         if _use_columnar_initializer(margin):
-            self.set_interface_info('base_margin', margin)
+            self.set_interface_info(1, 'base_margin', margin)
         else:
             self.set_float_info('base_margin', margin)
 
@@ -862,7 +867,7 @@ class DMatrix(object):
             Group size of each group
         """
         if _use_columnar_initializer(group):
-            self.set_interface_info('group', group)
+            self.set_interface_info(1, 'group', group)
         else:
             self.set_uint_info('group', group)
 

@@ -148,30 +148,33 @@ void MetaInfo::SetInfo(const char* key, const void* dptr, DataType dtype, size_t
   }
 }
 
-#if !defined(XGBOOST_USE_CUDA)
-void MetaInfo::SetInfo(const char * c_key, std::string const& interface_str) {
-  LOG(FATAL) << "XGBoost version is not compiled with GPU support";
-}
-#endif  // !defined(XGBOOST_USE_CUDA)
+void MetaInfo::SetInfo(bool on_device, const char* c_key, std::string const& interface_str) {
+  if (on_device) {
+    this->SetInfoDevice(c_key, interface_str);
+    return;
+  }
 
-void MetaInfo::SetInfoHost(const char* c_key, std::string const& interface_str) {
   std::string key {c_key};
-  auto j_interface = Json::Load({key.c_str(), key.size()});
+  auto j_interface = Json::Load({interface_str.c_str(), interface_str.size()});
   CHECK_EQ(key, "label") << "Only setting label is supported.";
   auto const& interface = get<Object>(j_interface);
   auto ptr = ArrayInterfaceHandler::GetPtrFromArrayData<float*>(interface);
   auto j_shape = get<Array const>(interface.at("shape"));
-  auto j_stride = get<Array const>(interface.at("strides"));
+  // auto j_stride = get<Array const>(interface.at("strides"));
 
   bst_row_t n_rows = get<Integer>(j_shape.at(0));
   bst_row_t n_cols = get<Integer>(j_shape.at(1));
   this->multi_labels_.n_rows = n_rows;
   this->multi_labels_.n_cols = n_cols;
+  std::cout << "n_rows: " << n_rows << ","
+            << "n_cols: " << n_cols << std::endl;
   this->multi_labels_.values_.resize(n_rows * n_cols);
+
   for (size_t i = 0; i < n_rows * n_cols; ++i) {
     this->multi_labels_.values_[i] = ptr[i];
   }
 }
+
 
 DMatrix* DMatrix::Load(const std::string& uri,
                        bool silent,
