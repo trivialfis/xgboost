@@ -43,7 +43,8 @@ enum class TreeProcessType : int {
 enum class PredictorType : int {
   kAuto = 0,
   kCPUPredictor,
-  kGPUPredictor
+  kGPUPredictor,
+  kMulti
 };
 }  // namespace xgboost
 
@@ -91,6 +92,7 @@ struct GBTreeTrainParam : public XGBoostParameter<GBTreeTrainParam> {
         .add_enum("auto", PredictorType::kAuto)
         .add_enum("cpu_predictor", PredictorType::kCPUPredictor)
         .add_enum("gpu_predictor", PredictorType::kGPUPredictor)
+        .add_enum("multi_predictor", PredictorType::kMulti)
         .describe("Predictor algorithm type");
     DMLC_DECLARE_FIELD(tree_method)
         .set_default(TreeMethod::kAuto)
