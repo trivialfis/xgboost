@@ -41,6 +41,16 @@ class ArrayView {
   }
 };
 
+template <typename T>
+class Tensor : public ArrayView<T> {
+  std::vector<T> storage_;
+  std::array<T, 4> shape_;
+  std::array<T, 4> strides_;
+
+ public:
+  Tensor() : ArrayView<T>::ArrayView{storage_, shape_, strides_} {}
+};
+
 }      // namespace xgboost
 
 #endif  // XGBOOST_ARRAY_H
