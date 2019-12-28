@@ -9,6 +9,8 @@
 #include "xgboost/logging.h"
 #include "xgboost/version_config.h"
 #include "sparse_page_writer.h"
+
+#include "columnar.h"
 #include "simple_dmatrix.h"
 #include "simple_csr_source.h"
 
@@ -151,6 +153,25 @@ void MetaInfo::SetInfo(const char * c_key, std::string const& interface_str) {
   LOG(FATAL) << "XGBoost version is not compiled with GPU support";
 }
 #endif  // !defined(XGBOOST_USE_CUDA)
+
+void MetaInfo::SetInfoHost(const char* c_key, std::string const& interface_str) {
+  std::string key {c_key};
+  auto j_interface = Json::Load({key.c_str(), key.size()});
+  CHECK_EQ(key, "label") << "Only setting label is supported.";
+  auto const& interface = get<Object>(j_interface);
+  auto ptr = ArrayInterfaceHandler::GetPtrFromArrayData<float*>(interface);
+  auto j_shape = get<Array const>(interface.at("shape"));
+  auto j_stride = get<Array const>(interface.at("strides"));
+
+  bst_row_t n_rows = get<Integer>(j_shape.at(0));
+  bst_row_t n_cols = get<Integer>(j_shape.at(1));
+  this->multi_labels_.n_rows = n_rows;
+  this->multi_labels_.n_cols = n_cols;
+  this->multi_labels_.values_.resize(n_rows * n_cols);
+  for (size_t i = 0; i < n_rows * n_cols; ++i) {
+    this->multi_labels_.values_[i] = ptr[i];
+  }
+}
 
 DMatrix* DMatrix::Load(const std::string& uri,
                        bool silent,

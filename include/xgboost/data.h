@@ -30,6 +30,14 @@ enum DataType {
   kUInt64 = 4
 };
 
+struct LabelMatrix {
+  std::vector<float> values_;
+  size_t n_rows;
+  size_t n_cols;
+
+  size_t num_targets_ {0};
+};
+
 /*!
  * \brief Meta information about dataset, always sit in memory.
  */
@@ -41,6 +49,9 @@ class MetaInfo {
   uint64_t num_col_{0};
   /*! \brief number of nonzero entries in the data */
   uint64_t num_nonzero_{0};
+
+  LabelMatrix multi_labels_;
+
   /*! \brief label of each instance */
   HostDeviceVector<bst_float> labels_;
   /*!
@@ -108,7 +119,8 @@ class MetaInfo {
    *
    *        Right now only 1 column is permitted.
    */
-  void SetInfo(const char* key, std::string const& interface_str);
+  void SetInfo(const char* c_key, std::string const& interface_str);
+  void SetInfoHost(const char* c_key, std::string const& interface_str);
 
  private:
   /*! \brief argsort of labels */
