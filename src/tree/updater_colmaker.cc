@@ -174,19 +174,19 @@ class ColMaker: public TreeUpdater {
         this->ResetPosition(qexpand_, p_fmat, *p_tree);
         this->UpdateQueueExpand(*p_tree, qexpand_, &newnodes);
         this->InitNewNode(newnodes, gpair, *p_fmat, *p_tree);
+        // Apply splits
         for (auto nid : qexpand_) {
           if ((*p_tree)[nid].IsLeaf()) {
             continue;
           }
           int cleft = (*p_tree)[nid].LeftChild();
           int cright = (*p_tree)[nid].RightChild();
-          spliteval_->AddSplit(nid,
-                               cleft,
-                               cright,
-                               snode_[nid].best.SplitIndex(),
-                               snode_[cleft].weight,
-                               snode_[cright].weight);
-          interaction_constraints_.Split(nid, snode_[nid].best.SplitIndex(), cleft, cright);
+          spliteval_->AddSplit(nid, cleft, cright,
+                               nodes_statistics_[nid].best.SplitIndex(),
+                               nodes_statistics_[cleft].weight,
+                               nodes_statistics_[cright].weight);
+          interaction_constraints_.Split(
+              nid, nodes_statistics_[nid].best.SplitIndex(), cleft, cright);
         }
         qexpand_ = newnodes;
         // if nothing left to be expand, break
@@ -194,13 +194,15 @@ class ColMaker: public TreeUpdater {
       }
       // set all the rest expanding nodes to leaf, and no-longer "fresh"
       for (const int nid : qexpand_) {
-        (*p_tree)[nid].SetLeaf(snode_[nid].weight * param_.learning_rate);
+        (*p_tree)[nid].SetLeaf(nodes_statistics_[nid].weight *
+                               param_.learning_rate);
       }
       // remember auxiliary statistics in the tree node
       for (int nid = 0; nid < p_tree->param.num_nodes; ++nid) {
-        p_tree->Stat(nid).loss_chg = snode_[nid].best.loss_chg;
-        p_tree->Stat(nid).base_weight = snode_[nid].weight;
-        p_tree->Stat(nid).sum_hess = static_cast<float>(snode_[nid].stats.sum_hess);
+        p_tree->Stat(nid).loss_chg = nodes_statistics_[nid].best.loss_chg;
+        p_tree->Stat(nid).base_weight = nodes_statistics_[nid].weight;
+        p_tree->Stat(nid).sum_hess =
+            static_cast<float>(nodes_statistics_[nid].stats.sum_hess);
       }
     }
 
@@ -243,7 +245,7 @@ class ColMaker: public TreeUpdater {
           i.clear();
           i.reserve(256);
         }
-        snode_.reserve(256);
+        nodes_statistics_.reserve(256);
       }
 
       {
@@ -265,7 +267,7 @@ class ColMaker: public TreeUpdater {
         for (auto& i : stemp_) {
           i.resize(tree.param.num_nodes);
         }
-        snode_.resize(tree.param.num_nodes, NodeEntry());
+        nodes_statistics_.resize(tree.param.num_nodes, NodeEntry());
       }
 
       const MetaInfo& info = fmat.Info();
@@ -287,15 +289,16 @@ class ColMaker: public TreeUpdater {
           stats.Add(s[nid].stats);
         }
         // update node statistics
-        snode_[nid].stats = stats;
+        nodes_statistics_[nid].stats = stats;
       }
       // calculating the weights
       for (int nid : qexpand) {
         bst_uint parentid = tree[nid].Parent();
-        snode_[nid].weight = static_cast<float>(
-            spliteval_->ComputeWeight(parentid, snode_[nid].stats));
-        snode_[nid].root_gain = static_cast<float>(
-            spliteval_->ComputeScore(parentid, snode_[nid].stats, snode_[nid].weight));
+        nodes_statistics_[nid].weight = static_cast<float>(
+            spliteval_->ComputeWeight(parentid, nodes_statistics_[nid].stats));
+        nodes_statistics_[nid].root_gain = static_cast<float>(
+            spliteval_->ComputeScore(parentid, nodes_statistics_[nid].stats,
+                                     nodes_statistics_[nid].weight));
       }
     }
     /*! \brief update queue expand add in new leaves */
@@ -323,15 +326,18 @@ class ColMaker: public TreeUpdater {
         e.last_fvalue = fvalue;
       } else {
         // try to find a split
-        if (fvalue != e.last_fvalue &&
-            e.stats.sum_hess >= param_.min_child_weight) {
-          c.SetSubstract(snode_[nid].stats, e.stats);
+        auto SplitIsValid = [](ThreadEntry const& e, float fvalue, float gamma) {
+                              return fvalue != e.last_fvalue &&
+                                  e.stats.sum_hess >= gamma;
+                            };
+        if (SplitIsValid(e, fvalue, param_.min_child_weight)) {
+          c.SetSubstract(nodes_statistics_[nid].stats, e.stats);
           if (c.sum_hess >= param_.min_child_weight) {
             bst_float loss_chg {0};
             if (d_step == -1) {
               loss_chg = static_cast<bst_float>(
                   spliteval_->ComputeSplitScore(nid, fid, c, e.stats) -
-                  snode_[nid].root_gain);
+                  nodes_statistics_[nid].root_gain);
               // What is 0.5f?
               bst_float proposed_split = (fvalue + e.last_fvalue) * 0.5f;
               if ( proposed_split == fvalue ) {
@@ -344,14 +350,18 @@ class ColMaker: public TreeUpdater {
             } else {
               loss_chg = static_cast<bst_float>(
                   spliteval_->ComputeSplitScore(nid, fid, e.stats, c) -
-                  snode_[nid].root_gain);
+                  nodes_statistics_[nid].root_gain);
               bst_float proposed_split = (fvalue + e.last_fvalue) * 0.5f;
               if ( proposed_split == fvalue ) {
                 e.best.Update(loss_chg, fid, e.last_fvalue,
-                            d_step == -1, e.stats, c);
+                              d_step == -1,
+                              /*left_child_sum  = */ e.stats,
+                              /*right_child_sum = */ c);
               } else {
                 e.best.Update(loss_chg, fid, proposed_split,
-                              d_step == -1, e.stats, c);
+                              d_step == -1,
+                              e.stats,
+                              c);
               }
             }
           }
@@ -417,7 +427,7 @@ class ColMaker: public TreeUpdater {
       // finish updating all statistics, check if it is possible to include all sum statistics
       for (int nid : qexpand) {
         ThreadEntry &e = temp[nid];
-        left_statistics.SetSubstract(snode_[nid].stats, e.stats);
+        left_statistics.SetSubstract(nodes_statistics_[nid].stats, e.stats);
         if (e.stats.sum_hess >= param_.min_child_weight &&
             left_statistics.sum_hess >= param_.min_child_weight) {
           bst_float loss_chg;
@@ -426,15 +436,15 @@ class ColMaker: public TreeUpdater {
           if (d_step == -1) {
             loss_chg =
                 static_cast<bst_float>(spliteval_->ComputeSplitScore(
-                    nid, fid, left_statistics, e.stats) -
-                                       snode_[nid].root_gain);
+                                           nid, fid, left_statistics, e.stats) -
+                                       nodes_statistics_[nid].root_gain);
             e.best.Update(loss_chg, fid, e.last_fvalue + delta, d_step == -1,
                           left_statistics, e.stats);
           } else {
             loss_chg =
                 static_cast<bst_float>(spliteval_->ComputeSplitScore(
-                    nid, fid, e.stats, left_statistics) -
-                                       snode_[nid].root_gain);
+                                           nid, fid, e.stats, left_statistics) -
+                                       nodes_statistics_[nid].root_gain);
             e.best.Update(loss_chg, fid, e.last_fvalue + delta, d_step == -1,
                           e.stats, left_statistics);
           }
@@ -494,7 +504,7 @@ class ColMaker: public TreeUpdater {
       this->SyncBestSolution(qexpand);
       // get the best result, we can synchronize the solution
       for (int nid : qexpand) {
-        NodeEntry const &e = snode_[nid];
+        NodeEntry const &e = nodes_statistics_[nid];
         // now we know the solution in snode[nid], set split
         if (e.best.loss_chg > kRtEps) {
           bst_float left_leaf_weight =
@@ -549,7 +559,7 @@ class ColMaker: public TreeUpdater {
     // synchronize the best solution of each node
     virtual void SyncBestSolution(const std::vector<int> &qexpand) {
       for (int nid : qexpand) {
-        NodeEntry &e = snode_[nid];
+        NodeEntry &e = nodes_statistics_[nid];
         for (int tid = 0; tid < this->nthread_; ++tid) {
           e.best.Update(stemp_[tid][nid].best);
         }
@@ -613,12 +623,12 @@ class ColMaker: public TreeUpdater {
     // PerThread x PerTreeNode: statistics for per thread construction
     std::vector< std::vector<ThreadEntry> > stemp_;
     /*! \brief TreeNode Data: statistics for each constructed node */
-    std::vector<NodeEntry> snode_;
+    std::vector<NodeEntry> nodes_statistics_;
     /*! \brief queue of nodes to be expanded */
     std::vector<int> qexpand_;
     // Evaluates splits and computes optimal weights for a given split
     std::unique_ptr<SplitEvaluator> spliteval_;
-
+    // Implementation of interaction constraints.
     FeatureInteractionConstraintHost interaction_constraints_;
   };
 };
