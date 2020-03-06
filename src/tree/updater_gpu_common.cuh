@@ -52,14 +52,15 @@ enum DefaultDirection {
   kRightDir
 };
 
+template <typename GradientT>
 struct DeviceSplitCandidate {
   float loss_chg {-FLT_MAX};
   DefaultDirection dir {kLeftDir};
   int findex {-1};
   float fvalue {0};
 
-  GradientPair left_sum;
-  GradientPair right_sum;
+  GradientT left_sum;
+  GradientT right_sum;
 
   XGBOOST_DEVICE DeviceSplitCandidate() {}  // NOLINT
 
@@ -75,8 +76,8 @@ struct DeviceSplitCandidate {
 
   XGBOOST_DEVICE void Update(float loss_chg_in, DefaultDirection dir_in,
                              float fvalue_in, int findex_in,
-                             GradientPair left_sum_in,
-                             GradientPair right_sum_in,
+                             GradientT left_sum_in,
+                             GradientT right_sum_in,
                              const GPUTrainingParam& param) {
     if (loss_chg_in > loss_chg &&
         left_sum_in.GetHess() >= param.min_child_weight &&
@@ -102,20 +103,22 @@ struct DeviceSplitCandidate {
   }
 };
 
+template <typename GradientT>
 struct DeviceSplitCandidateReduceOp {
   GPUTrainingParam param;
   explicit DeviceSplitCandidateReduceOp(GPUTrainingParam param) : param(std::move(param)) {}
-  XGBOOST_DEVICE DeviceSplitCandidate operator()(
-      const DeviceSplitCandidate& a, const DeviceSplitCandidate& b) const {
-    DeviceSplitCandidate best;
+  XGBOOST_DEVICE DeviceSplitCandidate<GradientT> operator()(
+      const DeviceSplitCandidate<GradientT>& a, const DeviceSplitCandidate<GradientT>& b) const {
+    DeviceSplitCandidate<GradientT> best;
     best.Update(a, param);
     best.Update(b, param);
     return best;
   }
 };
 
+template <typename GradientT>
 struct DeviceNodeStats {
-  GradientPair sum_gradients;
+  GradientT sum_gradients;
   float root_gain {-FLT_MAX};
   float weight {-FLT_MAX};
 
@@ -123,8 +126,8 @@ struct DeviceNodeStats {
   DefaultDirection dir {kLeftDir};
   /** threshold value for comparison */
   float fvalue {0.0f};
-  GradientPair left_sum;
-  GradientPair right_sum;
+  GradientT left_sum;
+  GradientT right_sum;
   /** \brief The feature index. */
   int fidx{kUnusedNode};
   /** node id (used as key for reduce/scan) */
@@ -133,7 +136,7 @@ struct DeviceNodeStats {
   XGBOOST_DEVICE DeviceNodeStats() {}  // NOLINT
 
   template <typename ParamT>
-  HOST_DEV_INLINE DeviceNodeStats(GradientPair sum_gradients, NodeIdT nidx,
+  HOST_DEV_INLINE DeviceNodeStats(GradientT sum_gradients, NodeIdT nidx,
                                   const ParamT& param)
       : sum_gradients(sum_gradients),
         idx(nidx) {
@@ -144,7 +147,7 @@ struct DeviceNodeStats {
   }
 
   HOST_DEV_INLINE void SetSplit(float fvalue, int fidx, DefaultDirection dir,
-                                GradientPair left_sum, GradientPair right_sum) {
+                                GradientT left_sum, GradientT right_sum) {
     this->fvalue = fvalue;
     this->fidx = fidx;
     this->dir = dir;
@@ -152,7 +155,7 @@ struct DeviceNodeStats {
     this->right_sum = right_sum;
   }
 
-  HOST_DEV_INLINE void SetSplit(const DeviceSplitCandidate& split) {
+  HOST_DEV_INLINE void SetSplit(const DeviceSplitCandidate<GradientT>& split) {
     this->SetSplit(split.fvalue, split.findex, split.dir, split.left_sum,
                    split.right_sum);
   }

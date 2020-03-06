@@ -49,6 +49,8 @@ class MetaInfo {
   uint64_t num_nonzero_{0};  // NOLINT
   /*! \brief label of each instance */
   HostDeviceVector<bst_float> labels_;  // NOLINT
+  bst_row_t labels_rows;
+  bst_feature_t labels_cols { 1 };
   /*!
    * \brief the index of begin and end of a group
    *  needed when the learning task is ranking.
@@ -155,9 +157,10 @@ class MetaInfo {
    *
    *        Right now only 1 column is permitted.
    */
-  void SetInfo(const char* key, std::string const& interface_str);
+  void SetInfo(const char* key, std::string const& interface_str, int32_t device);
 
  private:
+  void SetInfoDevice(const char* key, std::string const& interface_str);
   /*! \brief argsort of labels */
   mutable std::vector<size_t> label_order_cache_;
 };

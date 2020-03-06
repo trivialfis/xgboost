@@ -86,7 +86,7 @@ struct ArrayInterfaceErrors {
     }
   }
 
-  static std::string UnSupportedType(const char (&typestr)[3]) {
+  static std::string UnSupportedType(char const typestr[3]) {
     return TypeStr(typestr[1]) + " is not supported.";
   }
 };
@@ -186,8 +186,8 @@ class ArrayInterfaceHandler {
     return 0;
   }
 
-  static std::pair<size_t, size_t> ExtractShape(
-      std::map<std::string, Json> const& column) {
+  static std::pair<size_t, size_t>
+  ExtractShape(std::map<std::string, Json> const &column) {
     auto j_shape = get<Array const>(column.at("shape"));
     auto typestr = get<String const>(column.at("typestr"));
     if (column.find("strides") != column.cend()) {
@@ -311,8 +311,8 @@ class ArrayInterface {
   }
 
   RBitField8 valid;
-  int32_t num_rows;
-  int32_t num_cols;
+  size_t num_rows;
+  size_t num_cols;
   void* data;
   char type[3];
 };

@@ -81,7 +81,7 @@ using xgboost::common::Column;
 /*! \brief construct a tree using quantized feature values */
 class QuantileHistMaker: public TreeUpdater {
  public:
-  QuantileHistMaker() = default;
+  explicit QuantileHistMaker(LearnerModelParam const* mparam) : mparam_{mparam} {}
   void Configure(const Args& args) override;
 
   void Update(HostDeviceVector<GradientPair>* gpair,
@@ -107,6 +107,7 @@ class QuantileHistMaker: public TreeUpdater {
  protected:
   // training parameter
   TrainParam param_;
+  LearnerModelParam const* mparam_;
   // quantized data matrix
   GHistIndexMatrix gmat_;
   // (optional) data matrix with feature grouping

@@ -73,9 +73,14 @@ void CheckObjFunction(std::unique_ptr<xgboost::ObjFunction> const& obj,
                       std::vector<xgboost::bst_float> labels,
                       std::vector<xgboost::bst_float> weights,
                       std::vector<xgboost::bst_float> out_grad,
-                      std::vector<xgboost::bst_float> out_hess) {
+                      std::vector<xgboost::bst_float> out_hess,
+                      size_t rows) {
   xgboost::MetaInfo info;
-  info.num_row_ = labels.size();
+  if (rows != 0) {
+    info.num_row_ = rows;
+  } else {
+    info.num_row_ = labels.size();
+  }
   info.labels_.HostVector() = labels;
   info.weights_.HostVector() = weights;
 
@@ -182,7 +187,11 @@ Json RandomDataGenerator::ArrayInterfaceImpl(HostDeviceVector<float> *storage,
   this->GenerateDense(storage);
   Json array_interface {Object()};
   array_interface["data"] = std::vector<Json>(2);
-  array_interface["data"][0] = Integer(reinterpret_cast<int64_t>(storage->DevicePointer()));
+  if (device_ >= 0) {
+    array_interface["data"][0] = Integer(reinterpret_cast<int64_t>(storage->DevicePointer()));
+  } else {
+    array_interface["data"][0] = Integer(reinterpret_cast<int64_t>(storage->HostPointer()));
+  }
   array_interface["data"][1] = Boolean(false);
 
   array_interface["shape"] = std::vector<Json>(2);
@@ -195,13 +204,19 @@ Json RandomDataGenerator::ArrayInterfaceImpl(HostDeviceVector<float> *storage,
 }
 
 std::string RandomDataGenerator::GenerateArrayInterface(
-    HostDeviceVector<float> *storage) const {
+    HostDeviceVector<float> *storage, bool wrap_in_column) const {
   auto array_interface = this->ArrayInterfaceImpl(storage, rows_, cols_);
-  std::string out;
-  Json::Dump(array_interface, &out);
-  return out;
+  if (wrap_in_column) {
+    Json out{Array(std::vector<Json>{array_interface})};
+    std::string str;
+    Json::Dump(out, &str);
+    return str;
+  } else {
+    std::string str;
+    Json::Dump(array_interface, &str);
+    return str;
+  }
 }
-
 
 
 std::string RandomDataGenerator::GenerateColumnarArrayInterface(

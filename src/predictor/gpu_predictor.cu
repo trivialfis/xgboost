@@ -187,6 +187,43 @@ struct CuDFAdapterLoader {
   }
 };
 
+__device__ common::Span<float> LeafValue(common::Span<float> leafs,
+                                         size_t targets, bst_node_t nidx) {
+  auto s = leafs.subspan(nidx * targets, targets);
+  return s;
+}
+
+__device__ float LeafValue(RegTree::Node const& node) {
+  return node.SinlgeLeafValue();
+}
+
+template <typename Loader>
+__device__ common::Span<float>
+GetVectorLeafWeight(bst_uint ridx, const RegTree::Node* tree,
+                    common::Span<float> leafs, size_t targets,
+                    Loader* loader) {
+  RegTree::Node n = tree[0];
+  bst_node_t nid { 0 };
+  while (!n.IsLeaf()) {
+    float fvalue = loader->GetFvalue(ridx, n.SplitIndex());
+    // Missing value
+    if (isnan(fvalue)) {
+      n = tree[n.DefaultChild()];
+      nid = n.DefaultChild();
+    } else {
+      if (fvalue < n.SplitCond()) {
+        n = tree[n.LeftChild()];
+        nid = n.LeftChild();
+      } else {
+        n = tree[n.RightChild()];
+        nid = n.RightChild();
+      }
+    }
+  }
+  common::Span<float> s = LeafValue(leafs, targets, nid);
+  return s;
+}
+
 template <typename Loader>
 __device__ float GetLeafWeight(bst_uint ridx, const RegTree::Node* tree,
                                Loader* loader) {
@@ -204,7 +241,7 @@ __device__ float GetLeafWeight(bst_uint ridx, const RegTree::Node* tree,
       }
     }
   }
-  return n.LeafValue();
+  return LeafValue(n);
 }
 
 template <typename Loader, typename Data>

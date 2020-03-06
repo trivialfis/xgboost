@@ -222,7 +222,8 @@ TEST(GpuHist, EvaluateSplits) {
   maker.node_value_constraints[0].lower_bound = -1.0;
   maker.node_value_constraints[0].upper_bound = 1.0;
 
-  std::vector<DeviceSplitCandidate> res = maker.EvaluateSplits({0, 0 }, tree, kNCols);
+  std::vector<DeviceSplitCandidate<GradientPair>> res =
+      maker.EvaluateSplits({0, 0 }, tree, kNCols);
 
   ASSERT_EQ(res[0].findex, 7);
   ASSERT_EQ(res[1].findex, 7);
@@ -493,7 +494,9 @@ TEST(GpuHist, ExternalMemoryWithSampling) {
 
 TEST(GpuHist, ConfigIO) {
   GenericParameter generic_param(CreateEmptyGenericParam(0));
-  std::unique_ptr<TreeUpdater> updater {TreeUpdater::Create("grow_gpu_hist", &generic_param) };
+  LearnerModelParam mparam;
+  std::unique_ptr<TreeUpdater> updater {TreeUpdater::Create("grow_gpu_hist",
+                                                            &generic_param, &mparam) };
   updater->Configure(Args{});
 
   Json j_updater { Object() };

@@ -34,12 +34,14 @@ void CopyInfoImpl(ArrayInterface column, HostDeviceVector<float>* out) {
   });
 }
 
-void MetaInfo::SetInfo(const char * c_key, std::string const& interface_str) {
+void MetaInfo::SetInfoDevice(const char * c_key, std::string const& interface_str) {
   Json j_interface = Json::Load({interface_str.c_str(), interface_str.size()});
   auto const& j_arr = get<Array>(j_interface);
   CHECK_EQ(j_arr.size(), 1)
       << "MetaInfo: " << c_key << ". " << ArrayInterfaceErrors::Dimension(1);
   ArrayInterface array_interface(get<Object const>(j_arr[0]));
+  labels_rows = array_interface.num_rows;
+  labels_cols = array_interface.num_cols;
   std::string key{c_key};
   CHECK(!array_interface.valid.Data())
       << "Meta info " << key << " should be dense, found validity mask";

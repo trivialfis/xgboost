@@ -254,13 +254,13 @@ class QuantileHistMock : public QuantileHistMaker {
 
   int static constexpr kNRows = 8, kNCols = 16;
   std::shared_ptr<xgboost::DMatrix> dmat_;
+  LearnerModelParam mparam_;
   const std::vector<std::pair<std::string, std::string> > cfg_;
   std::shared_ptr<BuilderMock> builder_;
 
  public:
-  explicit QuantileHistMock(
-      const std::vector<std::pair<std::string, std::string> >& args) :
-      cfg_{args} {
+  explicit QuantileHistMock(const std::vector<std::pair<std::string, std::string> >& args) :
+      QuantileHistMaker{&mparam_}, cfg_{args} {
     QuantileHistMaker::Configure(args);
     spliteval_->Init(&param_);
     dmat_ = RandomDataGenerator(kNRows, kNCols, 0.8).Seed(3).GenerateDMatrix();

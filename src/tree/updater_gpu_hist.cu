@@ -54,13 +54,14 @@ struct GPUHistMakerTrainParam
 DMLC_REGISTER_PARAMETER(GPUHistMakerTrainParam);
 #endif  // !defined(GTEST_TEST)
 
+template <typename GradientT>
 struct ExpandEntry {
   int nid;
   int depth;
-  DeviceSplitCandidate split;
+  DeviceSplitCandidate<GradientT> split;
   uint64_t timestamp;
   ExpandEntry() = default;
-  ExpandEntry(int nid, int depth, DeviceSplitCandidate split,
+  ExpandEntry(int nid, int depth, DeviceSplitCandidate<GradientT> split,
               uint64_t timestamp)
       : nid(nid), depth(depth), split(std::move(split)), timestamp(timestamp) {}
   bool IsValid(const TrainParam& param, int num_leaves) const {
@@ -91,14 +92,14 @@ struct ExpandEntry {
   }
 };
 
-inline static bool DepthWise(const ExpandEntry& lhs, const ExpandEntry& rhs) {
+inline static bool DepthWise(const ExpandEntry<GradientPair>& lhs, const ExpandEntry<GradientPair>& rhs) {
   if (lhs.depth == rhs.depth) {
     return lhs.timestamp > rhs.timestamp;  // favor small timestamp
   } else {
     return lhs.depth > rhs.depth;  // favor small depth
   }
 }
-inline static bool LossGuide(const ExpandEntry& lhs, const ExpandEntry& rhs) {
+inline static bool LossGuide(const ExpandEntry<GradientPair>& lhs, const ExpandEntry<GradientPair>& rhs) {
   if (lhs.split.loss_chg == rhs.split.loss_chg) {
     return lhs.timestamp > rhs.timestamp;  // favor small timestamp
   } else {
@@ -169,8 +170,8 @@ template <int BLOCK_THREADS, typename ReduceT, typename ScanT,
 __device__ void EvaluateFeature(
     int fidx, common::Span<const GradientSumT> node_histogram,
     const EllpackDeviceAccessor& matrix,
-    DeviceSplitCandidate* best_split,  // shared memory storing best split
-    const DeviceNodeStats& node, const GPUTrainingParam& param,
+    DeviceSplitCandidate<GradientPair>* best_split,  // shared memory storing best split
+    const DeviceNodeStats<GradientPair>& node, const GPUTrainingParam& param,
     TempStorageT* temp_storage,  // temp memory for cub operations
     int constraint,              // monotonic_constraints
     const ValueConstraint& value_constraint) {
@@ -241,10 +242,10 @@ template <int BLOCK_THREADS, typename GradientSumT>
 __global__ void EvaluateSplitKernel(
     common::Span<const GradientSumT> node_histogram,  // histogram for gradients
     common::Span<const bst_feature_t> feature_set,    // Selected features
-    DeviceNodeStats node,
+    DeviceNodeStats<GradientPair> node,
     xgboost::EllpackDeviceAccessor matrix,
     GPUTrainingParam gpu_param,
-    common::Span<DeviceSplitCandidate> split_candidates,  // resulting split
+    common::Span<DeviceSplitCandidate<GradientPair>> split_candidates,  // resulting split
     ValueConstraint value_constraint,
     common::Span<int> d_monotonic_constraints) {
   // KeyValuePair here used as threadIdx.x -> gain_value
@@ -262,12 +263,12 @@ __global__ void EvaluateSplitKernel(
   };
 
   // Aligned && shared storage for best_split
-  __shared__ cub::Uninitialized<DeviceSplitCandidate> uninitialized_split;
-  DeviceSplitCandidate& best_split = uninitialized_split.Alias();
+  __shared__ cub::Uninitialized<DeviceSplitCandidate<GradientPair>> uninitialized_split;
+  DeviceSplitCandidate<GradientPair>& best_split = uninitialized_split.Alias();
   __shared__ TempStorage temp_storage;
 
   if (threadIdx.x == 0) {
-    best_split = DeviceSplitCandidate();
+    best_split = DeviceSplitCandidate<GradientPair>();
   }
 
   __syncthreads();
@@ -435,8 +436,8 @@ struct GPUHistMakerDevice {
   FeatureInteractionConstraintDevice interaction_constraints;
 
   using ExpandQueue =
-      std::priority_queue<ExpandEntry, std::vector<ExpandEntry>,
-                          std::function<bool(ExpandEntry, ExpandEntry)>>;
+      std::priority_queue<ExpandEntry<GradientPair>, std::vector<ExpandEntry<GradientPair>>,
+                          std::function<bool(ExpandEntry<GradientPair>, ExpandEntry<GradientPair>)>>;
   std::unique_ptr<ExpandQueue> qexpand;
 
   std::unique_ptr<GradientBasedSampler> sampler;
@@ -524,17 +525,17 @@ struct GPUHistMakerDevice {
     hist.Reset();
   }
 
-  std::vector<DeviceSplitCandidate> EvaluateSplits(
+  std::vector<DeviceSplitCandidate<GradientPair>> EvaluateSplits(
       std::vector<int> nidxs, const RegTree& tree,
       size_t num_columns) {
-    auto result_all = pinned_memory.GetSpan<DeviceSplitCandidate>(nidxs.size());
+    auto result_all = pinned_memory.GetSpan<DeviceSplitCandidate<GradientPair>>(nidxs.size());
 
     // Work out cub temporary memory requirement
     GPUTrainingParam gpu_param(param);
-    DeviceSplitCandidateReduceOp op(gpu_param);
+    DeviceSplitCandidateReduceOp<GradientPair> op(gpu_param);
 
-    dh::TemporaryArray<DeviceSplitCandidate> d_result_all(nidxs.size());
-    dh::TemporaryArray<DeviceSplitCandidate> split_candidates_all(nidxs.size()*num_columns);
+    dh::TemporaryArray<DeviceSplitCandidate<GradientPair>> d_result_all(nidxs.size());
+    dh::TemporaryArray<DeviceSplitCandidate<GradientPair>> split_candidates_all(nidxs.size()*num_columns);
 
     auto& streams = this->GetStreams(nidxs.size());
     for (auto i = 0ull; i < nidxs.size(); i++) {
@@ -545,20 +546,20 @@ struct GPUHistMakerDevice {
           p_feature_set->DeviceSpan();
       common::Span<bst_feature_t> d_feature_set =
           interaction_constraints.Query(d_sampled_features, nidx);
-      common::Span<DeviceSplitCandidate> d_split_candidates(
+      common::Span<DeviceSplitCandidate<GradientPair>> d_split_candidates(
           split_candidates_all.data().get() + i * num_columns,
           d_feature_set.size());
 
-      DeviceNodeStats node(host_node_sum_gradients[nidx], nidx, param);
+      DeviceNodeStats<GradientPair> node(host_node_sum_gradients[nidx], nidx, param);
 
-      common::Span<DeviceSplitCandidate> d_result(d_result_all.data().get() + i, 1);
+      common::Span<DeviceSplitCandidate<GradientPair>> d_result(d_result_all.data().get() + i, 1);
       if (d_feature_set.empty()) {
         // Acting as a device side constructor for DeviceSplitCandidate.
         // DeviceSplitCandidate::IsValid is false so that ApplySplit can reject this
         // candidate.
-        auto worst_candidate = DeviceSplitCandidate();
+        auto worst_candidate = DeviceSplitCandidate<GradientPair>();
         dh::safe_cuda(cudaMemcpyAsync(d_result.data(), &worst_candidate,
-                                      sizeof(DeviceSplitCandidate),
+                                      sizeof(DeviceSplitCandidate<GradientPair>),
                                       cudaMemcpyHostToDevice));
         continue;
       }
@@ -576,18 +577,18 @@ struct GPUHistMakerDevice {
       cub::DeviceReduce::Reduce(nullptr,
                                 cub_bytes, d_split_candidates.data(),
                                 d_result.data(), d_split_candidates.size(), op,
-                                DeviceSplitCandidate(), streams[i]);
+                                DeviceSplitCandidate<GradientPair>(), streams[i]);
       dh::TemporaryArray<char> cub_temp(cub_bytes);
       cub::DeviceReduce::Reduce(reinterpret_cast<void*>(cub_temp.data().get()),
                                 cub_bytes, d_split_candidates.data(),
                                 d_result.data(), d_split_candidates.size(), op,
-                                DeviceSplitCandidate(), streams[i]);
+                                DeviceSplitCandidate<GradientPair>(), streams[i]);
     }
 
     dh::safe_cuda(cudaMemcpy(result_all.data(), d_result_all.data().get(),
-                             sizeof(DeviceSplitCandidate) * d_result_all.size(),
+                             sizeof(DeviceSplitCandidate<GradientPair>) * d_result_all.size(),
                              cudaMemcpyDeviceToHost));
-    return std::vector<DeviceSplitCandidate>(result_all.begin(), result_all.end());
+    return std::vector<DeviceSplitCandidate<GradientPair>>(result_all.begin(), result_all.end());
   }
 
   void BuildHist(int nidx) {
@@ -740,7 +741,7 @@ struct GPUHistMakerDevice {
   /**
    * \brief Build GPU local histograms for the left and right child of some parent node
    */
-  void BuildHistLeftRight(const ExpandEntry &candidate, int nidx_left,
+  void BuildHistLeftRight(const ExpandEntry<GradientPair> &candidate, int nidx_left,
         int nidx_right, dh::AllReducer* reducer) {
     auto build_hist_nidx = nidx_left;
     auto subtraction_trick_nidx = nidx_right;
@@ -770,7 +771,7 @@ struct GPUHistMakerDevice {
     }
   }
 
-  void ApplySplit(const ExpandEntry& candidate, RegTree* p_tree) {
+  void ApplySplit(const ExpandEntry<GradientPair>& candidate, RegTree* p_tree) {
     RegTree& tree = *p_tree;
 
     GradStats left_stats{};
@@ -839,7 +840,7 @@ struct GPUHistMakerDevice {
     // Generate first split
     auto split = this->EvaluateSplits({kRootNIdx}, *p_tree, num_columns);
     qexpand->push(
-        ExpandEntry(kRootNIdx, p_tree->GetDepth(kRootNIdx), split.at(0), 0));
+        ExpandEntry<GradientPair>(kRootNIdx, p_tree->GetDepth(kRootNIdx), split.at(0), 0));
   }
 
   void UpdateTree(HostDeviceVector<GradientPair>* gpair_all, DMatrix* p_fmat,
@@ -858,7 +859,7 @@ struct GPUHistMakerDevice {
     auto num_leaves = 1;
 
     while (!qexpand->empty()) {
-      ExpandEntry candidate = qexpand->top();
+      ExpandEntry<GradientPair> candidate = qexpand->top();
       qexpand->pop();
       if (!candidate.IsValid(param, num_leaves)) {
         continue;
@@ -870,7 +871,7 @@ struct GPUHistMakerDevice {
       int left_child_nidx = tree[candidate.nid].LeftChild();
       int right_child_nidx = tree[candidate.nid].RightChild();
       // Only create child entries if needed
-      if (ExpandEntry::ChildIsValid(param, tree.GetDepth(left_child_nidx),
+      if (ExpandEntry<GradientPair>::ChildIsValid(param, tree.GetDepth(left_child_nidx),
                                     num_leaves)) {
         monitor.StartCuda("UpdatePosition");
         this->UpdatePosition(candidate.nid, (*p_tree)[candidate.nid]);
@@ -885,10 +886,10 @@ struct GPUHistMakerDevice {
                                            *p_tree, p_fmat->Info().num_col_);
         monitor.StopCuda("EvaluateSplits");
 
-        qexpand->push(ExpandEntry(left_child_nidx,
+        qexpand->push(ExpandEntry<GradientPair>(left_child_nidx,
                                    tree.GetDepth(left_child_nidx), splits.at(0),
                                    timestamp++));
-        qexpand->push(ExpandEntry(right_child_nidx,
+        qexpand->push(ExpandEntry<GradientPair>(right_child_nidx,
                                    tree.GetDepth(right_child_nidx),
                                    splits.at(1), timestamp++));
       }
@@ -1131,7 +1132,9 @@ class GPUHistMaker : public TreeUpdater {
 #if !defined(GTEST_TEST)
 XGBOOST_REGISTER_TREE_UPDATER(GPUHistMaker, "grow_gpu_hist")
     .describe("Grow tree with GPU.")
-    .set_body([]() { return new GPUHistMaker(); });
+    .set_body([](GenericParameter const* tparam, LearnerModelParam const* mparam) {
+        return new GPUHistMaker();
+      });
 #endif  // !defined(GTEST_TEST)
 
 }  // namespace tree

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <gtest/gtest.h>
 #include <dmlc/filesystem.h>
 #include <random>
@@ -149,7 +150,6 @@ inline void ValidateColumn(const HistogramCuts& cuts, int column_idx,
                            const std::vector<float>& sorted_column,
                            const std::vector<float>& sorted_weights,
                            size_t num_bins) {
-
   // Check the endpoints are correct
   EXPECT_LT(cuts.MinValues()[column_idx], sorted_column.front());
   EXPECT_GT(cuts.Values()[cuts.Ptrs()[column_idx]], sorted_column.front());
