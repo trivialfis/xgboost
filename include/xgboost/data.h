@@ -175,6 +175,7 @@ class MetaInfo {
    *        Right now only 1 column is permitted.
    */
   void SetInfo(const char* key, std::string const& interface_str);
+  void SetInfoCuda(const char* key, std::string const& interface_str);
 
   void GetInfo(char const* key, bst_ulong* out_len, DataType dtype,
                const void** out_dptr) const;

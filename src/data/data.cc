@@ -553,7 +553,7 @@ void MetaInfo::Validate(int32_t device) const {
 }
 
 #if !defined(XGBOOST_USE_CUDA)
-void MetaInfo::SetInfo(const char * c_key, std::string const& interface_str) {
+void MetaInfo::SetInfoCuda(const char * c_key, std::string const& interface_str) {
   common::AssertGPUSupport();
 }
 #endif  // !defined(XGBOOST_USE_CUDA)
@@ -759,6 +759,9 @@ DMatrix::Create(data::IteratorAdapter<DataIterHandle, XGBCallbackDataIterNext,
                                       XGBoostBatchCSR> *adapter,
                 float missing, int nthread, const std::string &cache_prefix,
                 size_t page_size);
+template DMatrix* DMatrix::Create<data::ArrayInterfaceAdapter>(
+    data::ArrayInterfaceAdapter* adapter, float missing, int nthread,
+    const std::string& cache_prefix, size_t page_size);
 
 SparsePage SparsePage::GetTranspose(int num_columns) const {
   SparsePage transpose;

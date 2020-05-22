@@ -88,7 +88,7 @@ struct ArrayInterfaceErrors {
   }
 
   static std::string UnSupportedType(const char (&typestr)[3]) {
-    return TypeStr(typestr[1]) + " is not supported.";
+    return TypeStr(typestr[1]) + " data is not supported.";
   }
 };
 
@@ -196,8 +196,6 @@ class ArrayInterfaceHandler {
         auto strides = get<Array const>(column.at("strides"));
         CHECK_EQ(strides.size(), j_shape.size())
             << ArrayInterfaceErrors::Dimension(1);
-        CHECK_EQ(get<Integer>(strides.at(0)), typestr.at(2) - '0')
-            << ArrayInterfaceErrors::Contigious();
       }
     }
 
@@ -210,14 +208,33 @@ class ArrayInterfaceHandler {
               static_cast<bst_feature_t>(get<Integer const>(j_shape.at(1)))};
     }
   }
+
+  std::pair<size_t, size_t>
+  static ExtractStrides(std::map<std::string, Json> const &arr, size_t rows,
+                        size_t cols, size_t dim, std::string const& typestr) {
+    size_t itemsize = (typestr.at(2) - '0');
+    size_t s_x = itemsize * cols;
+    size_t s_y = itemsize;
+    if (arr.find("strides") != arr.cend() && !IsA<Null>(arr.at("strides"))) {
+      auto strides = get<Array const>(arr.at("strides"));
+      CHECK_EQ(strides.size(), dim) << ArrayInterfaceErrors::Dimension(1);
+      CHECK_LE(strides.size(), 2);
+      s_x = static_cast<size_t>(get<Integer const>(strides.at(0)));
+      if (strides.size() == 2) {
+        s_y = static_cast<size_t>(get<Integer const>(strides.at(1)));
+      }
+    }
+    return {s_x, s_y};
+  }
+
   template <typename T>
   static common::Span<T> ExtractData(std::map<std::string, Json> const& column) {
     Validate(column);
 
     auto typestr = get<String const>(column.at("typestr"));
-    CHECK_EQ(typestr.at(1),   TypeChar<T>())
+    CHECK_EQ(typestr.at(1), TypeChar<T>())
         << "Input data type and typestr mismatch. typestr: " << typestr;
-    CHECK_EQ(typestr.at(2),   static_cast<char>(sizeof(T) + 48))
+    CHECK_EQ(typestr.at(2), static_cast<char>(sizeof(T) + 48))
         << "Input data type and typestr mismatch. typestr: " << typestr;
 
     auto shape = ExtractShape(column);
@@ -237,6 +254,7 @@ class ArrayInterface {
     ArrayInterfaceHandler::Validate(column);
     data = ArrayInterfaceHandler::GetPtrFromArrayData<void*>(column);
     auto shape = ArrayInterfaceHandler::ExtractShape(column);
+
     num_rows = shape.first;
     num_cols = shape.second;
 
@@ -260,6 +278,13 @@ class ArrayInterface {
     type[0] = typestr.at(0);
     type[1] = typestr.at(1);
     type[2] = typestr.at(2);
+
+    auto strides_pair = ArrayInterfaceHandler::ExtractStrides(
+        column, num_rows, num_cols, num_cols == 1 ? 1 : 2, typestr);
+
+    this->strides[0] = strides_pair.first / (type[2] - '0');
+    this->strides[1] = strides_pair.second / (type[2] - '0');
+
     this->CheckType();
   }
 
@@ -339,9 +364,57 @@ class ArrayInterface {
     }
   }
 
+  XGBOOST_DEVICE float GetElement(size_t x, size_t y) const {
+    size_t idx = x * strides[0] + y * strides[1];
+    switch (type[1]) {
+      case 'f':
+        switch (type[2]) {
+          case '4':
+            return reinterpret_cast<float*>(data)[idx];
+          case '8':
+            return reinterpret_cast<double*>(data)[idx];
+          default:
+            SPAN_CHECK(false);
+        }
+      case 'i':
+        switch (type[2]) {
+          case '1':
+            return reinterpret_cast<int8_t*>(data)[idx];
+          case '2':
+            return reinterpret_cast<int16_t*>(data)[idx];
+          case '4':
+            return reinterpret_cast<int32_t*>(data)[idx];
+          case '8':
+            return reinterpret_cast<int64_t*>(data)[idx];
+          default:
+            SPAN_CHECK(false);
+        }
+        break;
+      case 'u':
+        switch (type[2]) {
+          case '1':
+            return reinterpret_cast<uint8_t*>(data)[idx];
+          case '2':
+            return reinterpret_cast<uint16_t*>(data)[idx];
+          case '4':
+            return reinterpret_cast<uint32_t*>(data)[idx];
+          case '8':
+            return reinterpret_cast<uint64_t*>(data)[idx];
+          default:
+            SPAN_CHECK(false);
+        }
+        break;
+      default:
+        SPAN_CHECK(false);
+    }
+    return std::numeric_limits<float>::quiet_NaN();
+  }
+
   RBitField8 valid;
   bst_row_t num_rows;
   bst_feature_t num_cols;
+
+  size_t strides[2];
   void* data;
   char type[3];
 };

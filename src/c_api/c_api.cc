@@ -91,10 +91,10 @@ XGB_DLL int XGDMatrixCreateFromArrayInterfaceColumns(char const* c_json_strs,
   API_END();
 }
 
-XGB_DLL int XGDMatrixCreateFromArrayInterface(char const* c_json_strs,
-                                              bst_float missing,
-                                              int nthread,
-                                              DMatrixHandle* out) {
+XGB_DLL int XGDMatrixCreateFromCudaArrayInterface(char const *c_json_strs,
+                                                  bst_float missing,
+                                                  int nthread,
+                                                  DMatrixHandle *out) {
   API_BEGIN();
   common::AssertGPUSupport();
   API_END();
@@ -182,6 +182,17 @@ XGB_DLL int XGDMatrixCreateFromMat(const bst_float* data,
   API_END();
 }
 
+XGB_DLL int XGDMatrixCreateFromArrayInterface(char const *c_json_str,
+                                              float missing,
+                                              xgboost::bst_ulong nthread,
+                                              DMatrixHandle* out) {
+  API_BEGIN();
+  data::ArrayInterfaceAdapter adapter(c_json_str);
+  *out =
+      new std::shared_ptr<DMatrix>(DMatrix::Create(&adapter, missing, nthread));
+  API_END();
+}
+
 XGB_DLL int XGDMatrixCreateFromMat_omp(const bst_float* data,  // NOLINT
                                        xgboost::bst_ulong nrow,
                                        xgboost::bst_ulong ncol,
@@ -263,9 +274,19 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
   API_END();
 }
 
+XGB_DLL int XGDMatrixSetInfoFromCudaInterface(DMatrixHandle handle,
+                                              char const *field,
+                                              char const *interface_c_str) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  static_cast<std::shared_ptr<DMatrix>*>(handle)
+      ->get()->Info().SetInfo(field, interface_c_str);
+  API_END();
+}
+
 XGB_DLL int XGDMatrixSetInfoFromInterface(DMatrixHandle handle,
-                                          char const* field,
-                                          char const* interface_c_str) {
+                                          char const *field,
+                                          char const *interface_c_str) {
   API_BEGIN();
   CHECK_HANDLE();
   static_cast<std::shared_ptr<DMatrix>*>(handle)

@@ -528,6 +528,11 @@ auto get(U& json) -> decltype(detail::GetImpl(*Cast<T>(&json.GetValue())))& { //
   auto& value = *Cast<T>(&json.GetValue());
   return detail::GetImpl(value);
 }
+template <typename T, typename U>
+auto get(U&& json) -> decltype(detail::GetImpl(*Cast<T>(&json.GetValue())))& { // NOLINT
+  auto& value = *Cast<T>(&json.GetValue());
+  return detail::GetImpl(value);
+}
 
 using Object  = JsonObject;
 using Array   = JsonArray;

@@ -600,6 +600,55 @@ class IteratorAdapter : public dmlc::DataIter<FileAdapterBatch> {
   dmlc::RowBlock<uint32_t> block_;
   std::unique_ptr<FileAdapterBatch> batch_;
 };
+
+class ArrayInterfaceAdapterBatch : public detail::NoMetaInfo {
+ public:
+  ArrayInterfaceAdapterBatch() = default;
+  explicit ArrayInterfaceAdapterBatch(ArrayInterface array_interface)
+      : array_interface_(std::move(array_interface)) {}
+
+  struct Line {
+    COOTuple GetElement(size_t idx) const {
+      auto id = Size() * row_ind + idx;
+      auto value =
+          interface.valid.Data() == nullptr || interface.valid.Check(id)
+              ? interface.GetElement(row_ind, idx)
+              : std::numeric_limits<float>::quiet_NaN();
+      return {row_ind, idx, value};
+    }
+
+    size_t Size() const { return interface.num_cols; }
+
+    ArrayInterface const& interface;
+    size_t row_ind;
+  };
+  const Line GetLine(size_t idx) const {
+    return {array_interface_, idx};
+  }
+
+  size_t Size() const { return array_interface_.num_rows; }
+
+ private:
+  ArrayInterface array_interface_;
+};
+
+class ArrayInterfaceAdapter
+    : public detail::SingleBatchDataIter<ArrayInterfaceAdapterBatch> {
+ public:
+  explicit ArrayInterfaceAdapter(std::string cuda_interface_str) {
+    Json json_array_interface =
+        Json::Load({cuda_interface_str.c_str(), cuda_interface_str.size()});
+    array_interface_ = ArrayInterface(get<Object const>(json_array_interface));
+    batch_ = ArrayInterfaceAdapterBatch(array_interface_);
+  }
+  ArrayInterfaceAdapterBatch const& Value() const override { return batch_; }
+  size_t NumRows() const { return array_interface_.num_rows; }
+  size_t NumColumns() const { return array_interface_.num_cols; }
+
+ private:
+  ArrayInterfaceAdapterBatch batch_;
+  ArrayInterface array_interface_;
+};
 };  // namespace data
 }  // namespace xgboost
 #endif  // XGBOOST_DATA_ADAPTER_H_
