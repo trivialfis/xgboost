@@ -24,10 +24,14 @@ if (USE_CUDA)
     list(APPEND SRC_LIBS ${NCCL_LIBRARY})
   endif (USE_NCCL)
 
+  find_package(NvidiaCutlass REQUIRED)
+
   if (USE_NVTX)
     target_include_directories(objxgboost PRIVATE "${NVTX_HEADER_DIR}")
     target_compile_definitions(objxgboost PRIVATE -DXGBOOST_USE_NVTX=1)
   endif (USE_NVTX)
+
+  target_link_libraries(objxgboost PUBLIC nvidia::cutlass::cutlass)
 
   target_compile_options(objxgboost PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>

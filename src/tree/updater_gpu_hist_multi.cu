@@ -409,6 +409,7 @@ struct GPUHistMakerDevice {
 
   /*! \brief Gradient pair for each row. */
   common::Span<GradientPair> gpair;
+  size_t gpair_stride { 1 };
 
   dh::caching_device_vector<int> monotone_constraints;
   dh::caching_device_vector<bst_float> prediction_cache;
@@ -806,6 +807,7 @@ struct GPUHistMakerDevice {
   }
 
   void InitRoot(RegTree* p_tree, dh::AllReducer* reducer, int64_t num_columns) {
+    monitor.StartCuda("InitRoot");
     constexpr bst_node_t kRootNIdx = 0;
     dh::XGBCachingDeviceAllocator<char> alloc;
     GradientPair root_sum = thrust::reduce(
@@ -838,6 +840,7 @@ struct GPUHistMakerDevice {
     auto split = this->EvaluateSplits({kRootNIdx}, *p_tree, num_columns);
     qexpand->push(
         ExpandEntry<GradientPair>(kRootNIdx, p_tree->GetDepth(kRootNIdx), split.at(0), 0));
+    monitor.StopCuda("InitRoot");
   }
 
   void UpdateTree(HostDeviceVector<GradientPair>* gpair_all, DMatrix* p_fmat,
@@ -848,9 +851,7 @@ struct GPUHistMakerDevice {
     this->Reset(gpair_all, p_fmat, p_fmat->Info().num_col_);
     monitor.StopCuda("Reset");
 
-    monitor.StartCuda("InitRoot");
     this->InitRoot(p_tree, reducer, p_fmat->Info().num_col_);
-    monitor.StopCuda("InitRoot");
 
     auto timestamp = qexpand->size();
     auto num_leaves = 1;
@@ -869,7 +870,7 @@ struct GPUHistMakerDevice {
       int right_child_nidx = tree[candidate.nid].RightChild();
       // Only create child entries if needed
       if (ExpandEntry<GradientPair>::ChildIsValid(param, tree.GetDepth(left_child_nidx),
-                                    num_leaves)) {
+                                                  num_leaves)) {
         monitor.StartCuda("UpdatePosition");
         this->UpdatePosition(candidate.nid, (*p_tree)[candidate.nid]);
         monitor.StopCuda("UpdatePosition");
