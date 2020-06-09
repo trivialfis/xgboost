@@ -617,6 +617,7 @@ XGB_DLL int XGBoosterPredictFromArrayInterface(BoosterHandle handle,
 XGB_DLL int XGBoosterLoadModel(BoosterHandle handle, const char* fname) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   if (common::FileExtension(fname) == "json") {
     auto str = common::LoadSequentialFile(fname);
     CHECK_GT(str.size(), 2);
@@ -633,6 +634,7 @@ XGB_DLL int XGBoosterLoadModel(BoosterHandle handle, const char* fname) {
 XGB_DLL int XGBoosterSaveModel(BoosterHandle handle, const char* c_fname) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   std::unique_ptr<dmlc::Stream> fo(dmlc::Stream::Create(c_fname, "w"));
   auto *learner = static_cast<Learner *>(handle);
   learner->Configure();
@@ -654,6 +656,7 @@ XGB_DLL int XGBoosterLoadModelFromBuffer(BoosterHandle handle,
                                          xgboost::bst_ulong len) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   common::MemoryFixSizeBuffer fs((void*)buf, len);  // NOLINT(*)
   static_cast<Learner*>(handle)->LoadModel(&fs);
   API_END();
@@ -664,6 +667,7 @@ XGB_DLL int XGBoosterGetModelRaw(BoosterHandle handle,
                                  const char** out_dptr) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   auto *learner = static_cast<Learner*>(handle);
   std::string& raw_str = learner->GetThreadLocal().ret_str;
   raw_str.resize(0);
@@ -684,6 +688,7 @@ XGB_DLL int XGBoosterSerializeToBuffer(BoosterHandle handle,
                                        const char **out_dptr) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   auto *learner = static_cast<Learner*>(handle);
   std::string &raw_str = learner->GetThreadLocal().ret_str;
   raw_str.resize(0);
@@ -700,6 +705,7 @@ XGB_DLL int XGBoosterUnserializeFromBuffer(BoosterHandle handle,
                                            xgboost::bst_ulong len) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   common::MemoryFixSizeBuffer fs((void*)buf, len);  // NOLINT(*)
   static_cast<Learner*>(handle)->Load(&fs);
   API_END();
@@ -709,6 +715,7 @@ XGB_DLL int XGBoosterLoadRabitCheckpoint(BoosterHandle handle,
                                          int* version) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   auto* bst = static_cast<Learner*>(handle);
   *version = rabit::LoadCheckPoint(bst);
   if (*version != 0) {
@@ -720,6 +727,7 @@ XGB_DLL int XGBoosterLoadRabitCheckpoint(BoosterHandle handle,
 XGB_DLL int XGBoosterSaveRabitCheckpoint(BoosterHandle handle) {
   API_BEGIN();
   CHECK_HANDLE();
+  WithPoolAllocator allocator;
   auto* learner = static_cast<Learner*>(handle);
   learner->Configure();
   if (learner->AllowLazyCheckPoint()) {

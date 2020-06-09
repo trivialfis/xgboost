@@ -600,7 +600,7 @@ class LearnerConfiguration : public Learner {
                       };
       if (std::all_of(metrics_.begin(), metrics_.end(), DupCheck)) {
         metrics_.emplace_back(std::unique_ptr<Metric>(Metric::Create(name, &generic_parameters_)));
-        mparam_.contain_eval_metrics = 1;
+        mparam_.contain_eval_metrics = 0;
       }
     }
     for (auto& p_metric : metrics_) {
@@ -626,7 +626,7 @@ class LearnerIO : public LearnerConfiguration {
   void LoadModel(Json const& in) override {
     CHECK(IsA<Object>(in));
     Version::Load(in, false);
-    auto const& learner = get<Object>(in["learner"]);
+    auto const& learner = get<Object const>(in["learner"]);
     mparam_.FromJson(learner.at("learner_model_param"));
 
     auto const& objective_fn = learner.at("objective");

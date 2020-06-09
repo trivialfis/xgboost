@@ -7,6 +7,10 @@
 #include <xgboost/logging.h>
 #include <xgboost/parameter.h>
 
+#include <dmlc/intrusive_ptr.h>
+#include <xgboost/pool_allocator.h>
+
+#include <string>
 #include <map>
 #include <memory>
 #include <vector>
@@ -21,6 +25,14 @@ class JsonReader;
 class JsonWriter;
 
 class Value {
+ private:
+  mutable class dmlc::IntrusivePtrCell ref_;
+
+  friend dmlc::IntrusivePtrCell &
+  IntrusivePtrRefCount(xgboost::Value const *t) noexcept {
+    return t->ref_;
+  }
+
  public:
   /*!\brief Simplified implementation of LLVM RTTI. */
   enum class ValueKind {
@@ -34,6 +46,13 @@ class Value {
   };
 
   explicit Value(ValueKind _kind) : kind_{_kind} {}
+
+  void* operator new(std::size_t sz) {
+    return WithPoolAllocator::Malloc(sz);
+  }
+  void operator delete(void* ptr) {
+    WithPoolAllocator::Free(ptr);
+  }
 
   ValueKind Type() const { return kind_; }
   virtual ~Value() = default;
@@ -69,12 +88,15 @@ T* Cast(U* value) {
 
 class JsonString : public Value {
   std::string str_;
+
  public:
   JsonString() : Value(ValueKind::kString) {}
   JsonString(std::string const& str) :  // NOLINT
       Value(ValueKind::kString), str_{str} {}
   JsonString(std::string&& str) :  // NOLINT
       Value(ValueKind::kString), str_{std::move(str)} {}
+  JsonString(JsonString&& str) :  // NOLINT
+      Value(ValueKind::kString), str_{std::move(str.str_)} {}
 
   void Save(JsonWriter* writer) override;
 
@@ -167,6 +189,8 @@ class JsonNumber : public Value {
             typename std::enable_if<std::is_same<FloatT, double>::value>::type* = nullptr>
   JsonNumber(FloatT value) : Value{ValueKind::kNumber},  // NOLINT
                              number_{static_cast<Float>(value)} {}
+  JsonNumber(JsonNumber const& that) = delete;
+  JsonNumber(JsonNumber&& that) : Value{ValueKind::kNumber}, number_{that.number_} {}
 
   void Save(JsonWriter* writer) override;
 
@@ -214,6 +238,9 @@ class JsonInteger : public Value {
       : Value(ValueKind::kInteger),
         integer_{static_cast<Int>(value)} {}
 
+  JsonInteger(JsonInteger &&that)
+      : Value{ValueKind::kInteger}, integer_{that.integer_} {}
+
   Json& operator[](std::string const & key) override;
   Json& operator[](int ind) override;
 
@@ -234,6 +261,7 @@ class JsonNull : public Value {
  public:
   JsonNull() : Value(ValueKind::kNull) {}
   JsonNull(std::nullptr_t) : Value(ValueKind::kNull) {}  // NOLINT
+  JsonNull(JsonNull&& that) : Value(ValueKind::kNull) {}
 
   void Save(JsonWriter* writer) override;
 
@@ -261,6 +289,8 @@ class JsonBoolean : public Value {
               std::is_same<Bool, bool const>::value>::type* = nullptr>
   JsonBoolean(Bool value) :  // NOLINT
       Value(ValueKind::kBoolean), boolean_{value} {}
+  JsonBoolean(JsonBoolean&& value) :  // NOLINT
+      Value(ValueKind::kBoolean), boolean_{value.boolean_} {}
 
   void Save(JsonWriter* writer) override;
 
@@ -306,6 +336,11 @@ struct StringView {
   char const* c_str() const { return str_; }  // NOLINT
 };
 
+template <typename T, typename... Args>
+dmlc::IntrusivePtr<Value> MakeValue(Args... args) {
+  return dmlc::make_intrusive_base<Value, T>(std::forward<Args>(args)...);
+}
+
 /*!
  * \brief Data structure representing JSON format.
  *
@@ -333,54 +368,57 @@ class Json {
   static Json Load(JsonReader* reader);
   static void Dump(Json json, std::string* out);
 
-  Json() : ptr_{new JsonNull} {}
+  Json()
+      : ptr_{MakeValue<JsonNull>()} {}
 
   // number
-  explicit Json(JsonNumber number) : ptr_{new JsonNumber(number)} {}
+  explicit Json(JsonNumber number)
+      : ptr_{MakeValue<JsonNumber>(std::move(number))} {}
   Json& operator=(JsonNumber number) {
     ptr_.reset(new JsonNumber(std::move(number)));
     return *this;
   }
 
   // integer
-  explicit Json(JsonInteger integer) : ptr_{new JsonInteger(integer)} {}
+  explicit Json(JsonInteger integer)
+      : ptr_{MakeValue<JsonInteger>(std::move(integer))} {}
   Json& operator=(JsonInteger integer) {
     ptr_.reset(new JsonInteger(std::move(integer)));
     return *this;
   }
 
   // array
-  explicit Json(JsonArray list) :
-      ptr_ {new JsonArray(std::move(list))} {}
+  explicit Json(JsonArray list)
+      : ptr_{MakeValue<JsonArray>(std::move(list))} {}
   Json& operator=(JsonArray array) {
     ptr_.reset(new JsonArray(std::move(array)));
     return *this;
   }
 
   // object
-  explicit Json(JsonObject object) :
-      ptr_{new JsonObject(std::move(object))} {}
+  explicit Json(JsonObject object)
+      : ptr_{MakeValue<JsonObject>(std::move(object))} {}
   Json& operator=(JsonObject object) {
     ptr_.reset(new JsonObject(std::move(object)));
     return *this;
   }
   // string
   explicit Json(JsonString str) :
-      ptr_{new JsonString(std::move(str))} {}
+      ptr_{MakeValue<JsonString>(std::move(str))} {}
   Json& operator=(JsonString str) {
     ptr_.reset(new JsonString(std::move(str)));
     return *this;
   }
   // bool
-  explicit Json(JsonBoolean boolean) :
-      ptr_{new JsonBoolean(std::move(boolean))} {}
+  explicit Json(JsonBoolean boolean)
+      : ptr_{MakeValue<JsonBoolean>(std::move(boolean))} {}
   Json& operator=(JsonBoolean boolean) {
     ptr_.reset(new JsonBoolean(std::move(boolean)));
     return *this;
   }
   // null
-  explicit Json(JsonNull null) :
-      ptr_{new JsonNull(std::move(null))} {}
+  explicit Json(JsonNull null)
+      : ptr_{MakeValue<JsonNull>(std::move(null))} {}
   Json& operator=(JsonNull null) {
     ptr_.reset(new JsonNull(std::move(null)));
     return *this;
@@ -417,8 +455,15 @@ class Json {
     return os;
   }
 
+  void* operator new(std::size_t sz) {
+    return WithPoolAllocator::Malloc(sz);
+  }
+  void operator delete(void* ptr) {
+    WithPoolAllocator::Free(ptr);
+  }
+
  private:
-  std::shared_ptr<Value> ptr_;
+  dmlc::IntrusivePtr<Value> ptr_;
 };
 
 template <typename T>

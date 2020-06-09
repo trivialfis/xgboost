@@ -14,6 +14,7 @@
 #include "xgboost/logging.h"
 #include "xgboost/json.h"
 #include "xgboost/json_io.h"
+#include "xgboost/pool_allocator.h"
 
 namespace xgboost {
 
@@ -24,9 +25,11 @@ void JsonWriter::Save(Json json) {
 void JsonWriter::Visit(JsonArray const* arr) {
   stream_->emplace_back('[');
   auto const& vec = arr->GetArray();
+  stream_->reserve(stream_->size() + vec.size() * 2);
   size_t size = vec.size();
+  auto vptr = vec.data();
   for (size_t i = 0; i < size; ++i) {
-    auto const& value = vec[i];
+    auto const& value = vptr[i];
     this->Save(value);
     if (i != size - 1) {
       stream_->emplace_back(',');
@@ -39,8 +42,10 @@ void JsonWriter::Visit(JsonObject const* obj) {
   stream_->emplace_back('{');
   size_t i = 0;
   size_t size = obj->GetObject().size();
+  auto const& map = obj->GetObject();
+  stream_->reserve(stream_->size() + map.size() * 5);
 
-  for (auto& value : obj->GetObject()) {
+  for (auto const& value : map) {
     auto s = String{value.first};
     this->Visit(&s);
     stream_->emplace_back(':');
@@ -514,10 +519,11 @@ Json JsonReader::ParseString() {
 Json JsonReader::ParseNull() {
   char ch = GetNextNonSpaceChar();
   std::string buffer{ch};
+  buffer.reserve(buffer.size() + 3);
   for (size_t i = 0; i < 3; ++i) {
     buffer.push_back(GetNextChar());
   }
-  if (buffer != "null") {
+  if (XGBOOST_EXPECT(buffer != "null", false)) {
     Error("Expecting null value \"null\"");
   }
   return Json{JsonNull()};
@@ -532,11 +538,10 @@ Json JsonReader::ParseArray() {
       GetConsecutiveChar(']');
       return Json(std::move(data));
     }
-    auto obj = Parse();
-    data.emplace_back(obj);
+    data.emplace_back(Parse());
     ch = GetNextNonSpaceChar();
     if (ch == ']') break;
-    if (ch != ',') {
+    if (XGBOOST_EXPECT(ch != ',', false)) {
       Expect(',', ch);
     }
   }
@@ -559,9 +564,7 @@ Json JsonReader::ParseObject() {
   while (true) {
     SkipSpaces();
     ch = PeekNextChar();
-    CHECK_NE(ch, -1) << "cursor_.Pos(): " << cursor_.Pos() << ", "
-                     << "raw_str_.size():" << raw_str_.size();
-    if (ch != '"') {
+    if (XGBOOST_EXPECT(ch != '"', false)) {
       Expect('"', ch);
     }
     Json key = ParseString();
@@ -676,7 +679,6 @@ Json JsonReader::ParseNumber() {
       Error("Expecting digit");
     }
   }
-
   auto moved = std::distance(beg, p);
   this->cursor_.Forward(moved);
 

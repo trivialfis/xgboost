@@ -240,6 +240,7 @@ This way users can study the internal representation more closely.  Please note 
 JSON generators make use of locale dependent floating point serialization methods, which
 is not supported by XGBoost.
 
+
 *************************************************
 Difference between saving model and dumping model
 *************************************************
@@ -250,6 +251,50 @@ use case for it is for model interpretation or visualization, and is not suppose
 loaded back to XGBoost.  The JSON version has a `schema
 <https://github.com/dmlc/xgboost/blob/master/doc/dump.schema>`_.  See next section for
 more info.
+
+***********************
+Floating point rounding
+***********************
+
+Saving model into JSON format requires converting binary representation of floating point
+numbers into decimal representation, during which rounding might happen.  But the effect
+can be reverted when the model is loaded back.  Hence saving and loading the JSON model
+with XGBoost is guaranteed to have roundtrip reproducibility.  But the guarantee only
+holds when the model is loaded back by XGBoost itself, which means if you are using a
+3-party JSON implementation for parsing XGBoost's model, there might be minor discrepancy
+(<1e-7) in floating point values if your JSON implementation does not consider floating
+point rounding error.  The JSON implementation in Python is tested to have reproducible
+result when loading model from XGBoost:
+
+.. code-block:: python
+
+  import json
+  import xgboost
+
+  # saved_by_xgboost.json is a model trained and saved by XGBoost 1.2
+  with open('./saved_by_xgboost.json', 'r') as fd:
+      model = json.load(fd)
+
+  # Dump the model again by json in Python standard library
+  with open('./saved_by_python.json', 'w') as fd:
+      json.dump(model, fd)
+
+  # Load the one saved by Python with XGBoost
+  booster = xgboost.Booster(model_file='./saved_by_python.json')
+  # Save it again.
+  booster.save_model('roundtrip.json')
+
+
+.. code-block:: bash
+
+  sha256sum saved_by_xgboost.json roundtrip.json
+
+  3e646967baa914c0b8ca42a0a74d01c819da5e6bc39242332c62a1a96efed089  saved_by_xgboost.json
+  3e646967baa914c0b8ca42a0a74d01c819da5e6bc39242332c62a1a96efed089  roundtrip.json
+
+Even if there's discrepancy, most of time it is negligible (assuming the parser is bug
+free).  As the last note, internally XGBoost uses `ryu
+<https://dl.acm.org/citation.cfm?id=3192369>`_ for printing floating point numbers.
 
 ***********
 JSON Schema
