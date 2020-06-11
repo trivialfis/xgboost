@@ -1,13 +1,14 @@
 /*!
- * Copyright (c) by Contributors 2019
+ * Copyright (c) by XGBoost Contributors 2019-2020
  */
 #ifndef XGBOOST_JSON_H_
 #define XGBOOST_JSON_H_
 
 #include <xgboost/logging.h>
 #include <xgboost/parameter.h>
-#include <string>
+#include <xgboost/pool_allocator.h>
 
+#include <string>
 #include <map>
 #include <memory>
 #include <vector>
@@ -167,6 +168,12 @@ class JsonNumber : public Value {
             typename std::enable_if<std::is_same<FloatT, double>::value>::type* = nullptr>
   JsonNumber(FloatT value) : Value{ValueKind::kNumber},  // NOLINT
                              number_{static_cast<Float>(value)} {}
+  void* operator new(std::size_t sz) {
+    return WithPoolAllocator::Malloc(sz);
+  }
+  void operator delete(void* ptr) {
+    WithPoolAllocator::Free(ptr);
+  }
 
   void Save(JsonWriter* writer) override;
 
@@ -214,6 +221,12 @@ class JsonInteger : public Value {
       : Value(ValueKind::kInteger),
         integer_{static_cast<Int>(value)} {}
 
+  void* operator new(std::size_t sz) {
+    return WithPoolAllocator::Malloc(sz);
+  }
+  void operator delete(void* ptr) {
+    WithPoolAllocator::Free(ptr);
+  }
   Json& operator[](std::string const & key) override;
   Json& operator[](int ind) override;
 
