@@ -197,9 +197,7 @@ struct AbsError {
     }
 
     size_t const median_ind = weighted_residue.size() / 2;
-    Select(0, weighted_residue.begin(),
-           (weighted_residue.begin() + median_ind),
-           weighted_residue.end());
+    std::nth_element(weighted_residue.begin(), weighted_residue.begin() + median_ind, weighted_residue.end());
     return weighted_residue.at(median_ind);
   }
 };
