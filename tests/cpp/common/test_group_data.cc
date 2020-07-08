@@ -11,7 +11,7 @@ namespace common {
 TEST(GroupData, ParallelGroupBuilder) {
   std::vector<size_t> offsets;
   std::vector<Entry> data;
-  ParallelGroupBuilder<Entry, size_t> builder(&offsets, &data);
+  ParallelGroupBuilder<Entry> builder(&offsets, &data);
   builder.InitBudget(0, 1);
   // Add two rows with two elements each
   builder.AddBudget(0, 0, 2);
@@ -35,8 +35,7 @@ TEST(GroupData, ParallelGroupBuilder) {
   EXPECT_EQ(offsets, expected_offsets);
 
   // Create new builder, add one more row given already populated offsets/data
-  ParallelGroupBuilder<Entry, size_t> builder2(&offsets, &data,
-                                               offsets.size() - 1);
+  ParallelGroupBuilder<Entry> builder2(&offsets, &data, offsets.size() - 1);
   builder2.InitBudget(0, 1);
   builder2.AddBudget(2, 0, 2);
   builder2.InitStorage();

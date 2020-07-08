@@ -18,9 +18,9 @@ TEST(SparsePageDMatrix, MetaInfo) {
   EXPECT_TRUE(FileExists(tmp_file + ".cache"));
 
   // Test the metadata that was parsed
-  EXPECT_EQ(dmat->Info().num_row_, 2);
-  EXPECT_EQ(dmat->Info().num_col_, 5);
-  EXPECT_EQ(dmat->Info().num_nonzero_, 6);
+  EXPECT_EQ(dmat->Info().num_row_, 2ul);
+  EXPECT_EQ(dmat->Info().num_col_, 5ul);
+  EXPECT_EQ(dmat->Info().num_nonzero_, 6ul);
   EXPECT_EQ(dmat->Info().labels_.Size(), dmat->Info().num_row_);
 
   delete dmat;
@@ -35,8 +35,8 @@ TEST(SparsePageDMatrix, RowAccess) {
   // Test the data read into the first row
   auto &batch = *dmat->GetBatches<xgboost::SparsePage>().begin();
   auto first_row = batch[0];
-  ASSERT_EQ(first_row.size(), 3);
-  EXPECT_EQ(first_row[2].index, 2);
+  ASSERT_EQ(first_row.size(), 3ul);
+  EXPECT_EQ(first_row[2].index, 2u);
   EXPECT_EQ(first_row[2].fvalue, 20);
 }
 
@@ -51,14 +51,14 @@ TEST(SparsePageDMatrix, ColAccess) {
   for (auto const &col_batch : dmat->GetBatches<xgboost::SortedCSCPage>()) {
     EXPECT_EQ(col_batch.Size(), dmat->Info().num_col_);
     EXPECT_EQ(col_batch[1][0].fvalue, 10.0f);
-    EXPECT_EQ(col_batch[1].size(), 1);
+    EXPECT_EQ(col_batch[1].size(), 1ul);
   }
 
   // Loop over the batches and assert the data is as expected
   for (auto const &col_batch : dmat->GetBatches<xgboost::CSCPage>()) {
     EXPECT_EQ(col_batch.Size(), dmat->Info().num_col_);
     EXPECT_EQ(col_batch[1][0].fvalue, 10.0f);
-    EXPECT_EQ(col_batch[1].size(), 1);
+    EXPECT_EQ(col_batch[1].size(), 1ul);
   }
 
   EXPECT_TRUE(FileExists(tmp_file + ".cache"));
@@ -134,11 +134,11 @@ TEST(SparsePageDMatrix, Empty) {
                                  data.data(), 0, 0, 0);
     data::SparsePageDMatrix dmat(
         &csr_adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-    EXPECT_EQ(dmat.Info().num_nonzero_, 0);
-    EXPECT_EQ(dmat.Info().num_row_, 0);
-    EXPECT_EQ(dmat.Info().num_col_, 0);
+    EXPECT_EQ(dmat.Info().num_nonzero_, 0ul);
+    EXPECT_EQ(dmat.Info().num_row_, 0ul);
+    EXPECT_EQ(dmat.Info().num_col_, 0ul);
     for (auto &batch : dmat.GetBatches<SparsePage>()) {
-      EXPECT_EQ(batch.Size(), 0);
+      EXPECT_EQ(batch.Size(), 0ul);
     }
   }
 
@@ -146,22 +146,22 @@ TEST(SparsePageDMatrix, Empty) {
     data::DenseAdapter dense_adapter(nullptr, 0, 0);
     data::SparsePageDMatrix dmat2(
         &dense_adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-    EXPECT_EQ(dmat2.Info().num_nonzero_, 0);
-    EXPECT_EQ(dmat2.Info().num_row_, 0);
-    EXPECT_EQ(dmat2.Info().num_col_, 0);
+    EXPECT_EQ(dmat2.Info().num_nonzero_, 0ul);
+    EXPECT_EQ(dmat2.Info().num_row_, 0ul);
+    EXPECT_EQ(dmat2.Info().num_col_, 0ul);
     for (auto &batch : dmat2.GetBatches<SparsePage>()) {
-      EXPECT_EQ(batch.Size(), 0);
+      EXPECT_EQ(batch.Size(), 0ul);
     }
   }
   {
     data::CSCAdapter csc_adapter(nullptr, nullptr, nullptr, 0, 0);
     data::SparsePageDMatrix dmat3(
         &csc_adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-    EXPECT_EQ(dmat3.Info().num_nonzero_, 0);
-    EXPECT_EQ(dmat3.Info().num_row_, 0);
-    EXPECT_EQ(dmat3.Info().num_col_, 0);
+    EXPECT_EQ(dmat3.Info().num_nonzero_, 0ul);
+    EXPECT_EQ(dmat3.Info().num_row_, 0ul);
+    EXPECT_EQ(dmat3.Info().num_col_, 0ul);
     for (auto &batch : dmat3.GetBatches<SparsePage>()) {
-      EXPECT_EQ(batch.Size(), 0);
+      EXPECT_EQ(batch.Size(), 0ul);
     }
   }
 }
@@ -177,11 +177,11 @@ TEST(SparsePageDMatrix, MissingData) {
                            3, 2);
   data::SparsePageDMatrix dmat(
       &adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-  EXPECT_EQ(dmat.Info().num_nonzero_, 2);
+  EXPECT_EQ(dmat.Info().num_nonzero_, 2ul);
 
   const std::string tmp_file2 = tempdir.path + "/simple2.libsvm";
   data::SparsePageDMatrix dmat2(&adapter, 1.0, 1, tmp_file2);
-  EXPECT_EQ(dmat2.Info().num_nonzero_, 1);
+  EXPECT_EQ(dmat2.Info().num_nonzero_, 1ul);
 }
 
 TEST(SparsePageDMatrix, EmptyRow) {
@@ -195,9 +195,9 @@ TEST(SparsePageDMatrix, EmptyRow) {
                            2, 2);
   data::SparsePageDMatrix dmat(
       &adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-  EXPECT_EQ(dmat.Info().num_nonzero_, 2);
-  EXPECT_EQ(dmat.Info().num_row_, 2);
-  EXPECT_EQ(dmat.Info().num_col_, 2);
+  EXPECT_EQ(dmat.Info().num_nonzero_, 2ul);
+  EXPECT_EQ(dmat.Info().num_row_, 2ul);
+  EXPECT_EQ(dmat.Info().num_col_, 2ul);
 }
 
 TEST(SparsePageDMatrix, FromDense) {
@@ -209,9 +209,9 @@ TEST(SparsePageDMatrix, FromDense) {
   data::DenseAdapter adapter(data.data(), m, n);
   data::SparsePageDMatrix dmat(
       &adapter, std::numeric_limits<float>::quiet_NaN(), 1, tmp_file);
-  EXPECT_EQ(dmat.Info().num_col_, 2);
-  EXPECT_EQ(dmat.Info().num_row_, 3);
-  EXPECT_EQ(dmat.Info().num_nonzero_, 6);
+  EXPECT_EQ(dmat.Info().num_col_, 2ul);
+  EXPECT_EQ(dmat.Info().num_row_, 3ul);
+  EXPECT_EQ(dmat.Info().num_nonzero_, 6ul);
 
   for (auto &batch : dmat.GetBatches<SparsePage>()) {
     for (auto i = 0ull; i < batch.Size(); i++) {
@@ -233,26 +233,26 @@ TEST(SparsePageDMatrix, FromCSC) {
   data::CSCAdapter adapter(col_ptr.data(), row_idx.data(), data.data(), 2, 3);
   data::SparsePageDMatrix dmat(
       &adapter, std::numeric_limits<float>::quiet_NaN(), -1, tmp_file);
-  EXPECT_EQ(dmat.Info().num_col_, 2);
-  EXPECT_EQ(dmat.Info().num_row_, 3);
-  EXPECT_EQ(dmat.Info().num_nonzero_, 5);
+  EXPECT_EQ(dmat.Info().num_col_, 2ul);
+  EXPECT_EQ(dmat.Info().num_row_, 3ul);
+  EXPECT_EQ(dmat.Info().num_nonzero_, 5ul);
 
   auto &batch = *dmat.GetBatches<SparsePage>().begin();
   auto inst = batch[0];
   EXPECT_EQ(inst[0].fvalue, 1);
-  EXPECT_EQ(inst[0].index, 0);
+  EXPECT_EQ(inst[0].index, 0u);
   EXPECT_EQ(inst[1].fvalue, 2);
-  EXPECT_EQ(inst[1].index, 1);
+  EXPECT_EQ(inst[1].index, 1u);
 
   inst = batch[1];
   EXPECT_EQ(inst[0].fvalue, 3);
-  EXPECT_EQ(inst[0].index, 0);
+  EXPECT_EQ(inst[0].index, 0u);
   EXPECT_EQ(inst[1].fvalue, 4);
-  EXPECT_EQ(inst[1].index, 1);
+  EXPECT_EQ(inst[1].index, 1u);
 
   inst = batch[2];
   EXPECT_EQ(inst[0].fvalue, 5);
-  EXPECT_EQ(inst[0].index, 1);
+  EXPECT_EQ(inst[0].index, 1u);
 }
 
 TEST(SparsePageDMatrix, FromFile) {
@@ -266,7 +266,7 @@ TEST(SparsePageDMatrix, FromFile) {
 
   data::SparsePageDMatrix dmat(
       &adapter, std::numeric_limits<float>::quiet_NaN(), -1, tmp_file, 1);
-  ASSERT_EQ(dmat.Info().num_col_, 5);
+  ASSERT_EQ(dmat.Info().num_col_, 5ul);
 
   for (auto &batch : dmat.GetBatches<SparsePage>()) {
     std::vector<bst_row_t> expected_offset(batch.Size() + 1);
@@ -276,13 +276,13 @@ TEST(SparsePageDMatrix, FromFile) {
     EXPECT_EQ(batch.offset.HostVector(), expected_offset);
 
     if (batch.base_rowid % 2 == 0) {
-      EXPECT_EQ(batch[0][0].index, 0);
-      EXPECT_EQ(batch[0][1].index, 1);
-      EXPECT_EQ(batch[0][2].index, 2);
+      EXPECT_EQ(batch[0][0].index, 0u);
+      EXPECT_EQ(batch[0][1].index, 1u);
+      EXPECT_EQ(batch[0][2].index, 2u);
     } else {
-      EXPECT_EQ(batch[0][0].index, 0);
-      EXPECT_EQ(batch[0][1].index, 3);
-      EXPECT_EQ(batch[0][2].index, 4);
+      EXPECT_EQ(batch[0][0].index, 0u);
+      EXPECT_EQ(batch[0][1].index, 3u);
+      EXPECT_EQ(batch[0][2].index, 4u);
     }
   }
 }

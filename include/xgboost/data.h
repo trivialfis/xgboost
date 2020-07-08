@@ -299,13 +299,13 @@ class SparsePage {
 
   void SortRows() {
     auto ncol = static_cast<bst_omp_uint>(this->Size());
-#pragma omp parallel for default(none) shared(ncol) schedule(dynamic, 1)
+    auto& h_offset = this->offset.HostVector();
+    auto& h_data = this->data.HostVector();
+#pragma omp parallel for schedule(dynamic, 1)
     for (bst_omp_uint i = 0; i < ncol; ++i) {
-      if (this->offset.HostVector()[i] < this->offset.HostVector()[i + 1]) {
-        std::sort(
-            this->data.HostVector().begin() + this->offset.HostVector()[i],
-            this->data.HostVector().begin() + this->offset.HostVector()[i + 1],
-            Entry::CmpValue);
+      if (h_offset[i] < h_offset[i + 1]) {
+        std::sort(h_data.begin() + h_offset[i],
+                  h_data.begin() + h_offset[i + 1], Entry::CmpValue);
       }
     }
   }

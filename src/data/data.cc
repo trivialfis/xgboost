@@ -793,8 +793,8 @@ DMatrix::Create(data::IteratorAdapter<DataIterHandle, XGBCallbackDataIterNext,
 
 SparsePage SparsePage::GetTranspose(int num_columns) const {
   SparsePage transpose;
-  common::ParallelGroupBuilder<Entry, bst_row_t> builder(&transpose.offset.HostVector(),
-                                                         &transpose.data.HostVector());
+  common::ParallelGroupBuilder<Entry> builder(&transpose.offset.HostVector(),
+                                              &transpose.data.HostVector());
   const int nthread = omp_get_max_threads();
   builder.InitBudget(num_columns, nthread);
   long batch_size = static_cast<long>(this->Size());  // NOLINT(*)
@@ -848,9 +848,8 @@ uint64_t SparsePage::Push(const AdapterBatchT& batch, float missing, int nthread
   auto& data_vec = data.HostVector();
 
   size_t builder_base_row_offset = this->Size();
-  common::ParallelGroupBuilder<
-      Entry, std::remove_reference<decltype(offset_vec)>::type::value_type>
-      builder(&offset_vec, &data_vec, builder_base_row_offset);
+  common::ParallelGroupBuilder<Entry> builder(&offset_vec, &data_vec,
+                                              builder_base_row_offset);
   // Estimate expected number of rows by using last element in batch
   // This is not required to be exact but prevents unnecessary resizing
   size_t expected_rows = 0;

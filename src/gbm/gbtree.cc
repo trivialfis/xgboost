@@ -168,15 +168,12 @@ void GBTree::ConfigureUpdaters() {
       // calling this function.
       break;
     case TreeMethod::kApprox:
-      tparam_.updater_seq = "grow_histmaker,prune";
+      tparam_.updater_seq = "grow_global_approx_histmaker";
       break;
     case TreeMethod::kExact:
       tparam_.updater_seq = "grow_colmaker,prune";
       break;
     case TreeMethod::kHist:
-      LOG(INFO) <<
-          "Tree method is selected to be 'hist', which uses a "
-          "single updater grow_quantile_histmaker.";
       tparam_.updater_seq = "grow_quantile_histmaker";
       break;
     case TreeMethod::kGPUHist: {

@@ -57,9 +57,10 @@ inline void CheckSparseColumn(const Column<BinIdxType>& col_input, const GHistIn
 }
 
 TEST(SparseColumn, Test) {
-  uint64_t max_num_bins[] = {static_cast<uint64_t>(std::numeric_limits<uint8_t>::max()) + 1,
-                          static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 1,
-                          static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 2};
+  uint64_t max_num_bins[] = {
+      static_cast<uint64_t>(std::numeric_limits<uint8_t>::max()) + 1,
+      static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 1,
+      static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()) + 2};
   for (size_t max_num_bin : max_num_bins) {
     auto dmat = RandomDataGenerator(100, 1, 0.85).GenerateDMatrix();
     GHistIndexMatrix gmat;

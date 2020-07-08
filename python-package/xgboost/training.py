@@ -61,6 +61,7 @@ def _train_internal(params, dtrain,
         if not cb.__dict__.get('before_iteration', False)]
 
     for i in range(start_iteration, num_boost_round):
+        print('i:', i)
         for cb in callbacks_before_iter:
             cb(CallbackEnv(model=bst,
                            cvfolds=None,

@@ -3,7 +3,8 @@ import unittest
 import pytest
 import xgboost as xgb
 import numpy as np
-from hypothesis import given, strategies, settings, note
+from hypothesis import given, strategies, settings, note, assume
+import tempfile
 
 exact_parameter_strategy = strategies.fixed_dictionaries({
     'nthread': strategies.integers(1, 4),
@@ -49,11 +50,39 @@ class TestTreeMethod(unittest.TestCase):
     @given(exact_parameter_strategy, strategies.integers(1, 20),
            tm.dataset_strategy)
     @settings(deadline=None)
-    def test_approx(self, param, num_rounds, dataset):
+    def test_exact_external_memory(self, param, num_rounds, dataset):
+        assume(len(dataset.y) > 0)
+        param['tree_method'] = 'exact'
+        param = dataset.set_params(param)
+        result = train_result(param, dataset.get_external_dmat(),
+                              num_rounds)
+        note(result)
+        assert tm.non_increasing(result['train'][dataset.metric])
+
+    @given(exact_parameter_strategy, hist_parameter_strategy,
+           strategies.integers(1, 20),
+           tm.dataset_strategy)
+    @settings(deadline=None, verbosity=2)
+    def test_approx(self, param, hist_param, num_rounds, dataset):
         param['tree_method'] = 'approx'
         param = dataset.set_params(param)
+        param.update(hist_param)
         result = train_result(param, dataset.get_dmat(), num_rounds)
         assert tm.non_increasing(result['train'][dataset.metric], 1e-3)
+
+    @given(exact_parameter_strategy, hist_parameter_strategy,
+           strategies.integers(1, 20),
+           tm.dataset_strategy)
+    @settings(deadline=None)
+    def test_approx_external_memory(self, param, hist_param, num_rounds,
+                                    dataset):
+        assume(len(dataset.y) > 0)
+        param['tree_method'] = 'approx'
+        param = dataset.set_params(param)
+        param.update(hist_param)
+        result = train_result(param, dataset.get_external_dmat(),
+                              num_rounds)
+        assert tm.non_increasing(result['train'][dataset.metric])
 
     @pytest.mark.skipif(**tm.no_sklearn())
     def test_pruner(self):
@@ -79,7 +108,8 @@ class TestTreeMethod(unittest.TestCase):
         # Second prune should not change the tree
         assert after_prune == second_prune
 
-    @given(exact_parameter_strategy, hist_parameter_strategy, strategies.integers(1, 20),
+    @given(exact_parameter_strategy, hist_parameter_strategy,
+           strategies.integers(1, 20),
            tm.dataset_strategy)
     @settings(deadline=None)
     def test_hist(self, param, hist_param, num_rounds, dataset):
@@ -87,6 +117,20 @@ class TestTreeMethod(unittest.TestCase):
         param = dataset.set_params(param)
         param.update(hist_param)
         result = train_result(param, dataset.get_dmat(), num_rounds)
+        note(result)
+        assert tm.non_increasing(result['train'][dataset.metric])
+
+    @given(exact_parameter_strategy, hist_parameter_strategy,
+           strategies.integers(1, 20),
+           tm.dataset_strategy)
+    @settings(deadline=None)
+    def test_hist_external_memory(self, param, hist_param, num_rounds, dataset):
+        assume(len(dataset.y) > 0)
+        param['tree_method'] = 'hist'
+        param = dataset.set_params(param)
+        param.update(hist_param)
+        result = train_result(param, dataset.get_external_dmat(),
+                              num_rounds)
         note(result)
         assert tm.non_increasing(result['train'][dataset.metric])
 

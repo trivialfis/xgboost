@@ -61,7 +61,7 @@ class RowSetCollection {
 
   /*! \brief return corresponding element set given the node_id */
   inline Elem& operator[](unsigned node_id) {
-    Elem& e = elem_of_each_node_[node_id];
+    Elem& e = elem_of_each_node_.at(node_id);
     return e;
   }
 
@@ -79,14 +79,14 @@ class RowSetCollection {
       //  indicate a valid rowset that happens to have zero length and occupies
       //  the whole instance set)
       // this is okay, as BuildHist will compute (end-begin) as the set size
-      const size_t* begin = reinterpret_cast<size_t*>(20);
-      const size_t* end = begin;
+      size_t* begin = reinterpret_cast<size_t*>(20);
+      size_t* end = begin;
       elem_of_each_node_.emplace_back(Elem(begin, end, 0));
       return;
     }
 
-    const size_t* begin = dmlc::BeginPtr(row_indices_);
-    const size_t* end = dmlc::BeginPtr(row_indices_) + row_indices_.size();
+    size_t* begin = dmlc::BeginPtr(row_indices_);
+    size_t* end = dmlc::BeginPtr(row_indices_) + row_indices_.size();
     elem_of_each_node_.emplace_back(Elem(begin, end, 0));
   }
 
@@ -97,7 +97,7 @@ class RowSetCollection {
                        unsigned right_node_id,
                        size_t n_left,
                        size_t n_right) {
-    const Elem e = elem_of_each_node_[node_id];
+    const Elem e = elem_of_each_node_.at(node_id);
     CHECK(e.begin != nullptr);
     size_t* all_begin = dmlc::BeginPtr(row_indices_);
     size_t* begin = all_begin + (e.begin - all_begin);
@@ -124,122 +124,6 @@ class RowSetCollection {
   // vector: node_id -> elements
   std::vector<Elem> elem_of_each_node_;
 };
-
-
-// The builder is required for samples partition to left and rights children for set of nodes
-// Responsible for:
-// 1) Effective memory allocation for intermediate results for multi-thread work
-// 2) Merging partial results produced by threads into original row set (row_set_collection_)
-// BlockSize is template to enable memory alignment easily with C++11 'alignas()' feature
-template<size_t BlockSize>
-class PartitionBuilder {
- public:
-  template<typename Func>
-  void Init(const size_t n_tasks, size_t n_nodes, Func funcNTaks) {
-    left_right_nodes_sizes_.resize(n_nodes);
-    blocks_offsets_.resize(n_nodes+1);
-
-    blocks_offsets_[0] = 0;
-    for (size_t i = 1; i < n_nodes+1; ++i) {
-      blocks_offsets_[i] = blocks_offsets_[i-1] + funcNTaks(i-1);
-    }
-
-    if (n_tasks > max_n_tasks_) {
-      mem_blocks_.resize(n_tasks);
-      max_n_tasks_ = n_tasks;
-    }
-  }
-
-  common::Span<size_t> GetLeftBuffer(int nid, size_t begin, size_t end) {
-    const size_t task_idx = GetTaskIdx(nid, begin);
-    return { mem_blocks_.at(task_idx).Left(), end - begin };
-  }
-
-  common::Span<size_t> GetRightBuffer(int nid, size_t begin, size_t end) {
-    const size_t task_idx = GetTaskIdx(nid, begin);
-    return { mem_blocks_.at(task_idx).Right(), end - begin };
-  }
-
-  void SetNLeftElems(int nid, size_t begin, size_t end, size_t n_left) {
-    size_t task_idx = GetTaskIdx(nid, begin);
-    mem_blocks_.at(task_idx).n_left = n_left;
-  }
-
-  void SetNRightElems(int nid, size_t begin, size_t end, size_t n_right) {
-    size_t task_idx = GetTaskIdx(nid, begin);
-    mem_blocks_.at(task_idx).n_right = n_right;
-  }
-
-
-  size_t GetNLeftElems(int nid) const {
-    return left_right_nodes_sizes_[nid].first;
-  }
-
-  size_t GetNRightElems(int nid) const {
-    return left_right_nodes_sizes_[nid].second;
-  }
-
-  // Each thread has partial results for some set of tree-nodes
-  // The function decides order of merging partial results into final row set
-  void CalculateRowOffsets() {
-    for (size_t i = 0; i < blocks_offsets_.size()-1; ++i) {
-      size_t n_left = 0;
-      for (size_t j = blocks_offsets_[i]; j < blocks_offsets_[i+1]; ++j) {
-        mem_blocks_[j].n_offset_left = n_left;
-        n_left += mem_blocks_[j].n_left;
-      }
-      size_t n_right = 0;
-      for (size_t j = blocks_offsets_[i]; j < blocks_offsets_[i+1]; ++j) {
-        mem_blocks_[j].n_offset_right = n_left + n_right;
-        n_right += mem_blocks_[j].n_right;
-      }
-      left_right_nodes_sizes_[i] = {n_left, n_right};
-    }
-  }
-
-  void MergeToArray(int nid, size_t begin, size_t* rows_indexes) {
-    size_t task_idx = GetTaskIdx(nid, begin);
-
-    size_t* left_result  = rows_indexes + mem_blocks_[task_idx].n_offset_left;
-    size_t* right_result = rows_indexes + mem_blocks_[task_idx].n_offset_right;
-
-    const size_t* left = mem_blocks_[task_idx].Left();
-    const size_t* right = mem_blocks_[task_idx].Right();
-
-    std::copy_n(left, mem_blocks_[task_idx].n_left, left_result);
-    std::copy_n(right, mem_blocks_[task_idx].n_right, right_result);
-  }
-
- protected:
-  size_t GetTaskIdx(int nid, size_t begin) {
-    return blocks_offsets_[nid] + begin / BlockSize;
-  }
-
-  struct BlockInfo{
-    size_t n_left;
-    size_t n_right;
-
-    size_t n_offset_left;
-    size_t n_offset_right;
-
-    size_t* Left() {
-      return &left_data_[0];
-    }
-
-    size_t* Right() {
-      return &right_data_[0];
-    }
-   private:
-    alignas(128) size_t left_data_[BlockSize];
-    alignas(128) size_t right_data_[BlockSize];
-  };
-  std::vector<std::pair<size_t, size_t>> left_right_nodes_sizes_;
-  std::vector<size_t> blocks_offsets_;
-  std::vector<BlockInfo> mem_blocks_;
-  size_t max_n_tasks_ = 0;
-};
-
-
 }  // namespace common
 }  // namespace xgboost
 

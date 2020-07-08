@@ -107,7 +107,6 @@ class RowPartitioner {
       thrust::fill(left_counts_.begin(), left_counts_.end(), 0);
     }
     // Now we divide the row segment into left and right node.
-
     int64_t* d_left_count = left_counts_.data().get() + nidx;
     // Launch 1 thread for each row
     dh::LaunchN<1, 128>(device_idx_, segment.Size(), [=] __device__(size_t idx) {

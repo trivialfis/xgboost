@@ -185,6 +185,7 @@ struct GPUHistMakerDevice {
 
   common::Monitor monitor;
   TreeEvaluator tree_evaluator;
+
   common::ColumnSampler column_sampler;
   FeatureInteractionConstraintDevice interaction_constraints;
 

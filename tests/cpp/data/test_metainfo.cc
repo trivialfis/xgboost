@@ -14,9 +14,9 @@ TEST(MetaInfo, GetSet) {
 
   double double2[2] = {1.0, 2.0};
 
-  EXPECT_EQ(info.labels_.Size(), 0);
+  EXPECT_EQ(info.labels_.Size(), 0ul);
   info.SetInfo("label", double2, xgboost::DataType::kFloat32, 2);
-  EXPECT_EQ(info.labels_.Size(), 2);
+  EXPECT_EQ(info.labels_.Size(), 2ul);
 
   float float2[2] = {1.0f, 2.0f};
   EXPECT_EQ(info.GetWeight(1), 1.0f)
@@ -25,18 +25,18 @@ TEST(MetaInfo, GetSet) {
   EXPECT_EQ(info.GetWeight(1), 2.0f);
 
   uint32_t uint32_t2[2] = {1U, 2U};
-  EXPECT_EQ(info.base_margin_.Size(), 0);
+  EXPECT_EQ(info.base_margin_.Size(), 0ul);
   info.SetInfo("base_margin", uint32_t2, xgboost::DataType::kUInt32, 2);
   EXPECT_EQ(info.base_margin_.Size(), 2);
 
   uint64_t uint64_t2[2] = {1U, 2U};
-  EXPECT_EQ(info.group_ptr_.size(), 0);
+  EXPECT_EQ(info.group_ptr_.size(), 0ul);
   info.SetInfo("group", uint64_t2, xgboost::DataType::kUInt64, 2);
-  ASSERT_EQ(info.group_ptr_.size(), 3);
+  ASSERT_EQ(info.group_ptr_.size(), 3ul);
   EXPECT_EQ(info.group_ptr_[2], 3);
 
   info.Clear();
-  ASSERT_EQ(info.group_ptr_.size(), 0);
+  ASSERT_EQ(info.group_ptr_.size(), 0ul);
 }
 
 TEST(MetaInfo, GetSetFeature) {
@@ -45,9 +45,9 @@ TEST(MetaInfo, GetSetFeature) {
   EXPECT_THROW(info.SetFeatureInfo("foo", nullptr, 0), dmlc::Error);
   EXPECT_NO_THROW(info.SetFeatureInfo("feature_name", nullptr, 0));
   EXPECT_NO_THROW(info.SetFeatureInfo("feature_type", nullptr, 0));
-  ASSERT_EQ(info.feature_type_names.size(), 0);
-  ASSERT_EQ(info.feature_types.Size(), 0);
-  ASSERT_EQ(info.feature_names.size(), 0);
+  ASSERT_EQ(info.feature_type_names.size(), 0ul);
+  ASSERT_EQ(info.feature_types.Size(), 0ul);
+  ASSERT_EQ(info.feature_names.size(), 0ul);
 
   size_t constexpr kCols = 19;
   std::vector<std::string> types(kCols, u8"float");
@@ -64,8 +64,8 @@ TEST(MetaInfo, GetSetFeature) {
 
   // Test clear.
   info.SetFeatureInfo("feature_type", nullptr, 0);
-  ASSERT_EQ(info.feature_type_names.size(), 0);
-  ASSERT_EQ(info.feature_types.Size(), 0);
+  ASSERT_EQ(info.feature_type_names.size(), 0ul);
+  ASSERT_EQ(info.feature_types.Size(), 0ul);
   // Other conditions are tested in `SaveLoadBinary`.
 }
 

@@ -91,7 +91,7 @@ class TreeEvaluator {
     }
 
     XGBOOST_DEVICE float CalcWeight(bst_node_t nodeid, const ParamT &param,
-                                    tree::GradStats stats) const {
+                                    tree::GradStats const& stats) const {
       float w = xgboost::tree::CalcWeight(param, stats);
       if (!has_constraint) {
         return w;

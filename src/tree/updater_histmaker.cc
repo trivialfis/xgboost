@@ -55,14 +55,6 @@ class HistMaker: public BaseMaker {
     // constructor
     HistUnit(const float *cut, GradStats *data, uint32_t size)
         : cut{cut}, data{data}, size{size} {}
-    /*! \brief add a histogram to data */
-    void Add(float fv, const std::vector<GradientPair> &gpair,
-             const MetaInfo &info, const size_t ridx) {
-      unsigned bin = std::upper_bound(cut, cut + size, fv) - cut;
-      CHECK_NE(size, 0U) << "try insert into size=0";
-      CHECK_LT(bin, size);
-      data[bin].Add(gpair[ridx]);
-    }
   };
   /*! \brief a set of histograms from different index */
   struct HistSet {
@@ -143,7 +135,7 @@ class HistMaker: public BaseMaker {
   // (2) propose a set of candidate cuts and set wspace.rptr wspace.cut correctly
   virtual void ResetPosAndPropose(const std::vector<GradientPair> &gpair,
                                   DMatrix *p_fmat,
-                                  const std::vector <bst_feature_t> &fset,
+                                  const std::vector<bst_feature_t> &fset,
                                   const RegTree &tree) = 0;
   // initialize the current working set of features in this round
   virtual void InitWorkSet(DMatrix *p_fmat,

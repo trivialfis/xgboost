@@ -106,30 +106,64 @@ class HistogramCuts {
   BinIdx SearchBin(Entry const& e) const {
     return SearchBin(e.fvalue, e.index);
   }
+
+  static BinIdx SearchBin(std::vector<uint32_t> const &ptrs,
+                          std::vector<float> const &vals, Entry const& e) {
+    auto end = ptrs.at(e.index + 1);
+    auto beg = ptrs[e.index];
+    auto idx =
+        std::upper_bound(vals.cbegin() + beg, vals.cbegin() + end, e.fvalue) -
+        vals.cbegin();
+    if (idx == end) {
+      idx -= 1;
+    }
+    return idx;
+  }
 };
 
-inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
+inline HistogramCuts
+SketchOnDMatrix(DMatrix *m, int32_t max_bins,
+                std::function<float(bst_row_t idx)> get_weight = nullptr,
+                bool row_major = true) {
   HistogramCuts out;
-  auto const& info = m->Info();
+  auto const &info = m->Info();
   const auto threads = omp_get_max_threads();
   std::vector<std::vector<bst_row_t>> column_sizes(threads);
-  for (auto& column : column_sizes) {
+  for (auto &column : column_sizes) {
     column.resize(info.num_col_, 0);
   }
   std::vector<bst_row_t> reduced(info.num_col_, 0);
-  for (auto const& page : m->GetBatches<SparsePage>()) {
+  for (auto const &page : m->GetBatches<SparsePage>()) {
     auto const &entries_per_column =
         HostSketchContainer::CalcColumnSize(page, info.num_col_, threads);
     for (size_t i = 0; i < entries_per_column.size(); ++i) {
       reduced[i] += entries_per_column[i];
     }
   }
-  HostSketchContainer container(reduced, max_bins,
-                                HostSketchContainer::UseGroup(info));
-  for (auto const &page : m->GetBatches<SparsePage>()) {
-    container.PushRowPage(page, info);
+
+  if (row_major) {
+    for (auto const &page : m->GetBatches<SparsePage>()) {
+      if (!get_weight) {
+        HostSketchContainer container(reduced, max_bins,
+                                      HostSketchContainer::UseGroup(info));
+        container.PushRowPage(page, info);
+        container.MakeCuts(&out);
+      } else {
+        HostSketchContainer container(reduced, max_bins, false);
+        container.PushRowPage(page, info, get_weight);
+        container.MakeCuts(&out);
+      }
+    }
+  } else {
+    // CHECK_EQ(weights.size(), info.num_row_);
+    CHECK(get_weight);
+    for (auto const& page : m->GetBatches<SortedCSCPage>()) {
+      HostSketchContainer container(reduced, max_bins, false);
+      container.PushSortedCSC(page, info, get_weight);
+      container.MakeCuts(&out);
+    }
   }
-  container.MakeCuts(&out);
+
   return out;
 }
 
@@ -188,8 +222,8 @@ struct Index {
   size_t Size() const {
     return data_.size() / (binTypeSize_);
   }
-  void Resize(const size_t nBytesData) {
-    data_.resize(nBytesData);
+  void Resize(const size_t n_bytes_data) {
+    data_.resize(n_bytes_data);
     data_ptr_ = reinterpret_cast<void*>(data_.data());
   }
   void ResizeOffset(const size_t nDisps) {
@@ -226,7 +260,6 @@ struct Index {
   Func func_;
 };
 
-
 /*!
  * \brief preprocessed global index matrix, in CSR format
  *
@@ -247,22 +280,23 @@ struct GHistIndexMatrix {
   // Create a global histogram matrix, given cut
   void Init(DMatrix* p_fmat, int max_num_bins);
 
-  template<typename BinIdxType>
+  void Init(DMatrix* p_fmat, HistogramCuts const& cuts, int32_t max_num_bins);
+
+  template <typename BinIdxType>
   void SetIndexDataForDense(common::Span<BinIdxType> index_data_span,
-                    size_t batch_threads, const SparsePage& batch,
-                    size_t rbegin, common::Span<const uint32_t> offsets_span,
-                    size_t nbins);
+                            size_t batch_threads, const SparsePage &batch,
+                            size_t rbegin,
+                            common::Span<const uint32_t> offsets_span,
+                            size_t nbins);
 
   // specific method for sparse data as no posibility to reduce allocated memory
   void SetIndexDataForSparse(common::Span<uint32_t> index_data_span,
                              size_t batch_threads, const SparsePage& batch,
                              size_t rbegin, size_t nbins);
 
-  void ResizeIndex(const size_t rbegin, const SparsePage& batch,
-                   const size_t n_offsets, const size_t n_index,
-                   const bool isDense);
+  void ResizeIndex(const size_t n_index, const bool isDense);
 
-  inline void GetFeatureCounts(size_t* counts) const {
+  void GetFeatureCounts(size_t* counts) const {
     auto nfeature = cut.Ptrs().size() - 1;
     for (unsigned fid = 0; fid < nfeature; ++fid) {
       auto ibegin = cut.Ptrs()[fid];
@@ -272,7 +306,8 @@ struct GHistIndexMatrix {
       }
     }
   }
-  inline bool IsDense() const {
+
+  bool IsDense() const {
     return isDense_;
   }
 
@@ -371,7 +406,14 @@ void IncrementHist(GHistRow<GradientSumT> dst, const GHistRow<GradientSumT> add,
  */
 template<typename GradientSumT>
 void CopyHist(GHistRow<GradientSumT> dst, const GHistRow<GradientSumT> src,
-              size_t begin, size_t end);
+              size_t begin, size_t end) {
+  GradientSumT* pdst = reinterpret_cast<GradientSumT*>(dst.data());
+  const GradientSumT* psrc = reinterpret_cast<const GradientSumT*>(src.data());
+
+  for (size_t i = 2 * begin; i < 2 * end; ++i) {
+    pdst[i] = psrc[i];
+  }
+}
 
 /*!
  * \brief Compute Subtraction: dst = src1 - src2 in range [begin, end)
@@ -393,7 +435,7 @@ class HistCollection {
   // access histogram for i-th node
   GHistRowT operator[](bst_uint nid) const {
     constexpr uint32_t kMax = std::numeric_limits<uint32_t>::max();
-    CHECK_NE(row_ptr_[nid], kMax);
+    CHECK_NE(row_ptr_[nid], kMax) << "Histogram is not initialized for node:" << nid;
     GradientPairT* ptr =
         const_cast<GradientPairT*>(dmlc::BeginPtr(data_) + row_ptr_[nid]);
     return {ptr, nbins_};
@@ -487,15 +529,15 @@ class ParallelGHistBuilder {
 
   // Get specified hist, initialize hist by zeros if it wasn't used before
   GHistRowT GetInitializedHist(size_t tid, size_t nid) {
-    CHECK_LT(nid, nodes_);
-    CHECK_LT(tid, nthreads_);
+    CHECK(nid < nodes_);
+    CHECK(tid < nthreads_);
 
     size_t idx = tid_nid_to_hist_.at({tid, nid});
-    GHistRowT hist = hist_memory_[idx];
+    GHistRowT hist = hist_memory_.at(idx);
 
     if (!hist_was_used_[tid * nodes_ + nid]) {
       InitilizeHistByZeroes(hist, 0, hist.size());
-      hist_was_used_[tid * nodes_ + nid] = static_cast<int>(true);
+      hist_was_used_.at(tid * nodes_ + nid) = static_cast<int>(true);
     }
 
     return hist;
@@ -540,7 +582,7 @@ class ParallelGHistBuilder {
 
       if (begin < space_size) {
         size_t nid_begin = space.GetFirstDimension(begin);
-        size_t nid_end   = space.GetFirstDimension(end-1);
+        size_t nid_end = space.GetFirstDimension(end - 1);
 
         for (size_t nid = nid_begin; nid <= nid_end; ++nid) {
           // true - means thread 'tid' will work to compute partial hist for node 'nid'

@@ -20,33 +20,33 @@ TEST(Span, DlfConstructors) {
   // Dynamic extent
   {
     Span<int> s;
-    ASSERT_EQ(s.size(), 0);
+    ASSERT_EQ(s.size(), 0ul);
     ASSERT_EQ(s.data(), nullptr);
 
     Span<int const> cs;
-    ASSERT_EQ(cs.size(), 0);
+    ASSERT_EQ(cs.size(), 0ul);
     ASSERT_EQ(cs.data(), nullptr);
   }
 
   // Static extent
   {
     Span<int, 0> s;
-    ASSERT_EQ(s.size(), 0);
+    ASSERT_EQ(s.size(), 0ul);
     ASSERT_EQ(s.data(), nullptr);
 
     Span<int const, 0> cs;
-    ASSERT_EQ(cs.size(), 0);
+    ASSERT_EQ(cs.size(), 0ul);
     ASSERT_EQ(cs.data(), nullptr);
   }
 
   // Init list.
   {
     Span<float> s {};
-    ASSERT_EQ(s.size(), 0);
+    ASSERT_EQ(s.size(), 0ul);
     ASSERT_EQ(s.data(), nullptr);
 
     Span<int const> cs {};
-    ASSERT_EQ(cs.size(), 0);
+    ASSERT_EQ(cs.size(), 0ul);
     ASSERT_EQ(cs.data(), nullptr);
   }
 }
@@ -55,21 +55,21 @@ TEST(Span, FromNullPtr) {
   // dynamic extent
   {
     Span<float> s {nullptr, static_cast<Span<float>::index_type>(0)};
-    ASSERT_EQ(s.size(), 0);
+    ASSERT_EQ(s.size(), 0ul);
     ASSERT_EQ(s.data(), nullptr);
 
     Span<float const> cs {nullptr, static_cast<Span<float>::index_type>(0)};
-    ASSERT_EQ(cs.size(), 0);
+    ASSERT_EQ(cs.size(), 0ul);
     ASSERT_EQ(cs.data(), nullptr);
   }
   // static extent
   {
     Span<float, 0> s {nullptr, static_cast<Span<float>::index_type>(0)};
-    ASSERT_EQ(s.size(), 0);
+    ASSERT_EQ(s.size(), 0ul);
     ASSERT_EQ(s.data(), nullptr);
 
     Span<float const, 0> cs {nullptr, static_cast<Span<float>::index_type>(0)};
-    ASSERT_EQ(cs.size(), 0);
+    ASSERT_EQ(cs.size(), 0ul);
     ASSERT_EQ(cs.data(), nullptr);
   }
 }
@@ -81,7 +81,7 @@ TEST(Span, FromPtrLen) {
   // static extent
   {
     Span<float> s (arr, 16);
-    ASSERT_EQ (s.size(), 16);
+    ASSERT_EQ (s.size(), 16ul);
     ASSERT_EQ (s.data(), arr);
 
     for (Span<float>::index_type i = 0; i < 16; ++i) {
@@ -89,7 +89,7 @@ TEST(Span, FromPtrLen) {
     }
 
     Span<float const> cs (arr, 16);
-    ASSERT_EQ (cs.size(), 16);
+    ASSERT_EQ (cs.size(), 16ul);
     ASSERT_EQ (cs.data(), arr);
 
     for (Span<float const>::index_type i = 0; i < 16; ++i) {
@@ -100,7 +100,7 @@ TEST(Span, FromPtrLen) {
   // dynamic extent
   {
     Span<float, 16> s (arr, 16);
-    ASSERT_EQ (s.size(), 16);
+    ASSERT_EQ (s.size(), 16ul);
     ASSERT_EQ (s.data(), arr);
 
     for (size_t i = 0; i < 16; ++i) {
@@ -108,7 +108,7 @@ TEST(Span, FromPtrLen) {
     }
 
     Span<float const, 16> cs (arr, 16);
-    ASSERT_EQ (cs.size(), 16);
+    ASSERT_EQ (cs.size(), 16ul);
     ASSERT_EQ (cs.data(), arr);
 
     for (Span<float const>::index_type i = 0; i < 16; ++i) {
@@ -133,7 +133,7 @@ TEST(Span, FromFirstLast) {
   // dynamic extent
   {
     Span<float> s (arr, arr + 16);
-    ASSERT_EQ (s.size(), 16);
+    ASSERT_EQ (s.size(), 16ul);
     ASSERT_EQ (s.data(), arr);
     ASSERT_EQ (s.data() + s.size(), arr + 16);
 
@@ -142,7 +142,7 @@ TEST(Span, FromFirstLast) {
     }
 
     Span<float const> cs (arr, arr + 16);
-    ASSERT_EQ (cs.size(), 16);
+    ASSERT_EQ (cs.size(), 16ul);
     ASSERT_EQ (cs.data(), arr);
     ASSERT_EQ (cs.data() + cs.size(), arr + 16);
 
@@ -154,7 +154,7 @@ TEST(Span, FromFirstLast) {
   // static extent
   {
     Span<float, 16> s (arr, arr + 16);
-    ASSERT_EQ (s.size(), 16);
+    ASSERT_EQ (s.size(), 16ul);
     ASSERT_EQ (s.data(), arr);
     ASSERT_EQ (s.data() + s.size(), arr + 16);
 
@@ -163,7 +163,7 @@ TEST(Span, FromFirstLast) {
     }
 
     Span<float const> cs (arr, arr + 16);
-    ASSERT_EQ (cs.size(), 16);
+    ASSERT_EQ (cs.size(), 16ul);
     ASSERT_EQ (cs.data(), arr);
     ASSERT_EQ (cs.data() + cs.size(), arr + 16);
 
@@ -500,22 +500,22 @@ TEST(Span, Empty) {
     Span<float> s {nullptr, static_cast<Span<float>::index_type>(0)};
     auto res = s.subspan(0);
     ASSERT_EQ(res.data(), nullptr);
-    ASSERT_EQ(res.size(), 0);
+    ASSERT_EQ(res.size(), 0ul);
 
     res = s.subspan(0, 0);
     ASSERT_EQ(res.data(), nullptr);
-    ASSERT_EQ(res.size(), 0);
+    ASSERT_EQ(res.size(), 0ul);
   }
 
   {
     Span<float, 0> s {nullptr, static_cast<Span<float>::index_type>(0)};
     auto res = s.subspan(0);
     ASSERT_EQ(res.data(), nullptr);
-    ASSERT_EQ(res.size(), 0);
+    ASSERT_EQ(res.size(), 0ul);
 
     res = s.subspan(0, 0);
     ASSERT_EQ(res.data(), nullptr);
-    ASSERT_EQ(res.size(), 0);
+    ASSERT_EQ(res.size(), 0ul);
   }
 }
 

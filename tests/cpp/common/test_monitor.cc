@@ -29,7 +29,7 @@ TEST(Monitor, Logging) {
   testing::internal::CaptureStderr();
   run_monitor();
   output = testing::internal::GetCapturedStderr();
-  ASSERT_EQ(output.size(), 0);
+  ASSERT_EQ(output.size(), 0ul);
 }
 }  // namespace common
 }  // namespace xgboost

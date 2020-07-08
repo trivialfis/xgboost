@@ -57,6 +57,10 @@ __global__ void LaunchCUDAKernel(Functor _func, Range _range,
 template <bool CompiledWithCuda = WITH_CUDA()>
 class Transform {
  private:
+#if defined(__CUDACC__)
+  static_assert(CompiledWithCuda, "");
+#endif
+
   template <typename Functor>
   struct Evaluator {
    public:

@@ -29,43 +29,10 @@
 #include "../common/hist_util.h"
 #include "../common/row_set.h"
 #include "../common/column_matrix.h"
+#include "hist/row_partitioner.h"
+#include "hist/param.h"
 
 namespace xgboost {
-
-/*!
- * \brief A C-style array with in-stack allocation. As long as the array is smaller than MaxStackSize, it will be allocated inside the stack. Otherwise, it will be heap-allocated.
- */
-template<typename T, size_t MaxStackSize>
-class MemStackAllocator {
- public:
-  explicit MemStackAllocator(size_t required_size): required_size_(required_size) {
-  }
-
-  T* Get() {
-    if (!ptr_) {
-      if (MaxStackSize >= required_size_) {
-        ptr_ = stack_mem_;
-      } else {
-        ptr_ =  reinterpret_cast<T*>(malloc(required_size_ * sizeof(T)));
-        do_free_ = true;
-      }
-    }
-
-    return ptr_;
-  }
-
-  ~MemStackAllocator() {
-    if (do_free_) free(ptr_);
-  }
-
-
- private:
-  T* ptr_ = nullptr;
-  bool do_free_ = false;
-  size_t required_size_;
-  T stack_mem_[MaxStackSize];
-};
-
 namespace tree {
 
 using xgboost::common::GHistIndexMatrix;
@@ -96,19 +63,10 @@ class BatchHistRowsAdder;
 template <typename GradientSumT>
 class DistributedHistRowsAdder;
 
-// training parameters specific to this algorithm
-struct CPUHistMakerTrainParam
-    : public XGBoostParameter<CPUHistMakerTrainParam> {
-  bool single_precision_histogram;
-  // declare parameters
-  DMLC_DECLARE_PARAMETER(CPUHistMakerTrainParam) {
-    DMLC_DECLARE_FIELD(single_precision_histogram).set_default(false).describe(
-        "Use single precision to build histograms.");
-  }
-};
-
 /*! \brief construct a tree using quantized feature values */
 class QuantileHistMaker: public TreeUpdater {
+  using SplitEntry = SplitEntryContainer<GradStats>;
+
  public:
   QuantileHistMaker() {
     updater_monitor_.Init("QuantileHistMaker");
@@ -242,8 +200,12 @@ class QuantileHistMaker: public TreeUpdater {
 
     bool UpdatePredictionCache(const DMatrix* data,
                                HostDeviceVector<bst_float>* p_out_preds);
-    void SetHistSynchronizer(HistSynchronizer<GradientSumT>* sync);
-    void SetHistRowsAdder(HistRowsAdder<GradientSumT>* adder);
+    void SetHistSynchronizer(HistSynchronizer<GradientSumT>* sync) {
+      hist_synchronizer_.reset(sync);
+    }
+    void SetHistRowsAdder(HistRowsAdder<GradientSumT>* adder) {
+      hist_rows_adder_.reset(adder);
+    }
 
    protected:
     friend class HistSynchronizer<GradientSumT>;
@@ -295,11 +257,6 @@ class QuantileHistMaker: public TreeUpdater {
                         const HistCollection<GradientSumT>& hist,
                         RegTree* p_tree);
 
-    template <typename BinIdxType>
-    void PartitionKernel(const size_t node_in_set, const size_t nid, common::Range1d range,
-                         const int32_t split_cond,
-                         const ColumnMatrix& column_matrix, const RegTree& tree);
-
     void AddSplitsToRowSet(const std::vector<ExpandEntry>& nodes, RegTree* p_tree);
 
 
@@ -335,10 +292,10 @@ class QuantileHistMaker: public TreeUpdater {
                              RegTree *p_tree,
                              const std::vector<GradientPair> &gpair_h);
 
-    void BuildLocalHistograms(const GHistIndexMatrix &gmat,
-                              const GHistIndexBlockMatrix &gmatb,
-                              RegTree *p_tree,
-                              const std::vector<GradientPair> &gpair_h);
+    virtual void BuildLocalHistograms(const GHistIndexMatrix &gmat,
+                                      const GHistIndexBlockMatrix &gmatb,
+                                      RegTree *p_tree,
+                                      const std::vector<GradientPair> &gpair_h);
 
     void BuildHistogramsLossGuide(
                         ExpandEntry entry,
@@ -350,10 +307,9 @@ class QuantileHistMaker: public TreeUpdater {
     // Split nodes to 2 sets depending on amount of rows in each node
     // Histograms for small nodes will be built explicitly
     // Histograms for big nodes will be built by 'Subtraction Trick'
-    void SplitSiblings(const std::vector<ExpandEntry>& nodes,
-                   std::vector<ExpandEntry>* small_siblings,
-                   std::vector<ExpandEntry>* big_siblings,
-                   RegTree *p_tree);
+    void SplitSiblings(const std::vector<ExpandEntry> &nodes,
+                       std::vector<ExpandEntry> *small_siblings,
+                       std::vector<ExpandEntry> *big_siblings, RegTree *p_tree);
 
     void ParallelSubtractionHist(const common::BlockedSpace2d& space,
                                  const std::vector<ExpandEntry>& nodes,
@@ -415,15 +371,13 @@ class QuantileHistMaker: public TreeUpdater {
     /*! \brief feature with least # of bins. to be used for dense specialization
                of InitNewNode() */
     uint32_t fid_least_bins_;
-    /*! \brief local prediction cache; maps node id to leaf value */
-    std::vector<float> leaf_value_cache_;
 
     GHistBuilder<GradientSumT> hist_builder_;
     std::unique_ptr<TreeUpdater> pruner_;
     FeatureInteractionConstraintHost interaction_constraints_;
 
     static constexpr size_t kPartitionBlockSize = 2048;
-    common::PartitionBuilder<kPartitionBlockSize> partition_builder_;
+    PartitionBuilder<kPartitionBlockSize> partition_builder_;
 
     // back pointers to tree and data matrix
     const RegTree* p_last_tree_;

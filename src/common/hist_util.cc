@@ -10,12 +10,12 @@
 #include <vector>
 
 #include "xgboost/base.h"
+#include "xgboost/data.h"
 #include "../common/common.h"
 #include "hist_util.h"
 #include "random.h"
 #include "column_matrix.h"
 #include "quantile.h"
-#include "./../tree/updater_quantile_hist.h"
 
 #if defined(XGBOOST_MM_PREFETCH_PRESENT)
   #include <xmmintrin.h>
@@ -28,77 +28,7 @@
 
 namespace xgboost {
 namespace common {
-
-template<typename BinIdxType>
-void GHistIndexMatrix::SetIndexDataForDense(common::Span<BinIdxType> index_data_span,
-                                    size_t batch_threads, const SparsePage& batch,
-                                    size_t rbegin, common::Span<const uint32_t> offsets_span,
-                                    size_t nbins) {
-  const xgboost::Entry* data_ptr = batch.data.HostVector().data();
-  const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
-  const size_t batch_size = batch.Size();
-  CHECK_LT(batch_size, offset_vec.size());
-  BinIdxType* index_data = index_data_span.data();
-  const uint32_t* offsets = offsets_span.data();
-  #pragma omp parallel for num_threads(batch_threads) schedule(static)
-    for (omp_ulong i = 0; i < batch_size; ++i) {
-      const int tid = omp_get_thread_num();
-      size_t ibegin = row_ptr[rbegin + i];
-      size_t iend = row_ptr[rbegin + i + 1];
-      const size_t size = offset_vec[i + 1] - offset_vec[i];
-      SparsePage::Inst inst = {data_ptr + offset_vec[i], size};
-      CHECK_EQ(ibegin + inst.size(), iend);
-      for (bst_uint j = 0; j < inst.size(); ++j) {
-        uint32_t idx = cut.SearchBin(inst[j]);
-        index_data[ibegin + j] = static_cast<BinIdxType>(idx - offsets[j]);
-        ++hit_count_tloc_[tid * nbins + idx];
-      }
-    }
-}
-template void GHistIndexMatrix::SetIndexDataForDense(common::Span<uint8_t> index_data_span,
-                                             size_t batch_threads, const SparsePage& batch,
-                                             size_t rbegin,
-                                             common::Span<const uint32_t> offsets_span,
-                                             size_t nbins);
-template void GHistIndexMatrix::SetIndexDataForDense(common::Span<uint16_t> index_data_span,
-                                             size_t batch_threads, const SparsePage& batch,
-                                             size_t rbegin,
-                                             common::Span<const uint32_t> offsets_span,
-                                             size_t nbins);
-template void GHistIndexMatrix::SetIndexDataForDense(common::Span<uint32_t> index_data_span,
-                                             size_t batch_threads, const SparsePage& batch,
-                                             size_t rbegin,
-                                             common::Span<const uint32_t> offsets_span,
-                                             size_t nbins);
-
-void GHistIndexMatrix::SetIndexDataForSparse(common::Span<uint32_t> index_data_span,
-                                                 size_t batch_threads,
-                                                 const SparsePage& batch, size_t rbegin,
-                                                 size_t nbins) {
-  const xgboost::Entry* data_ptr = batch.data.HostVector().data();
-  const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
-  const size_t batch_size = batch.Size();
-  CHECK_LT(batch_size, offset_vec.size());
-  uint32_t* index_data = index_data_span.data();
-  #pragma omp parallel for num_threads(batch_threads) schedule(static)
-    for (omp_ulong i = 0; i < batch_size; ++i) {
-      const int tid = omp_get_thread_num();
-      size_t ibegin = row_ptr[rbegin + i];
-      size_t iend = row_ptr[rbegin + i + 1];
-      const size_t size = offset_vec[i + 1] - offset_vec[i];
-      SparsePage::Inst inst = {data_ptr + offset_vec[i], size};
-      CHECK_EQ(ibegin + inst.size(), iend);
-      for (bst_uint j = 0; j < inst.size(); ++j) {
-        uint32_t idx = cut.SearchBin(inst[j]);
-        index_data[ibegin + j] = idx;
-        ++hit_count_tloc_[tid * nbins + idx];
-      }
-    }
-}
-
-void GHistIndexMatrix::ResizeIndex(const size_t rbegin, const SparsePage& batch,
-                                   const size_t n_offsets, const size_t n_index,
-                                   const bool isDense) {
+void GHistIndexMatrix::ResizeIndex(const size_t n_index, const bool isDense) {
   if ((max_num_bins - 1 <= static_cast<int>(std::numeric_limits<uint8_t>::max())) && isDense) {
     index.SetBinTypeSize(kUint8BinsTypeSize);
     index.Resize((sizeof(uint8_t)) * n_index);
@@ -111,14 +41,74 @@ void GHistIndexMatrix::ResizeIndex(const size_t rbegin, const SparsePage& batch,
     index.Resize((sizeof(uint32_t)) * n_index);
   }
 }
-
 HistogramCuts::HistogramCuts() {
   cut_ptrs_.HostVector().emplace_back(0);
 }
 
+template <typename BinIdxType>
+void GHistIndexMatrix::SetIndexDataForDense(
+    common::Span<BinIdxType> index_data_span, size_t batch_threads,
+    const SparsePage &batch, size_t base_rowid,
+    common::Span<const uint32_t> offsets_span, size_t nbins) {
+  const xgboost::Entry* data_ptr = batch.data.HostVector().data();
+  const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
+  const size_t batch_size = batch.Size();
+  CHECK_LT(batch_size, offset_vec.size());
+  BinIdxType* index_data = index_data_span.data();
+  const uint32_t* offsets = offsets_span.data();
+  auto const& vals = cut.Values();
+  auto const& ptrs = cut.Ptrs();
+#pragma omp parallel for num_threads(batch_threads) schedule(static)
+  for (omp_ulong i = 0; i < batch_size; ++i) {
+    const int tid = omp_get_thread_num();
+    size_t ibegin = row_ptr[base_rowid + i];
+    size_t iend = row_ptr[base_rowid + i + 1];
+    const size_t size = offset_vec[i + 1] - offset_vec[i];
+    SparsePage::Inst inst = {data_ptr + offset_vec[i], size};
+    CHECK_EQ(ibegin + inst.size(), iend);
+    for (bst_uint j = 0; j < inst.size(); ++j) {
+      // uint32_t idx = cut.SearchBin(inst[j]);
+      auto idx = HistogramCuts::SearchBin(ptrs, vals, inst[j]);
+      index_data[ibegin + j] = static_cast<BinIdxType>(idx - offsets[j]);
+      ++hit_count_tloc_[tid * nbins + idx];
+    }
+  }
+}
+template void GHistIndexMatrix::SetIndexDataForDense(
+    common::Span<uint8_t> index_data_span, size_t batch_threads,
+    const SparsePage &batch, size_t rbegin,
+    common::Span<const uint32_t> offsets_span, size_t nbins);
+template void GHistIndexMatrix::SetIndexDataForDense(
+    common::Span<uint16_t> index_data_span, size_t batch_threads,
+    const SparsePage &batch, size_t rbegin,
+    common::Span<const uint32_t> offsets_span, size_t nbins);
+template void GHistIndexMatrix::SetIndexDataForDense(
+    common::Span<uint32_t> index_data_span, size_t batch_threads,
+    const SparsePage &batch, size_t rbegin,
+    common::Span<const uint32_t> offsets_span, size_t nbins);
+
+void GHistIndexMatrix::SetIndexDataForSparse(
+    common::Span<uint32_t> index_data_span, size_t batch_threads,
+    const SparsePage &batch, size_t base_rowid, size_t nbins) {
+  const xgboost::Entry* data_ptr = batch.data.HostVector().data();
+  const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
+  const size_t batch_size = batch.Size();
+  CHECK_LT(batch_size, offset_vec.size());
+  uint32_t* index_data = index_data_span.data();
+  auto const& vals = cut.Values();
+  auto const& ptrs = cut.Ptrs();
+#pragma omp parallel for num_threads(batch_threads) schedule(static)
+  for (size_t i = 0; i < batch.data.HostVector().size(); ++i) {
+    const int tidx = omp_get_thread_num();
+    auto e = data_ptr[i];
+    auto idx = HistogramCuts::SearchBin(ptrs, vals, e);
+    index_data[i] = idx;
+    ++hit_count_tloc_[tidx * nbins + idx];
+  }
+}
+
 void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
   cut = SketchOnDMatrix(p_fmat, max_bins);
-
   max_num_bins = max_bins;
   const int32_t nthread = omp_get_max_threads();
   const uint32_t nbins = cut.Ptrs().back();
@@ -136,9 +126,8 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
 
   size_t rbegin = 0;
   size_t prev_sum = 0;
-  const bool isDense = p_fmat->IsDense();
-  this->isDense_ = isDense;
-
+  const bool is_dense = p_fmat->IsDense();
+  this->isDense_ = is_dense;
   for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
     // The number of threads is pegged to the batch size. If the OMP
     // block is parallelized on anything other than the batch/block size,
@@ -186,12 +175,12 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
 
     const size_t n_offsets = cut.Ptrs().size() - 1;
     const size_t n_index = row_ptr[rbegin + batch.Size()];
-    ResizeIndex(rbegin, batch, n_offsets, n_index, isDense);
+    ResizeIndex(n_index, is_dense);
 
     CHECK_GT(cut.Values().size(), 0U);
 
     uint32_t* offsets = nullptr;
-    if (isDense) {
+    if (is_dense) {
       index.ResizeOffset(n_offsets);
       offsets = index.Offset();
       for (size_t i = 0; i < n_offsets; ++i) {
@@ -199,19 +188,25 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
       }
     }
 
-    if (isDense) {
-      BinTypeSize curent_bin_size = index.GetBinTypeSize();
+    if (is_dense) {
+      BinTypeSize current_bin_size = index.GetBinTypeSize();
       common::Span<const uint32_t> offsets_span = {offsets, n_offsets};
-      if (curent_bin_size == kUint8BinsTypeSize) {
-          common::Span<uint8_t> index_data_span = {index.data<uint8_t>(), n_index};
-          SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin, offsets_span, nbins);
-      } else if (curent_bin_size == kUint16BinsTypeSize) {
-          common::Span<uint16_t> index_data_span = {index.data<uint16_t>(), n_index};
-          SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin, offsets_span, nbins);
+      if (current_bin_size == kUint8BinsTypeSize) {
+        common::Span<uint8_t> index_data_span = {index.data<uint8_t>(),
+                                                 n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
+      } else if (current_bin_size == kUint16BinsTypeSize) {
+        common::Span<uint16_t> index_data_span = {index.data<uint16_t>(),
+                                                  n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
       } else {
-          CHECK_EQ(curent_bin_size, kUint32BinsTypeSize);
-          common::Span<uint32_t> index_data_span = {index.data<uint32_t>(), n_index};
-          SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin, offsets_span, nbins);
+        CHECK_EQ(current_bin_size, kUint32BinsTypeSize);
+        common::Span<uint32_t> index_data_span = {index.data<uint32_t>(),
+                                                  n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
       }
 
     /* For sparse DMatrix we have to store index of feature for each bin
@@ -221,7 +216,7 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
       SetIndexDataForSparse(index_data_span, batch_threads, batch, rbegin, nbins);
     }
 
-    #pragma omp parallel for num_threads(nthread) schedule(static)
+#pragma omp parallel for num_threads(nthread) schedule(static)
     for (bst_omp_uint idx = 0; idx < bst_omp_uint(nbins); ++idx) {
       for (int32_t tid = 0; tid < nthread; ++tid) {
         hit_count[idx] += hit_count_tloc_[tid * nbins + idx];
@@ -230,6 +225,131 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
     }
 
     prev_sum = row_ptr[rbegin + batch.Size()];
+    CHECK_EQ(batch.base_rowid, rbegin);
+    rbegin += batch.Size();
+  }
+}
+
+void GHistIndexMatrix::Init(DMatrix *p_fmat, HistogramCuts const &cuts,
+                            int32_t max_bins) {
+  this->cut = cuts;
+  max_num_bins = max_bins;
+  const int32_t nthread = omp_get_max_threads();
+  const uint32_t nbins = cut.Ptrs().back();
+  hit_count.resize(nbins, 0);
+  hit_count_tloc_.resize(nthread * nbins, 0);
+
+  this->p_fmat = p_fmat;
+  size_t new_size = 1;
+  for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+    new_size += batch.Size();
+  }
+
+  row_ptr.resize(new_size);
+  row_ptr[0] = 0;
+
+  size_t rbegin = 0;
+  size_t prev_sum = 0;
+  const bool is_dense = p_fmat->IsDense();
+  this->isDense_ = is_dense;
+  for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+    // The number of threads is pegged to the batch size. If the OMP
+    // block is parallelized on anything other than the batch/block size,
+    // it should be reassigned
+    const size_t batch_threads = std::max(
+        size_t(1),
+        std::min(batch.Size(), static_cast<size_t>(omp_get_max_threads())));
+    MemStackAllocator<size_t, 128> partial_sums(batch_threads);
+    size_t* p_part = partial_sums.Get();
+
+    size_t block_size =  batch.Size() / batch_threads;
+
+    #pragma omp parallel num_threads(batch_threads)
+    {
+      #pragma omp for
+      for (omp_ulong tid = 0; tid < batch_threads; ++tid) {
+        size_t ibegin = block_size * tid;
+        size_t iend = (tid == (batch_threads-1) ? batch.Size() : (block_size * (tid+1)));
+
+        size_t sum = 0;
+        for (size_t i = ibegin; i < iend; ++i) {
+          sum += batch[i].size();
+          row_ptr[rbegin + 1 + i] = sum;
+        }
+      }
+
+      #pragma omp single
+      {
+        p_part[0] = prev_sum;
+        for (size_t i = 1; i < batch_threads; ++i) {
+          p_part[i] = p_part[i - 1] + row_ptr[rbegin + i*block_size];
+        }
+      }
+
+      #pragma omp for
+      for (omp_ulong tid = 0; tid < batch_threads; ++tid) {
+        size_t ibegin = block_size * tid;
+        size_t iend = (tid == (batch_threads-1) ? batch.Size() : (block_size * (tid+1)));
+
+        for (size_t i = ibegin; i < iend; ++i) {
+          row_ptr[rbegin + 1 + i] += p_part[tid];
+        }
+      }
+    }
+
+    const size_t n_offsets = cut.Ptrs().size() - 1;
+    const size_t n_index = row_ptr[rbegin + batch.Size()];
+    ResizeIndex(n_index, is_dense);
+
+    CHECK_GT(cut.Values().size(), 0U);
+
+    uint32_t* offsets = nullptr;
+    if (is_dense) {
+      index.ResizeOffset(n_offsets);
+      offsets = index.Offset();
+      for (size_t i = 0; i < n_offsets; ++i) {
+        offsets[i] = cut.Ptrs()[i];
+      }
+    }
+
+    if (is_dense) {
+      BinTypeSize current_bin_size = index.GetBinTypeSize();
+      common::Span<const uint32_t> offsets_span = {offsets, n_offsets};
+      if (current_bin_size == kUint8BinsTypeSize) {
+        common::Span<uint8_t> index_data_span = {index.data<uint8_t>(),
+                                                 n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
+      } else if (current_bin_size == kUint16BinsTypeSize) {
+        common::Span<uint16_t> index_data_span = {index.data<uint16_t>(),
+                                                  n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
+      } else {
+        CHECK_EQ(current_bin_size, kUint32BinsTypeSize);
+        common::Span<uint32_t> index_data_span = {index.data<uint32_t>(),
+                                                  n_index};
+        SetIndexDataForDense(index_data_span, batch_threads, batch, rbegin,
+                             offsets_span, nbins);
+      }
+
+    /* For sparse DMatrix we have to store index of feature for each bin
+       in index field to chose right offset. So offset is nullptr and index is not reduced */
+    } else {
+      common::Span<uint32_t> index_data_span = {index.data<uint32_t>(), n_index};
+      SetIndexDataForSparse(index_data_span, batch_threads, batch, rbegin, nbins);
+    }
+
+#pragma omp parallel for num_threads(nthread) schedule(static)
+    for (bst_omp_uint idx = 0; idx < bst_omp_uint(nbins); ++idx) {
+      for (int32_t tid = 0; tid < nthread; ++tid) {
+        hit_count[idx] += hit_count_tloc_[tid * nbins + idx];
+        hit_count_tloc_[tid * nbins + idx] = 0;  // reset for next batch
+      }
+    }
+
+    prev_sum = row_ptr[rbegin + batch.Size()];
+    CHECK_EQ(batch.base_rowid, rbegin);
     rbegin += batch.Size();
   }
 }
@@ -532,24 +652,6 @@ template void IncrementHist(GHistRow<double> dst, const GHistRow<double> add,
                             size_t begin, size_t end);
 
 /*!
- * \brief Copy hist from src to dst in range [begin, end)
- */
-template<typename GradientSumT>
-void CopyHist(GHistRow<GradientSumT> dst, const GHistRow<GradientSumT> src,
-              size_t begin, size_t end) {
-  GradientSumT* pdst = reinterpret_cast<GradientSumT*>(dst.data());
-  const GradientSumT* psrc = reinterpret_cast<const GradientSumT*>(src.data());
-
-  for (size_t i = 2 * begin; i < 2 * end; ++i) {
-    pdst[i] = psrc[i];
-  }
-}
-template void CopyHist(GHistRow<float> dst, const GHistRow<float> src,
-                       size_t begin, size_t end);
-template void CopyHist(GHistRow<double> dst, const GHistRow<double> src,
-                       size_t begin, size_t end);
-
-/*!
  * \brief Compute Subtraction: dst = src1 - src2 in range [begin, end)
  */
 template<typename GradientSumT>
@@ -675,19 +777,18 @@ void BuildHistSparseKernel(const std::vector<GradientPair>& gpair,
   }
 }
 
-
-template<typename FPType, bool do_prefetch, typename BinIdxType>
-void BuildHistDispatchKernel(const std::vector<GradientPair>& gpair,
-                     const RowSetCollection::Elem row_indices,
-                     const GHistIndexMatrix& gmat, GHistRow<FPType> hist, bool isDense) {
+template <typename FPType, bool do_prefetch, typename BinIdxType>
+void BuildHistDispatchKernel(const std::vector<GradientPair> &gpair,
+                             const RowSetCollection::Elem row_indices,
+                             const GHistIndexMatrix &gmat,
+                             GHistRow<FPType> hist, bool isDense) {
   if (isDense) {
     const size_t* row_ptr =  gmat.row_ptr.data();
     const size_t n_features = row_ptr[row_indices.begin[0]+1] - row_ptr[row_indices.begin[0]];
-    BuildHistDenseKernel<FPType, do_prefetch, BinIdxType>(gpair, row_indices,
-                                                       gmat, n_features, hist);
+    BuildHistDenseKernel<FPType, do_prefetch, BinIdxType>(
+        gpair, row_indices, gmat, n_features, hist);
   } else {
-    BuildHistSparseKernel<FPType, do_prefetch>(gpair, row_indices,
-                                                        gmat, hist);
+    BuildHistSparseKernel<FPType, do_prefetch>(gpair, row_indices, gmat, hist);
   }
 }
 
@@ -737,24 +838,22 @@ void GHistBuilder<GradientSumT>::BuildHist(
     BuildHistKernel<GradientSumT, false>(gpair, span2, gmat, isDense, hist);
   }
 }
-template
-void GHistBuilder<float>::BuildHist(const std::vector<GradientPair>& gpair,
-                             const RowSetCollection::Elem row_indices,
-                             const GHistIndexMatrix& gmat,
-                             GHistRow<float> hist,
-                             bool isDense);
-template
-void GHistBuilder<double>::BuildHist(const std::vector<GradientPair>& gpair,
-                             const RowSetCollection::Elem row_indices,
-                             const GHistIndexMatrix& gmat,
-                             GHistRow<double> hist,
-                             bool isDense);
+template void
+GHistBuilder<float>::BuildHist(const std::vector<GradientPair> &gpair,
+                               const RowSetCollection::Elem row_indices,
+                               const GHistIndexMatrix &gmat,
+                               GHistRow<float> hist, bool isDense);
+template void
+GHistBuilder<double>::BuildHist(const std::vector<GradientPair> &gpair,
+                                const RowSetCollection::Elem row_indices,
+                                const GHistIndexMatrix &gmat,
+                                GHistRow<double> hist, bool isDense);
 
-template<typename GradientSumT>
-void GHistBuilder<GradientSumT>::BuildBlockHist(const std::vector<GradientPair>& gpair,
-                                  const RowSetCollection::Elem row_indices,
-                                  const GHistIndexBlockMatrix& gmatb,
-                                  GHistRowT hist) {
+template <typename GradientSumT>
+void GHistBuilder<GradientSumT>::BuildBlockHist(
+    const std::vector<GradientPair> &gpair,
+    const RowSetCollection::Elem row_indices,
+    const GHistIndexBlockMatrix &gmatb, GHistRowT hist) {
   constexpr int kUnroll = 8;  // loop unrolling factor
   const size_t nblock = gmatb.GetNumBlock();
   const size_t nrows = row_indices.end - row_indices.begin;
