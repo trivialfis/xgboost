@@ -2,6 +2,7 @@
  * Copyright 2020 by XGBoost Contributors
  */
 #include <limits>
+#include <utility>
 #include "quantile.h"
 #include "hist_util.h"
 
@@ -12,7 +13,7 @@ HostSketchContainer::HostSketchContainer(std::vector<bst_row_t> columns_size,
                                          int32_t max_bins, bool use_group)
     : columns_size_{std::move(columns_size)}, max_bins_{max_bins},
       use_group_ind_{use_group} {
-  CHECK_NE(columns_size.size(), 0);
+  CHECK_NE(columns_size_.size(), 0);
   sketches_.resize(columns_size.size());
 
   for (size_t i = 0; i < sketches_.size(); ++i) {
