@@ -14,7 +14,7 @@ HostSketchContainer::HostSketchContainer(std::vector<bst_row_t> columns_size,
     : columns_size_{std::move(columns_size)}, max_bins_{max_bins},
       use_group_ind_{use_group} {
   CHECK_NE(columns_size_.size(), 0);
-  sketches_.resize(columns_size.size());
+  sketches_.resize(columns_size_.size());
 
   for (size_t i = 0; i < sketches_.size(); ++i) {
     auto n_bins = std::min(static_cast<size_t>(max_bins_), columns_size_[i]);
