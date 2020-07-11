@@ -137,7 +137,7 @@ template <typename Func>
 void ParallelFor(size_t size, size_t nthreads, Func fn) {
   dmlc::OMPException omp_exc;
 #pragma omp parallel for num_threads(nthreads)
-  for (size_t i = 0; i < size; ++i) {
+  for (omp_ulong i = 0; i < size; ++i) {
     omp_exc.Run(fn, i);
   }
   omp_exc.Rethrow();
