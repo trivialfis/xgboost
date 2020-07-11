@@ -246,8 +246,8 @@ struct HostSparsePageView {
   common::Span<Entry const> data;
 
   Inst operator[](size_t i) const {
-    auto size = offset[i + 1] - offset[i];
-    return {data.data() + offset[i],
+    auto size = *(offset.data() + i + 1) - *(offset.data() + i);
+    return {data.data() + *(offset.data() + i),
             static_cast<Inst::index_type>(size)};
   }
 

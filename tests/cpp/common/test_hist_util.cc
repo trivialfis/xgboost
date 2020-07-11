@@ -196,7 +196,8 @@ TEST(HistUtil, DenseCutsCategorical) {
 
 TEST(HistUtil, DenseCutsAccuracyTest) {
   int bin_sizes[] = {2, 16, 256, 512};
-  int sizes[] = {100, 1000, 1500};
+  int sizes[] = {100};
+  // omp_set_num_threads(1);
   int num_columns = 5;
   for (auto num_rows : sizes) {
     auto x = GenerateRandom(num_rows, num_columns);

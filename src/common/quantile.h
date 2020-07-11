@@ -690,22 +690,14 @@ class HistogramCuts;
  * A sketch matrix storing sketches for each feature.
  */
 class HostSketchContainer {
-  std::vector< WQuantileSketch<float, float> > sketches_;
-  std::vector<bst_row_t> columns_size_;
-  int32_t max_bins_;
-  bool use_group_ind_{false};
-
  public:
   using WQSketch = WQuantileSketch<float, float>;
 
-  static bool UseGroup(MetaInfo const &info) {
-    size_t const num_groups =
-        info.group_ptr_.size() == 0 ? 0 : info.group_ptr_.size() - 1;
-    // Use group index for weights?
-    bool const use_group_ind =
-        num_groups != 0 && (info.weights_.Size() != info.num_row_);
-    return use_group_ind;
-  }
+ private:
+  std::vector<WQSketch> sketches_;
+  std::vector<bst_row_t> columns_size_;
+  int32_t max_bins_;
+  bool use_group_ind_{false};
 
  public:
   /* \brief Initialize necessary info.
@@ -716,6 +708,15 @@ class HostSketchContainer {
    */
   HostSketchContainer(std::vector<bst_row_t> columns_size, int32_t max_bins,
                       bool use_group);
+
+  static bool UseGroup(MetaInfo const &info) {
+    size_t const num_groups =
+        info.group_ptr_.size() == 0 ? 0 : info.group_ptr_.size() - 1;
+    // Use group index for weights?
+    bool const use_group_ind =
+        num_groups != 0 && (info.weights_.Size() != info.num_row_);
+    return use_group_ind;
+  }
 
   static uint32_t SearchGroupIndFromRow(std::vector<bst_uint> const &group_ptr,
                                         size_t const base_rowid) {

@@ -15,20 +15,17 @@ HostSketchContainer::HostSketchContainer(std::vector<bst_row_t> columns_size,
       use_group_ind_{use_group} {
   CHECK_NE(columns_size_.size(), 0);
   sketches_.resize(columns_size_.size());
-
   for (size_t i = 0; i < sketches_.size(); ++i) {
     auto n_bins = std::min(static_cast<size_t>(max_bins_), columns_size_[i]);
     n_bins = std::max(n_bins, 1ul);
-    sketches_[i].Init(columns_size_[i],
-                      1.0 / (static_cast<float>(n_bins) * WQSketch::kFactor));
+    auto eps = 1.0 / (static_cast<float>(n_bins) * WQSketch::kFactor);
+    sketches_[i].Init(columns_size_[i], eps);
   }
 }
 
-void HostSketchContainer::PushRowPage(SparsePage const &batch,
+void HostSketchContainer::PushRowPage(SparsePage const &page,
                                       MetaInfo const &info) {
-  const int nthread = omp_get_max_threads();
-
-  auto nstep = static_cast<unsigned>((info.num_col_ + nthread - 1) / nthread);
+  int nthread = omp_get_max_threads();
   CHECK_EQ(sketches_.size(), info.num_col_);
 
   // Data groups, used in ranking.
@@ -36,40 +33,54 @@ void HostSketchContainer::PushRowPage(SparsePage const &batch,
   size_t const num_groups = group_ptr.size() == 0 ? 0 : group_ptr.size() - 1;
   // Use group index for weights?
   size_t group_ind = 0;
+  auto batch = page.GetView();
   if (use_group_ind_) {
-    group_ind = this->SearchGroupIndFromRow(group_ptr, batch.base_rowid);
+    group_ind = this->SearchGroupIndFromRow(group_ptr, page.base_rowid);
   }
   dmlc::OMPException exec;
   // Parallel over columns.  Asumming the data is dense, each thread owns a set of
   // consecutive columns.
+  unsigned const nstep =
+      static_cast<unsigned>((info.num_col_ + nthread - 1) / nthread);
+  unsigned const ncol = static_cast<unsigned>(info.num_col_);
+  auto is_dense = info.num_nonzero_ == info.num_col_ * info.num_row_;
 #pragma omp parallel num_threads(nthread) firstprivate(group_ind, use_group_ind_)
   {
-    exec.Run([&]() {
-      CHECK_EQ(nthread, omp_get_num_threads());
-      auto tid = static_cast<unsigned>(omp_get_thread_num());
-      size_t begin = nstep * tid;
-      size_t end = nstep * (tid + 1);
-      for (size_t ridx = 0; ridx < batch.Size(); ++ridx) {
-        auto inst = batch[ridx];
-        end = std::min(end, inst.size());
+    CHECK_EQ(nthread, omp_get_num_threads());
+    auto tid = static_cast<unsigned>(omp_get_thread_num());
+    unsigned begin = std::min(nstep * tid, ncol);
+    unsigned end = std::min(nstep * (tid + 1), ncol);
+
+    // do not iterate if no columns are assigned to the thread
+    if (begin < end && end <= ncol) {
+      for (size_t i = 0; i < batch.Size(); ++i) { // NOLINT(*)
+        size_t const ridx = page.base_rowid + i;
+        SparsePage::Inst const inst = batch[i];
         if (use_group_ind_ && group_ptr[group_ind] == ridx &&
             // maximum equals to weights.size() - 1
             group_ind < num_groups - 1) {
           // move to next group
           group_ind++;
         }
-        if (inst.size() > begin) {
-          // handle portion of a row.
-          auto dbeg = inst.data() + begin;
-          auto dend = inst.data() + end;
-          size_t w_idx = use_group_ind_ ? group_ind : ridx;
-          auto w = info.GetWeight(w_idx);
-          for (auto it = dbeg; it != dend; ++it) {
-            sketches_[it->index].Push(it->fvalue, w);
+        size_t w_idx = use_group_ind_ ? group_ind : ridx;
+        auto w = info.GetWeight(w_idx);
+        if (is_dense) {
+          auto data = inst.data();
+          for (size_t ii = begin; ii < end; ii++) {
+            sketches_[ii].Push(data[ii].fvalue, w);
+          }
+        } else {
+          auto p_data = inst.data();
+          auto p_end = inst.data() + inst.size();
+          for (auto it = p_data;
+               it->index < end && it != p_end; ++it) {
+            if (it->index >= begin) {
+              sketches_[it->index].Push(it->fvalue, w);
+            }
           }
         }
       }
-    });
+    }
   }
   exec.Rethrow();
 }
