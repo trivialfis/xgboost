@@ -20,7 +20,39 @@ HostSketchContainer::HostSketchContainer(std::vector<bst_row_t> columns_size,
     n_bins = std::max(n_bins, 1ul);
     auto eps = 1.0 / (static_cast<float>(n_bins) * WQSketch::kFactor);
     sketches_[i].Init(columns_size_[i], eps);
+    sketches_[i].inqueue.queue.resize(sketches_[i].limit_size * 2);
   }
+}
+
+std::vector<bst_row_t> LoadBalance(SparsePage const& page,
+                                   std::vector<size_t> columns_size,
+                                   size_t const nthreads) {
+  /* Some sparse datasets have their mass concentrating on small
+   * number of features.  To avoid wating for a few threads running
+   * forever, we here distirbute different number of columns to
+   * different threads according to number of entries. */
+  size_t const total_entries = page.data.Size();
+  size_t const entries_per_thread = common::DivRoundUp(total_entries, nthreads);
+
+  std::vector<size_t> cols_ptr(nthreads+1, 0);
+  size_t count {0};
+  size_t current_thread {1};
+
+  for (auto col : columns_size) {
+    cols_ptr[current_thread]++;  // add one column to thread
+    count += col;
+    if (count > entries_per_thread + 1) {
+      current_thread++;
+      count = 0;
+      cols_ptr[current_thread] = cols_ptr[current_thread-1];
+    }
+  }
+  // Idle threads.
+  for (; current_thread < cols_ptr.size() - 1; ++current_thread) {
+    cols_ptr[current_thread+1] = cols_ptr[current_thread];
+  }
+
+  return cols_ptr;
 }
 
 void HostSketchContainer::PushRowPage(SparsePage const &page,
@@ -40,16 +72,16 @@ void HostSketchContainer::PushRowPage(SparsePage const &page,
   dmlc::OMPException exec;
   // Parallel over columns.  Asumming the data is dense, each thread owns a set of
   // consecutive columns.
-  unsigned const nstep =
-      static_cast<unsigned>((info.num_col_ + nthread - 1) / nthread);
-  unsigned const ncol = static_cast<unsigned>(info.num_col_);
-  auto is_dense = info.num_nonzero_ == info.num_col_ * info.num_row_;
+  auto const ncol = static_cast<uint32_t>(info.num_col_);
+  auto const is_dense = info.num_nonzero_ == info.num_col_ * info.num_row_;
+  auto thread_columns_ptr = LoadBalance(page, columns_size_, nthread);
+
 #pragma omp parallel num_threads(nthread) firstprivate(group_ind, use_group_ind_)
   {
     CHECK_EQ(nthread, omp_get_num_threads());
-    auto tid = static_cast<unsigned>(omp_get_thread_num());
-    unsigned begin = std::min(nstep * tid, ncol);
-    unsigned end = std::min(nstep * (tid + 1), ncol);
+    auto tid = static_cast<uint32_t>(omp_get_thread_num());
+    uint32_t const begin = thread_columns_ptr[tid];
+    uint32_t const end = thread_columns_ptr[tid + 1];
 
     // do not iterate if no columns are assigned to the thread
     if (begin < end && end <= ncol) {
@@ -64,18 +96,28 @@ void HostSketchContainer::PushRowPage(SparsePage const &page,
         }
         size_t w_idx = use_group_ind_ ? group_ind : ridx;
         auto w = info.GetWeight(w_idx);
+        auto p_data = inst.data();
         if (is_dense) {
-          auto data = inst.data();
           for (size_t ii = begin; ii < end; ii++) {
-            sketches_[ii].Push(data[ii].fvalue, w);
+            sketches_[ii].Push(p_data[ii].fvalue, w);
           }
         } else {
-          auto p_data = inst.data();
           auto p_end = inst.data() + inst.size();
-          for (auto it = p_data;
-               it->index < end && it != p_end; ++it) {
-            if (it->index >= begin) {
-              sketches_[it->index].Push(it->fvalue, w);
+          auto mid = static_cast<size_t>(
+              (static_cast<double>(begin) / static_cast<double>(ncol)) *
+              static_cast<double>(inst.size()));
+          if (mid < inst.size() / 2) {
+            for (auto it = p_data; it->index < end && it != p_end; ++it) {
+              if (it->index >= begin) {
+                sketches_[it->index].Push(it->fvalue, w);
+              }
+            }
+          } else {
+            for (auto it = p_end - 1; it->index >= begin && it >= p_data;
+                 --it) {
+              if (it->index < end) {
+                sketches_[it->index].Push(it->fvalue, w);
+              }
             }
           }
         }
