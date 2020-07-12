@@ -5,6 +5,7 @@ namespace xgboost {
 namespace tree {
 class GlobalApprox : public QuantileHistMaker {
   std::unique_ptr<Builder<float>> builder_;
+  std::vector<float> hessians_;
   // std::unique_ptr<TreeUpdater> pruner_;
   // std::unique_ptr<SplitEvaluator> spliteval_;
   // FeatureInteractionConstraintHost int_constraint_;
@@ -28,11 +29,11 @@ class GlobalApprox : public QuantileHistMaker {
       }
     }
     GHistIndexMatrix gradient_index;
-    std::vector<float> hessians(gpair->Size());
+    hessians_.resize(gpair->Size());
     auto const &h_gpair = gpair->ConstHostVector();
-    std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians.begin(),
+    std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians_.begin(),
                    [](GradientPair const &g) { return g.GetHess(); });
-    gradient_index.Init(dmat, hessians, param_.max_bin);
+    gradient_index.Init(dmat, hessians_, param_.max_bin);
     ColumnMatrix column_matrix;
     column_matrix.Init(gradient_index, param_.sparse_threshold);
     GHistIndexBlockMatrix gmatb;
