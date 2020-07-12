@@ -84,7 +84,8 @@ void QuantileHistMaker::Update(HostDeviceVector<GradientPair> *gpair,
                                const std::vector<RegTree *> &trees) {
   if (dmat != p_last_dmat_ || is_gmat_initialized_ == false) {
     updater_monitor_.Start("GmatInitialization");
-    gmat_.Init(dmat, static_cast<uint32_t>(param_.max_bin));
+    gmat_.Init(dmat, dmat->Info().weights_.ConstHostVector(),
+               static_cast<uint32_t>(param_.max_bin));
     column_matrix_.Init(gmat_, param_.sparse_threshold);
     if (param_.enable_feature_grouping > 0) {
       gmatb_.Init(gmat_, column_matrix_, param_);

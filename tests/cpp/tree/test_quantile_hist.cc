@@ -312,7 +312,7 @@ class QuantileHistMock : public QuantileHistMaker {
       // dense, no missing values
 
       common::GHistIndexMatrix gmat;
-      gmat.Init(dmat.get(), kMaxBins);
+      gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), kMaxBins);
 
       RealImpl::InitData(gmat, row_gpairs, *dmat, tree);
       this->hist_.AddHistRow(0);
@@ -409,7 +409,7 @@ class QuantileHistMock : public QuantileHistMaker {
         auto dmat = RandomDataGenerator(kNRows, kNCols, sparsity).Seed(3).GenerateDMatrix();
 
         common::GHistIndexMatrix gmat;
-        gmat.Init(dmat.get(), kMaxBins);
+        gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), kMaxBins);
         ColumnMatrix cm;
 
         // treat everything as dense, as this is what we intend to test here
@@ -517,7 +517,7 @@ class QuantileHistMock : public QuantileHistMaker {
   void TestInitData() {
     size_t constexpr kMaxBins = 4;
     common::GHistIndexMatrix gmat;
-    gmat.Init(dmat_.get(), kMaxBins);
+    gmat.Init(dmat_.get(), dmat_->Info().weights_.HostVector(), kMaxBins);
 
     RegTree tree = RegTree();
     tree.param.UpdateAllowUnknown(cfg_);
@@ -535,7 +535,7 @@ class QuantileHistMock : public QuantileHistMaker {
   void TestInitDataSampling() {
     size_t constexpr kMaxBins = 4;
     common::GHistIndexMatrix gmat;
-    gmat.Init(dmat_.get(), kMaxBins);
+    gmat.Init(dmat_.get(), dmat_->Info().weights_.HostVector(), kMaxBins);
 
     RegTree tree = RegTree();
     tree.param.UpdateAllowUnknown(cfg_);
@@ -553,7 +553,7 @@ class QuantileHistMock : public QuantileHistMaker {
   void TestAddHistRows() {
     size_t constexpr kMaxBins = 4;
     common::GHistIndexMatrix gmat;
-    gmat.Init(dmat_.get(), kMaxBins);
+    gmat.Init(dmat_.get(), dmat_->Info().weights_.HostVector(), kMaxBins);
 
     RegTree tree = RegTree();
     tree.param.UpdateAllowUnknown(cfg_);
@@ -570,7 +570,7 @@ class QuantileHistMock : public QuantileHistMaker {
   void TestSyncHistograms() {
     size_t constexpr kMaxBins = 4;
     common::GHistIndexMatrix gmat;
-    gmat.Init(dmat_.get(), kMaxBins);
+    gmat.Init(dmat_.get(), dmat_->Info().weights_.HostVector(), kMaxBins);
 
     RegTree tree = RegTree();
     tree.param.UpdateAllowUnknown(cfg_);
@@ -591,7 +591,7 @@ class QuantileHistMock : public QuantileHistMaker {
 
     size_t constexpr kMaxBins = 4;
     common::GHistIndexMatrix gmat;
-    gmat.Init(dmat_.get(), kMaxBins);
+    gmat.Init(dmat_.get(), dmat_->Info().weights_.HostVector(), kMaxBins);
     if (double_builder_) {
       double_builder_->TestBuildHist(0, gmat, *dmat_, tree);
     } else {

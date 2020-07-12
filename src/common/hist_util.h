@@ -108,7 +108,7 @@ class HistogramCuts {
   }
 };
 
-inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
+inline HistogramCuts SketchOnDMatrix(DMatrix *m, std::vector<float> const& weights, int32_t max_bins) {
   HistogramCuts out;
   auto const& info = m->Info();
   const auto threads = omp_get_max_threads();
@@ -139,7 +139,7 @@ inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
   HostSketchContainer container(reduced, max_bins,
                                 HostSketchContainer::UseGroup(info));
   for (auto const &page : m->GetBatches<SparsePage>()) {
-    container.PushRowPage(page, info);
+    container.PushRowPage(page, weights, info);
   }
   container.MakeCuts(&out);
   return out;
@@ -257,7 +257,7 @@ struct GHistIndexMatrix {
   DMatrix* p_fmat;
   size_t max_num_bins;
   // Create a global histogram matrix, given cut
-  void Init(DMatrix* p_fmat, int max_num_bins);
+  void Init(DMatrix* p_fmat, std::vector<float> const &weights, int max_num_bins);
 
   template<typename BinIdxType>
   void SetIndexDataForDense(common::Span<BinIdxType> index_data_span,

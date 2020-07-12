@@ -15,7 +15,7 @@ TEST(DenseColumn, Test) {
   for (size_t max_num_bin : max_num_bins) {
     auto dmat = RandomDataGenerator(100, 10, 0.0).GenerateDMatrix();
     GHistIndexMatrix gmat;
-    gmat.Init(dmat.get(), max_num_bin);
+    gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), max_num_bin);
     ColumnMatrix column_matrix;
     column_matrix.Init(gmat, 0.2);
 
@@ -63,7 +63,7 @@ TEST(SparseColumn, Test) {
   for (size_t max_num_bin : max_num_bins) {
     auto dmat = RandomDataGenerator(100, 1, 0.85).GenerateDMatrix();
     GHistIndexMatrix gmat;
-    gmat.Init(dmat.get(), max_num_bin);
+    gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), max_num_bin);
     ColumnMatrix column_matrix;
     column_matrix.Init(gmat, 0.5);
     switch (column_matrix.GetTypeSize()) {
@@ -104,7 +104,7 @@ TEST(DenseColumnWithMissing, Test) {
   for (size_t max_num_bin : max_num_bins) {
     auto dmat = RandomDataGenerator(100, 1, 0.5).GenerateDMatrix();
     GHistIndexMatrix gmat;
-    gmat.Init(dmat.get(), max_num_bin);
+    gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), max_num_bin);
     ColumnMatrix column_matrix;
     column_matrix.Init(gmat, 0.2);
     switch (column_matrix.GetTypeSize()) {
@@ -134,7 +134,7 @@ void TestGHistIndexMatrixCreation(size_t nthreads) {
   std::unique_ptr<DMatrix> dmat{ CreateSparsePageDMatrix(1024, 1024, filename) };
   omp_set_num_threads(nthreads);
   GHistIndexMatrix gmat;
-  gmat.Init(dmat.get(), 256);
+  gmat.Init(dmat.get(), dmat->Info().weights_.HostVector(), 256);
 }
 
 TEST(HistIndexCreationWithExternalMemory, Test) {

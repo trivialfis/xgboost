@@ -727,7 +727,8 @@ class HostSketchContainer {
   }
 
   /* \brief Push a CSR matrix. */
-  void PushRowPage(SparsePage const& page, MetaInfo const& info);
+  void PushRowPage(SparsePage const &page, std::vector<float> const &weights,
+                   MetaInfo const &info);
 
   void MakeCuts(HistogramCuts* cuts);
 };

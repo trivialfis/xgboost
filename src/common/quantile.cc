@@ -56,6 +56,7 @@ std::vector<bst_row_t> LoadBalance(SparsePage const& page,
 }
 
 void HostSketchContainer::PushRowPage(SparsePage const &page,
+                                      std::vector<float> const& weights,
                                       MetaInfo const &info) {
   int nthread = omp_get_max_threads();
   CHECK_EQ(sketches_.size(), info.num_col_);
@@ -95,7 +96,7 @@ void HostSketchContainer::PushRowPage(SparsePage const &page,
           group_ind++;
         }
         size_t w_idx = use_group_ind_ ? group_ind : ridx;
-        auto w = info.GetWeight(w_idx);
+        auto w = weights.size() == 0 ? 1.0f : weights[w_idx];
         auto p_data = inst.data();
         if (is_dense) {
           for (size_t ii = begin; ii < end; ii++) {

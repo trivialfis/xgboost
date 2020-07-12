@@ -25,7 +25,8 @@ TEST(Quantile, SameOnAllWorkers) {
                      .Device(0)
                      .Seed(rank + seed)
                      .GenerateDMatrix();
-        auto cuts = SketchOnDMatrix(m.get(), n_bins);
+        auto cuts =
+            SketchOnDMatrix(m.get(), m->Info().weights_.HostVector(), n_bins);
         std::vector<float> cut_values(cuts.Values().size() * world, 0);
         std::vector<
             typename std::remove_reference_t<decltype(cuts.Ptrs())>::value_type>

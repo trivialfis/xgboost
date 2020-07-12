@@ -184,7 +184,8 @@ TEST(HistUtil, DenseCutsCategorical) {
        std::vector<float> x_sorted(x);
        std::sort(x_sorted.begin(), x_sorted.end());
        auto dmat = GetDMatrixFromData(x, n, 1);
-       HistogramCuts cuts = SketchOnDMatrix(dmat.get(), num_bins);
+       HistogramCuts cuts = SketchOnDMatrix(
+           dmat.get(), dmat->Info().weights_.HostVector(), num_bins);
        auto cuts_from_sketch = cuts.Values();
        EXPECT_LT(cuts.MinValues()[0], x_sorted.front());
        EXPECT_GT(cuts_from_sketch.front(), x_sorted.front());
@@ -203,7 +204,8 @@ TEST(HistUtil, DenseCutsAccuracyTest) {
     auto x = GenerateRandom(num_rows, num_columns);
     auto dmat = GetDMatrixFromData(x, num_rows, num_columns);
     for (auto num_bins : bin_sizes) {
-      HistogramCuts cuts = SketchOnDMatrix(dmat.get(), num_bins);
+      HistogramCuts cuts = SketchOnDMatrix(
+          dmat.get(), dmat->Info().weights_.HostVector(), num_bins);
       ValidateCuts(cuts, dmat.get(), num_bins);
     }
   }
@@ -219,7 +221,8 @@ TEST(HistUtil, DenseCutsAccuracyTestWeights) {
     auto w = GenerateRandomWeights(num_rows);
     dmat->Info().weights_.HostVector() = w;
     for (auto num_bins : bin_sizes) {
-      HistogramCuts cuts = SketchOnDMatrix(dmat.get(), num_bins);
+      HistogramCuts cuts = SketchOnDMatrix(
+          dmat.get(), dmat->Info().weights_.HostVector(), num_bins);
       ValidateCuts(cuts, dmat.get(), num_bins);
     }
   }
@@ -235,7 +238,8 @@ TEST(HistUtil, DenseCutsExternalMemory) {
     auto dmat =
         GetExternalMemoryDMatrixFromData(x, num_rows, num_columns, 50, tmpdir);
     for (auto num_bins : bin_sizes) {
-      HistogramCuts cuts = SketchOnDMatrix(dmat.get(), num_bins);
+      HistogramCuts cuts = SketchOnDMatrix(
+          dmat.get(), dmat->Info().weights_.HostVector(), num_bins);
       ValidateCuts(cuts, dmat.get(), num_bins);
     }
   }
@@ -256,7 +260,7 @@ TEST(HistUtil, IndexBinBound) {
     auto p_fmat = RandomDataGenerator(kRows, kCols, 0).GenerateDMatrix();
 
     common::GHistIndexMatrix hmat;
-    hmat.Init(p_fmat.get(), max_bin);
+    hmat.Init(p_fmat.get(), p_fmat->Info().weights_.HostVector(), max_bin);
     EXPECT_EQ(hmat.index.Size(), kRows*kCols);
     EXPECT_EQ(expected_bin_type_sizes[bin_id++], hmat.index.GetBinTypeSize());
   }
@@ -280,7 +284,7 @@ TEST(HistUtil, IndexBinData) {
   for (auto max_bin : kBinSizes) {
     auto p_fmat = RandomDataGenerator(kRows, kCols, 0).GenerateDMatrix();
     common::GHistIndexMatrix hmat;
-    hmat.Init(p_fmat.get(), max_bin);
+    hmat.Init(p_fmat.get(), p_fmat->Info().weights_.HostVector(), max_bin);
     uint32_t* offsets = hmat.index.Offset();
     EXPECT_EQ(hmat.index.Size(), kRows*kCols);
     switch (max_bin) {
@@ -305,7 +309,7 @@ void TestSketchFromWeights(bool with_group) {
   size_t constexpr kGroups = 10;
   auto m =
       RandomDataGenerator{kRows, kCols, 0}.Device(0).GenerateDMatrix();
-  common::HistogramCuts cuts = SketchOnDMatrix(m.get(), kBins);
+  common::HistogramCuts cuts = SketchOnDMatrix(m.get(), m->Info().weights_.HostVector(), kBins);
 
   MetaInfo info;
   auto& h_weights = info.weights_.HostVector();
@@ -339,7 +343,8 @@ void TestSketchFromWeights(bool with_group) {
   ValidateCuts(cuts, m.get(), kBins);
 
   if (with_group) {
-    HistogramCuts non_weighted = SketchOnDMatrix(m.get(), kBins);
+    HistogramCuts non_weighted =
+        SketchOnDMatrix(m.get(), m->Info().weights_.HostVector(), kBins);
     for (size_t i = 0; i < cuts.Values().size(); ++i) {
       EXPECT_EQ(cuts.Values()[i], non_weighted.Values()[i]);
     }

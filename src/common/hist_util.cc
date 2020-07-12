@@ -116,15 +116,9 @@ HistogramCuts::HistogramCuts() {
   cut_ptrs_.HostVector().emplace_back(0);
 }
 
-void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
-  Monitor timer;
-  timer.Init("Sketch");
-  timer.Start("SketchOnDMatrix");
-  std::cout << "Start SketchOnDMatrix" << std::endl;
-  cut = SketchOnDMatrix(p_fmat, max_bins);
-  std::cout << "Finish SketchOnDMatrix" << std::endl;
-  timer.Stop("SketchOnDMatrix");
-  timer.Print();
+void GHistIndexMatrix::Init(DMatrix *p_fmat, std::vector<float> const &weights,
+                            int max_bins) {
+  cut = SketchOnDMatrix(p_fmat, weights, max_bins);
 
   max_num_bins = max_bins;
   const int32_t nthread = omp_get_max_threads();
