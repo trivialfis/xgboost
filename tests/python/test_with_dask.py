@@ -294,7 +294,8 @@ def test_empty_dmatrix_approx():
 
 
 class TestWithDask(unittest.TestCase):
-    def run_updater_test(client, params, num_rounds, dataset, tree_method):
+    def run_updater_test(self, client, params, num_rounds, dataset,
+                         tree_method):
         params['tree_method'] = tree_method
         params = dataset.set_params(params)
         # multi class doesn't handle empty dataset well (empty
@@ -350,7 +351,9 @@ class TestWithDask(unittest.TestCase):
                               '../build/testxgboost', '../cpu-build/testxgboost'}:
             if os.path.exists(possible_path):
                 exe = possible_path
-        assert exe, 'No testxgboost executable found.'
+        if exe is None:
+            return
+
         test = "--gtest_filter=Quantile." + name
 
         def runit(worker_addr, rabit_args):
