@@ -160,8 +160,13 @@ TEST(GPUPredictor, MGPU_InplacePredict) {  // NOLINT
                dmlc::Error);
 }
 
+
 TEST(GpuPredictor, LesserFeatures) {
   TestPredictionWithLesserFeatures("gpu_predictor");
+}
+
+TEST(GPUPredictor, CategoricalPrediction) {
+  TestCategoricalPrediction("gpu_predictor");
 }
 }  // namespace predictor
 }  // namespace xgboost

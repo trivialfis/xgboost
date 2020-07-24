@@ -17,9 +17,9 @@ struct EvaluateSplitInputs {
   GradientSumT parent_sum;
   GPUTrainingParam param;
   common::Span<const bst_feature_t> feature_set;
+  common::Span<FeatureType const> feature_types;
   common::Span<const uint32_t> feature_segments;
   common::Span<const float> feature_values;
-  common::Span<const float> min_fvalue;
   common::Span<const GradientSumT> gradient_histogram;
   ValueConstraint value_constraint;
   common::Span<const int> monotonic_constraints;

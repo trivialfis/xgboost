@@ -16,6 +16,7 @@
 #include "hist_util.h"
 #include "device_helpers.cuh"
 #include "common.h"
+#include "categorical.h"
 
 namespace xgboost {
 namespace common {
@@ -304,9 +305,13 @@ void SketchContainer::Prune(size_t to) {
   this->Unique();
   OffsetT to_total = 0;
   HostDeviceVector<OffsetT> new_columns_ptr{to_total};
+  auto const& h_feature_types = feature_types_.ConstHostSpan();
   for (bst_feature_t i = 0; i < num_columns_; ++i) {
     size_t length = this->Column(i).size();
     length = std::min(length, to);
+    if (IsCat(h_feature_types, i)) {
+      length = this->Column(i).size();
+    }
     to_total += length;
     new_columns_ptr.HostVector().emplace_back(to_total);
   }
@@ -317,6 +322,7 @@ void SketchContainer::Prune(size_t to) {
   auto d_columns_ptr_out = new_columns_ptr.ConstDeviceSpan();
   auto out = dh::ToSpan(this->Other());
   auto in = dh::ToSpan(this->Current());
+  auto ft = this->feature_types_.ConstDeviceSpan();
   dh::LaunchN(0, to_total, [=] __device__(size_t idx) {
     size_t column_id = dh::SegmentId(d_columns_ptr_out, idx);
     auto out_column = out.subspan(d_columns_ptr_out[column_id],
@@ -326,10 +332,11 @@ void SketchContainer::Prune(size_t to) {
                                 d_columns_ptr_in[column_id + 1] -
                                     d_columns_ptr_in[column_id]);
     idx -= d_columns_ptr_out[column_id];
+    auto is_cat = IsCat(ft, column_id);
     // Input has lesser columns than `to`, just copy them to the output.  This is correct
     // as the new output size is calculated based on both the size of `to` and current
     // column.
-    if (in_column.size() <= to) {
+    if (in_column.size() <= to || is_cat) {
       out_column[idx] = in_column[idx];
       return;
     }
@@ -473,7 +480,8 @@ void SketchContainer::AllReduce() {
   }
 
   // Merge them into a new sketch.
-  SketchContainer new_sketch(num_bins_, this->num_columns_, global_sum_rows,
+  SketchContainer new_sketch(this->feature_types_, num_bins_,
+                             this->num_columns_, global_sum_rows,
                              this->device_);
   for (size_t i = 0; i < allworkers.size(); ++i) {
     auto worker = allworkers[i];
@@ -491,7 +499,6 @@ void SketchContainer::AllReduce() {
 void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
   timer_.Start(__func__);
   dh::safe_cuda(cudaSetDevice(device_));
-  p_cuts->min_vals_.Resize(num_columns_);
 
   // Sync between workers.
   this->AllReduce();
@@ -503,9 +510,6 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
 
   // Set up inputs
   auto d_in_columns_ptr = this->columns_ptr_.ConstDeviceSpan();
-
-  p_cuts->min_vals_.SetDevice(device_);
-  auto d_min_values = p_cuts->min_vals_.DeviceSpan();
   auto in_cut_values = dh::ToSpan(this->Current());
 
   // Set up output ptr
@@ -513,11 +517,16 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
   auto& h_out_columns_ptr = p_cuts->cut_ptrs_.HostVector();
   h_out_columns_ptr.clear();
   h_out_columns_ptr.push_back(0);
+  auto const& h_feature_types = this->feature_types_.ConstHostSpan();
   for (bst_feature_t i = 0; i < num_columns_; ++i) {
-    h_out_columns_ptr.push_back(
-        std::min(static_cast<size_t>(std::max(static_cast<size_t>(1ul),
-                                              this->Column(i).size())),
-                 static_cast<size_t>(num_bins_)));
+    size_t column_size = std::max(static_cast<size_t>(1ul),
+                                  this->Column(i).size());
+    if (IsCat(h_feature_types, i)) {
+      h_out_columns_ptr.push_back(static_cast<size_t>(column_size));
+    } else {
+      h_out_columns_ptr.push_back(std::min(static_cast<size_t>(column_size),
+                                           static_cast<size_t>(num_bins_)));
+    }
   }
   std::partial_sum(h_out_columns_ptr.begin(), h_out_columns_ptr.end(),
                    h_out_columns_ptr.begin());
@@ -528,6 +537,7 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
   p_cuts->cut_values_.SetDevice(device_);
   p_cuts->cut_values_.Resize(total_bins);
   auto out_cut_values = p_cuts->cut_values_.DeviceSpan();
+  auto d_ft = feature_types_.ConstDeviceSpan();
 
   dh::LaunchN(0, total_bins, [=] __device__(size_t idx) {
     auto column_id = dh::SegmentId(d_out_columns_ptr, idx);
@@ -543,18 +553,18 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
       // column is empty, trees cannot split on it.  This is just to be consistent with
       // rest of the library.
       if (idx == 0) {
-        d_min_values[column_id] = kRtEps;
         out_column[0] = kRtEps;
         assert(out_column.size() == 1);
       }
       return;
     }
 
-    // First thread is responsible for setting min values.
-    if (idx == 0) {
-      auto mval = in_column[idx].value;
-      d_min_values[column_id] = mval - (fabs(mval) + 1e-5);
+    if (IsCat(d_ft, column_id)) {
+      assert(out_column.size() == in_column.size());
+      out_column[idx] = in_column[idx].value;
+      return;
     }
+
     // Last thread is responsible for setting a value that's greater than other cuts.
     if (idx == out_column.size() - 1) {
       const bst_float cpt = in_column.back().value;

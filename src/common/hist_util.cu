@@ -24,6 +24,7 @@
 #include "hist_util.cuh"
 #include "math.h"  // NOLINT
 #include "quantile.h"
+#include "categorical.h"
 #include "xgboost/host_device_vector.h"
 
 
@@ -36,6 +37,7 @@ namespace detail {
 
 // Count the entries in each column and exclusive scan
 void ExtractCutsSparse(int device, common::Span<SketchContainer::OffsetT const> cuts_ptr,
+                       common::Span<FeatureType const> feature_types,
                        Span<Entry const> sorted_data,
                        Span<size_t const> column_sizes_scan,
                        Span<SketchEntry> out_cuts) {
@@ -48,10 +50,16 @@ void ExtractCutsSparse(int device, common::Span<SketchContainer::OffsetT const> 
     size_t cut_idx = idx - cuts_ptr[column_idx];
     Span<Entry const> column_entries =
         sorted_data.subspan(column_sizes_scan[column_idx], column_size);
-    size_t rank = (column_entries.size() * cut_idx) /
-                  static_cast<float>(num_available_cuts);
-    out_cuts[idx] = WQSketch::Entry(rank, rank + 1, 1,
-                                    column_entries[rank].fvalue);
+    if (IsCat(feature_types, column_idx)) {
+      size_t rank = cut_idx;
+      out_cuts[idx] = WQSketch::Entry(rank, rank + 1, 1,
+                                      column_entries[rank].fvalue);
+    } else {
+      size_t rank = (column_entries.size() * cut_idx) /
+                    static_cast<float>(num_available_cuts);
+      out_cuts[idx] = WQSketch::Entry(rank, rank + 1, 1,
+                                      column_entries[rank].fvalue);
+    }
   });
 }
 
@@ -150,9 +158,6 @@ size_t RequiredMemory(bst_row_t num_rows, bst_feature_t num_columns, size_t nnz,
   // 9. Allocate final cut values, min values, cut ptrs: std::min(rows, bins + 1) *
   //    n_columns + n_columns + n_columns + 1
   total += std::min(num_rows, num_bins) * num_columns * sizeof(float);
-  total += num_columns *
-           sizeof(std::remove_reference_t<decltype(
-                      std::declval<HistogramCuts>().MinValues())>::value_type);
   total += (num_columns + 1) *
            sizeof(std::remove_reference_t<decltype(
                       std::declval<HistogramCuts>().Ptrs())>::value_type);
@@ -196,13 +201,13 @@ void SortByWeight(dh::XGBCachingDeviceAllocator<char>* alloc,
 }
 }  // namespace detail
 
-void ProcessBatch(int device, const SparsePage &page, size_t begin, size_t end,
-                  SketchContainer *sketch_container, int num_cuts_per_feature,
-                  size_t num_columns) {
+void ProcessBatch(int device, DMatrix const *m, const SparsePage &page,
+                  size_t begin, size_t end, SketchContainer *sketch_container,
+                  int num_cuts_per_feature, size_t num_columns) {
   dh::XGBCachingDeviceAllocator<char> alloc;
   const auto& host_data = page.data.ConstHostVector();
   dh::device_vector<Entry> sorted_entries(host_data.begin() + begin,
-                                                  host_data.begin() + end);
+                                          host_data.begin() + end);
   thrust::sort(thrust::cuda::par(alloc), sorted_entries.begin(),
                sorted_entries.end(), detail::EntryCompareOp());
 
@@ -219,13 +224,48 @@ void ProcessBatch(int device, const SparsePage &page, size_t begin, size_t end,
                              0, sorted_entries.size(),
                              &cuts_ptr, &column_sizes_scan);
 
-  auto const& h_cuts_ptr = cuts_ptr.ConstHostVector();
-  dh::caching_device_vector<SketchEntry> cuts(h_cuts_ptr.back());
-  auto d_cuts_ptr = cuts_ptr.ConstDeviceSpan();
+  // Removing duplicated entries in categorical features.
+  dh::caching_device_vector<size_t> new_column_scan(column_sizes_scan.size());
+  auto d_feature_types = m->Info().feature_types.ConstDeviceSpan();
+  auto n_uniques = dh::SegmentedUnique(
+      column_sizes_scan.data().get(),
+      column_sizes_scan.data().get() + column_sizes_scan.size(),
+      sorted_entries.begin(), sorted_entries.end(),
+      new_column_scan.data().get(), sorted_entries.begin(),
+      [=] __device__(Entry const &l, Entry const &r) {
+        if (l.index == r.index) {
+          if (IsCat(d_feature_types, l.index)) {
+            return l.fvalue == r.fvalue;
+          }
+        }
+        return false;
+      });
 
+  // Renew the column scan and cut scan based on categorical data.
+  dh::caching_device_vector<SketchContainer::OffsetT> new_cuts_size(num_columns + 1);
+  auto d_new_cuts_size = dh::ToSpan(new_cuts_size);
+  auto d_new_columns_ptr = dh::ToSpan(new_column_scan);
+  auto d_cuts_ptr = cuts_ptr.DeviceSpan();
+  CHECK_EQ(new_column_scan.size(), new_cuts_size.size());
+  dh::LaunchN(device, new_column_scan.size() - 1, [=] __device__(size_t idx) {
+    idx += 1;
+    if (IsCat(d_feature_types, idx - 1)) {
+      d_new_cuts_size[idx - 1] =
+          d_new_columns_ptr[idx] - d_new_columns_ptr[idx - 1];
+    } else {
+      d_new_cuts_size[idx - 1] = d_cuts_ptr[idx] - d_cuts_ptr[idx - 1];
+    }
+  });
+  thrust::exclusive_scan(thrust::device, new_cuts_size.cbegin(),
+                         new_cuts_size.cend(), d_cuts_ptr.data());
+  auto const& h_cuts_ptr = cuts_ptr.ConstHostVector();
+  sorted_entries.resize(n_uniques);
+  dh::caching_device_vector<SketchEntry> cuts(h_cuts_ptr.back());
   CHECK_EQ(d_cuts_ptr.size(), column_sizes_scan.size());
-  detail::ExtractCutsSparse(device, d_cuts_ptr, dh::ToSpan(sorted_entries),
-                            dh::ToSpan(column_sizes_scan), dh::ToSpan(cuts));
+
+  detail::ExtractCutsSparse(device, d_cuts_ptr, d_feature_types,
+                            dh::ToSpan(sorted_entries),
+                            dh::ToSpan(new_column_scan), dh::ToSpan(cuts));
 
   // add cuts into sketches
   sorted_entries.clear();
@@ -314,7 +354,9 @@ HistogramCuts DeviceSketch(int device, DMatrix* dmat, int max_bins,
 
   HistogramCuts cuts;
   DenseCuts dense_cuts(&cuts);
-  SketchContainer sketch_container(max_bins, dmat->Info().num_col_,
+
+  dmat->Info().feature_types.SetDevice(device);
+  SketchContainer sketch_container(dmat->Info().feature_types, max_bins, dmat->Info().num_col_,
                                    dmat->Info().num_row_, device);
 
   dmat->Info().weights_.SetDevice(device);
@@ -334,7 +376,7 @@ HistogramCuts DeviceSketch(int device, DMatrix* dmat, int max_bins,
             dmat->Info().num_col_,
             is_ranking, dh::ToSpan(groups));
       } else {
-        ProcessBatch(device, batch, begin, end, &sketch_container, num_cuts_per_feature,
+        ProcessBatch(device, dmat, batch, begin, end, &sketch_container, num_cuts_per_feature,
                      dmat->Info().num_col_);
       }
     }

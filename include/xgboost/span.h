@@ -82,6 +82,7 @@ namespace common {
              "\tBlock: [%d, %d, %d], Thread: [%d, %d, %d]\n\n",                \
              __FILE__, __LINE__, __PRETTY_FUNCTION__, #cond, blockIdx.x,       \
              blockIdx.y, blockIdx.z, threadIdx.x, threadIdx.y, threadIdx.z);   \
+      assert(false);                                                           \
       asm("trap;");                                                            \
     }                                                                          \
   } while (0);
@@ -100,6 +101,18 @@ namespace common {
     }                                                                          \
   } while (0);
 #endif  // __CUDA_ARCH__
+
+#if defined(__CUDA_ARCH__)
+#define SPAN_LT(lhs, rhs)                                                      \
+  if (!((lhs) < (rhs))) {                                                      \
+    printf("%lu < %lu failed\n", static_cast<size_t>(lhs),                     \
+           static_cast<size_t>(rhs));                                          \
+    assert(false);                                                             \
+  }
+#else
+#define SPAN_LT(lhs, rhs)                       \
+  SPAN_CHECK((lhs) < (rhs))
+#endif  // defined(__CUDA_ARCH__)
 
 namespace detail {
 /*!
@@ -515,6 +528,7 @@ class Span {
   }
 
   XGBOOST_DEVICE reference operator[](index_type _idx) const {
+    SPAN_LT(_idx, size());
     SPAN_CHECK(_idx < size());
     return data()[_idx];
   }
@@ -648,6 +662,11 @@ XGBOOST_DEVICE auto as_writable_bytes(Span<T, E> s) __span_noexcept ->  // NOLIN
   return {reinterpret_cast<byte*>(s.data()), s.size_bytes()};
 }
 
+template <typename T, template <class, class...> class Container, typename... Types,
+          std::size_t Extent = dynamic_extent>
+auto MakeSpan(Container<T, Types...> const &container) {
+  return Span<T, Extent>(container);
+}
 }  // namespace common
 }  // namespace xgboost
 

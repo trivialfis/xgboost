@@ -47,17 +47,13 @@ class HistogramCuts {
  public:
   HostDeviceVector<bst_float> cut_values_;  // NOLINT
   HostDeviceVector<uint32_t> cut_ptrs_;     // NOLINT
-  // storing minimum value in a sketch set.
-  HostDeviceVector<float> min_vals_;  // NOLINT
 
   HistogramCuts();
   HistogramCuts(HistogramCuts const& that) {
     cut_values_.Resize(that.cut_values_.Size());
     cut_ptrs_.Resize(that.cut_ptrs_.Size());
-    min_vals_.Resize(that.min_vals_.Size());
     cut_values_.Copy(that.cut_values_);
     cut_ptrs_.Copy(that.cut_ptrs_);
-    min_vals_.Copy(that.min_vals_);
   }
 
   HistogramCuts(HistogramCuts&& that) noexcept(true) {
@@ -67,10 +63,8 @@ class HistogramCuts {
   HistogramCuts& operator=(HistogramCuts const& that) {
     cut_values_.Resize(that.cut_values_.Size());
     cut_ptrs_.Resize(that.cut_ptrs_.Size());
-    min_vals_.Resize(that.min_vals_.Size());
     cut_values_.Copy(that.cut_values_);
     cut_ptrs_.Copy(that.cut_ptrs_);
-    min_vals_.Copy(that.min_vals_);
     return *this;
   }
 
@@ -78,7 +72,6 @@ class HistogramCuts {
     monitor_ = std::move(that.monitor_);
     cut_ptrs_ = std::move(that.cut_ptrs_);
     cut_values_ = std::move(that.cut_values_);
-    min_vals_ = std::move(that.min_vals_);
     return *this;
   }
 
@@ -95,15 +88,14 @@ class HistogramCuts {
   // these for now.
   std::vector<uint32_t> const& Ptrs()      const { return cut_ptrs_.ConstHostVector();   }
   std::vector<float>    const& Values()    const { return cut_values_.ConstHostVector(); }
-  std::vector<float>    const& MinValues() const { return min_vals_.ConstHostVector();   }
 
   size_t TotalBins() const { return cut_ptrs_.ConstHostVector().back(); }
 
   // Return the index of a cut point that is strictly greater than the input
   // value, or the last available index if none exists
   BinIdx SearchBin(float value, uint32_t column_id) const {
-    auto beg = cut_ptrs_.ConstHostVector().at(column_id);
     auto end = cut_ptrs_.ConstHostVector().at(column_id + 1);
+    auto beg = cut_ptrs_.ConstHostVector()[column_id];
     const auto &values = cut_values_.ConstHostVector();
     auto it = std::upper_bound(values.cbegin() + beg, values.cbegin() + end, value);
     BinIdx idx = it - values.cbegin();

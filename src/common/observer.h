@@ -71,7 +71,7 @@ class TrainingObserver {
 
     for (size_t i = 0; i < h_vec.size(); ++i) {
       OBSERVER_PRINT << h_vec[i] << ", ";
-      if (i % 8 == 0) {
+      if (i % 8 == 0 && i != 0) {
         OBSERVER_PRINT << OBSERVER_NEWLINE;
       }
       if ((i + 1) == n) {

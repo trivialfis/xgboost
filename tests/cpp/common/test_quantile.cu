@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "../helpers.h"
+#include "test_quantile.h"
 #include "../../../src/common/hist_util.cuh"
 #include "../../../src/common/quantile.cuh"
 
@@ -7,7 +8,8 @@ namespace xgboost {
 namespace common {
 TEST(GPUQuantile, Basic) {
   constexpr size_t kRows = 1000, kCols = 100, kBins = 256;
-  SketchContainer sketch(kBins, kCols, kRows, 0);
+  HostDeviceVector<FeatureType> ft;
+  SketchContainer sketch(ft, kBins, kCols, kRows, 0);
   dh::caching_device_vector<SketchEntry> entries;
   dh::device_vector<bst_row_t> cuts_ptr(kCols+1);
   thrust::fill(cuts_ptr.begin(), cuts_ptr.end(), 0);
@@ -45,7 +47,8 @@ template <typename Fn> void RunWithSeedsAndBins(size_t rows, Fn fn) {
 void TestSketchUnique(float sparsity) {
   constexpr size_t kRows = 1000, kCols = 100;
   RunWithSeedsAndBins(kRows, [kRows, kCols, sparsity](int32_t seed, size_t n_bins, MetaInfo const& info) {
-    SketchContainer sketch(n_bins, kCols, kRows, 0);
+    HostDeviceVector<FeatureType> ft;
+    SketchContainer sketch(ft, n_bins, kCols, kRows, 0);
 
     HostDeviceVector<float> storage;
     std::string interface_str = RandomDataGenerator{kRows, kCols, sparsity}
@@ -119,7 +122,8 @@ void TestQuantileElemRank(int32_t device, Span<SketchEntry const> in,
 TEST(GPUQuantile, Prune) {
   constexpr size_t kRows = 1000, kCols = 100;
   RunWithSeedsAndBins(kRows, [=](int32_t seed, size_t n_bins, MetaInfo const& info) {
-    SketchContainer sketch(n_bins, kCols, kRows, 0);
+    HostDeviceVector<FeatureType> ft;
+    SketchContainer sketch(ft, n_bins, kCols, kRows, 0);
 
     HostDeviceVector<float> storage;
     std::string interface_str = RandomDataGenerator{kRows, kCols, 0}
@@ -152,7 +156,8 @@ TEST(GPUQuantile, Prune) {
 TEST(GPUQuantile, MergeEmpty) {
   constexpr size_t kRows = 1000, kCols = 100;
   size_t n_bins = 10;
-  SketchContainer sketch_0(n_bins, kCols, kRows, 0);
+  HostDeviceVector<FeatureType> ft;
+  SketchContainer sketch_0(ft, n_bins, kCols, kRows, 0);
   HostDeviceVector<float> storage_0;
   std::string interface_str_0 =
       RandomDataGenerator{kRows, kCols, 0}.Device(0).GenerateArrayInterface(
@@ -191,7 +196,8 @@ TEST(GPUQuantile, MergeEmpty) {
 TEST(GPUQuantile, MergeBasic) {
   constexpr size_t kRows = 1000, kCols = 100;
   RunWithSeedsAndBins(kRows, [=](int32_t seed, size_t n_bins, MetaInfo const& info) {
-    SketchContainer sketch_0(n_bins, kCols, kRows, 0);
+    HostDeviceVector<FeatureType> ft;
+    SketchContainer sketch_0(ft, n_bins, kCols, kRows, 0);
     HostDeviceVector<float> storage_0;
     std::string interface_str_0 = RandomDataGenerator{kRows, kCols, 0}
                                       .Device(0)
@@ -201,7 +207,7 @@ TEST(GPUQuantile, MergeBasic) {
     AdapterDeviceSketch(adapter_0.Value(), n_bins, info,
                         std::numeric_limits<float>::quiet_NaN(), &sketch_0);
 
-    SketchContainer sketch_1(n_bins, kCols, kRows * kRows, 0);
+    SketchContainer sketch_1(ft, n_bins, kCols, kRows * kRows, 0);
     HostDeviceVector<float> storage_1;
     std::string interface_str_1 = RandomDataGenerator{kRows, kCols, 0}
                                       .Device(0)
@@ -237,7 +243,8 @@ TEST(GPUQuantile, MergeBasic) {
 void TestMergeDuplicated(int32_t n_bins, size_t cols, size_t rows, float frac) {
   MetaInfo info;
   int32_t seed = 0;
-  SketchContainer sketch_0(n_bins, cols, rows, 0);
+  HostDeviceVector<FeatureType> ft;
+  SketchContainer sketch_0(ft, n_bins, cols, rows, 0);
   HostDeviceVector<float> storage_0;
   std::string interface_str_0 = RandomDataGenerator{rows, cols, 0}
                                     .Device(0)
@@ -249,7 +256,7 @@ void TestMergeDuplicated(int32_t n_bins, size_t cols, size_t rows, float frac) {
                       &sketch_0);
 
   size_t f_rows = rows * frac;
-  SketchContainer sketch_1(n_bins, cols, f_rows, 0);
+  SketchContainer sketch_1(ft, n_bins, cols, f_rows, 0);
   HostDeviceVector<float> storage_1;
   std::string interface_str_1 = RandomDataGenerator{f_rows, cols, 0}
                                     .Device(0)
@@ -332,7 +339,8 @@ TEST(GPUQuantile, AllReduceBasic) {
   constexpr size_t kRows = 1000, kCols = 100;
   RunWithSeedsAndBins(kRows, [=](int32_t seed, size_t n_bins, MetaInfo const& info) {
     // Set up single node version;
-    SketchContainer sketch_on_single_node(n_bins, kCols, kRows, 0);
+    HostDeviceVector<FeatureType> ft;
+    SketchContainer sketch_on_single_node(ft, n_bins, kCols, kRows, 0);
 
     size_t intermediate_num_cuts =
         std::min(kRows * world, static_cast<size_t>(n_bins * WQSketch::kFactor));
@@ -344,7 +352,8 @@ TEST(GPUQuantile, AllReduceBasic) {
                                       .Seed(rank + seed)
                                       .GenerateArrayInterface(&storage);
       data::CupyAdapter adapter(interface_str);
-      containers.emplace_back(n_bins, kCols, kRows, 0);
+      HostDeviceVector<FeatureType> ft;
+      containers.emplace_back(ft, n_bins, kCols, kRows, 0);
       AdapterDeviceSketch(adapter.Value(), n_bins, info,
                           std::numeric_limits<float>::quiet_NaN(),
                           &containers.back());
@@ -361,7 +370,7 @@ TEST(GPUQuantile, AllReduceBasic) {
     // Set up distributed version.  We rely on using rank as seed to generate
     // the exact same copy of data.
     auto rank = rabit::GetRank();
-    SketchContainer sketch_distributed(n_bins, kCols, kRows, 0);
+    SketchContainer sketch_distributed(ft, n_bins, kCols, kRows, 0);
     HostDeviceVector<float> storage;
     std::string interface_str = RandomDataGenerator{kRows, kCols, 0}
                                     .Device(0)
@@ -420,7 +429,8 @@ TEST(GPUQuantile, SameOnAllWorkers) {
   RunWithSeedsAndBins(kRows, [=](int32_t seed, size_t n_bins,
                                  MetaInfo const &info) {
     auto rank = rabit::GetRank();
-    SketchContainer sketch_distributed(n_bins, kCols, kRows, 0);
+    HostDeviceVector<FeatureType> ft;
+    SketchContainer sketch_distributed(ft, n_bins, kCols, kRows, 0);
     HostDeviceVector<float> storage;
     std::string interface_str = RandomDataGenerator{kRows, kCols, 0}
                                     .Device(0)
@@ -476,6 +486,18 @@ TEST(GPUQuantile, SameOnAllWorkers) {
   LOG(WARNING) << msg;
   return;
 #endif  // !defined(__linux__) && defined(XGBOOST_USE_NCCL)
+}
+
+TEST(GPUQuantile, FromOneHot) {
+  std::vector<float> x = BasicOneHotEncodedData();
+  auto m = GetDMatrixFromData(x, 5, 3);
+  int32_t max_bins = 16;
+  auto cuts = DeviceSketch(0, m.get(), max_bins);
+
+  std::vector<uint32_t> const& h_cuts_ptr = cuts.Ptrs();
+  std::vector<float> h_cuts_values = cuts.Values();
+
+  ValidateBasicOneHot(h_cuts_ptr, h_cuts_values);
 }
 }  // namespace common
 }  // namespace xgboost

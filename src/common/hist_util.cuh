@@ -38,6 +38,7 @@ struct EntryCompareOp {
  * \param out_cuts              Output cut values
  */
 void ExtractCutsSparse(int device, common::Span<SketchContainer::OffsetT const> cuts_ptr,
+                       common::Span<FeatureType const> feature_types,
                        Span<Entry const> sorted_data,
                        Span<size_t const> column_sizes_scan,
                        Span<SketchEntry> out_cuts);
@@ -189,6 +190,7 @@ void ProcessSlidingWindow(AdapterBatch const& batch, int device, size_t columns,
   dh::caching_device_vector<SketchEntry> cuts(h_cuts_ptr.back());
   // Extract the cuts from all columns concurrently
   detail::ExtractCutsSparse(device, d_cuts_ptr,
+                            {},
                             dh::ToSpan(sorted_entries),
                             dh::ToSpan(column_sizes_scan),
                             dh::ToSpan(cuts));
