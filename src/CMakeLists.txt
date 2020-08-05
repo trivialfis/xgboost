@@ -108,6 +108,9 @@ if (ARROW_FOUND AND ARROW_PYTHON_FOUND)
                               ${ARROW_INCLUDE_DIR}
                               ${ARROW_PYTHON_INCLUDE_DIR}
                               ${Python3_INCLUDE_DIRS})
+  target_compile_definitions(objxgboost PRIVATE
+                    -DXGBOOST_BUILD_ARROW_SUPPORT=1
+                    -D_GLIBCXX_USE_CXX11_ABI=0)
   target_link_libraries(objxgboost PUBLIC
                         ${ARROW_SHARED_LIB}
                         ${ARROW_PYTHON_SHARED_LIB}

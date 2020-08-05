@@ -422,6 +422,47 @@ class ArrowAdapter : public detail::SingleBatchDataIter<ArrowAdapterBatch> {
   xgboost::bst_row_t num_rows_;
   xgboost::bst_feature_t num_columns_;
 };
+
+class ApacheArrowBatch : public detail::NoMetaInfo {
+  std::shared_ptr<arrow::RecordBatch> batch_;
+  struct Line {
+    COOTuple GetElement() const;
+    size_t Size() const;
+  };
+
+ public:
+  explicit ApacheArrowBatch(std::shared_ptr<arrow::RecordBatch> batch)
+      : batch_{std::move(batch)} {};
+  Line GetLine(size_t idx) const {
+    return {};
+  }
+};
+
+class ApacheArrowAdapter : public dmlc::DataIter<ApacheArrowBatch> {
+ public:
+   ApacheArrowAdapter(const RecordBatches &record_batches,
+                      const TableColumn &label_col, xgboost::bst_row_t num_rows,
+                      xgboost::bst_feature_t num_cols)
+       : num_rows_(num_rows), num_columns_(num_cols) {
+     for (auto b : record_batches) {
+       batches_.emplace_back(b);
+     }
+   }
+
+  ApacheArrowBatch const& Value() const override {
+    CHECK_NE(iter_, batch_.size());
+    return batches_[iter_];
+  }
+  xgboost::bst_row_t NumRows() const { return num_rows_; }
+  xgboost::bst_feature_t NumColumns() const { return num_columns_; }
+
+ private:
+  size_t iter_ {0};
+  RecordBatches batch_;
+  std::vector<ApacheArrowBatch> batches_;
+  xgboost::bst_row_t num_rows_;
+  xgboost::bst_feature_t num_columns_;
+};
 #endif
 
 class DataTableAdapterBatch : public detail::NoMetaInfo {
