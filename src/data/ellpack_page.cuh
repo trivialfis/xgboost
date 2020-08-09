@@ -92,7 +92,8 @@ struct EllpackDeviceAccessor {
     auto beg = feature_segments[column_id];
     auto end = feature_segments[column_id + 1];
     auto it =
-        thrust::upper_bound(thrust::seq, gidx_fvalue_map.cbegin()+ beg, gidx_fvalue_map.cbegin() + end, value);
+        thrust::lower_bound(thrust::seq, gidx_fvalue_map.cbegin()+ beg,
+                            gidx_fvalue_map.cbegin() + end, value);
     uint32_t idx = it - gidx_fvalue_map.cbegin();
     if (idx == end) {
       idx -= 1;
