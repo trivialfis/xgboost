@@ -111,7 +111,7 @@ struct NumericBin {
     GradientSumT bin = thread_active
                        ? inputs.gradient_histogram[scan_begin + threadIdx.x]
                        : GradientSumT();
-    ScanT(temp_storage->scan).ExclusiveScan(bin, bin, cub::Sum(), *prefix_callback);
+    ScanT(temp_storage->scan).InclusiveScan(bin, bin, cub::Sum(), *prefix_callback);
     return bin;
   }
 };
@@ -125,13 +125,8 @@ struct UpdateNumeric {
                              DeviceSplitCandidate *best_split) {
     // Use pointer from cut to indicate begin and end of bins for each feature.
     uint32_t gidx_begin = inputs.feature_segments[fidx];  // begining bin
-    int split_gidx = (scan_begin + threadIdx.x) - 1;
-    float fvalue;
-    if (split_gidx < static_cast<int>(gidx_begin)) {
-      fvalue = common::kTrivialSplit;
-    } else {
-      fvalue = inputs.feature_values[split_gidx];
-    }
+    int split_gidx = (scan_begin + threadIdx.x);
+    float fvalue = inputs.feature_values[split_gidx];;
     GradientSumT left = missing_left ? bin + missing : bin;
     GradientSumT right = inputs.parent_sum - left;
     best_split->Update(gain, missing_left ? kLeftDir : kRightDir, fvalue,
