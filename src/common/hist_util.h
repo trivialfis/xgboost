@@ -142,10 +142,11 @@ class CutsBuilder {
 
   void AddCutPoint(WQSketch::SummaryContainer const& summary, int max_bin) {
     size_t required_cuts = std::min(summary.size, static_cast<size_t>(max_bin));
-    for (size_t i = 1; i < required_cuts; ++i) {
+    auto& h_cuts = p_cuts_->cut_values_.HostVector();
+    for (size_t i = 0; i < required_cuts; ++i) {
       bst_float cpt = summary.data[i].value;
-      if (i == 1 || cpt > p_cuts_->cut_values_.ConstHostVector().back()) {
-        p_cuts_->cut_values_.HostVector().push_back(cpt);
+      if (i == 0 || cpt > p_cuts_->cut_values_.ConstHostVector().back()) {
+        h_cuts.push_back(cpt);
       }
     }
   }

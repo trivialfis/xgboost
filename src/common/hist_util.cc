@@ -415,13 +415,6 @@ void DenseCuts::Init
     a.Reserve(max_num_bins + 1);
     a.SetPrune(summary, max_num_bins + 1);
     AddCutPoint(a, max_num_bins);
-    // push a value that is greater than anything
-    const bst_float cpt
-      = (a.size > 0) ? a.data[a.size - 1].value : kTrivialSplit;
-    // this must be bigger than last value in a scale
-    const bst_float last = cpt + (fabs(cpt) + 1e-5);
-    p_cuts_->cut_values_.HostVector().push_back(last);
-
     // Ensure that every feature gets at least one quantile point
     CHECK_LE(p_cuts_->cut_values_.HostVector().size(), std::numeric_limits<uint32_t>::max());
     auto cut_size = static_cast<uint32_t>(p_cuts_->cut_values_.HostVector().size());
