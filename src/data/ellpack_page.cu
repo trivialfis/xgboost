@@ -61,7 +61,7 @@ __global__ void CompressBinEllpackKernel(
           feature_cuts, [](float v) { return common::AsCat(v); });
       bin = thrust::lower_bound(thrust::seq, it, it + ncuts, common::AsCat(fvalue)) - it;
     } else {
-      bin = thrust::upper_bound(thrust::seq, feature_cuts, feature_cuts + ncuts,
+      bin = thrust::lower_bound(thrust::seq, feature_cuts, feature_cuts + ncuts,
                                 fvalue) -
             feature_cuts;
     }

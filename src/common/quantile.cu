@@ -504,7 +504,7 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
   this->AllReduce();
 
   // Prune to final number of bins.
-  this->Prune(num_bins_ + 1);
+  this->Prune(num_bins_);
   this->Unique();
   this->FixError();
 
@@ -524,6 +524,7 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
     if (IsCat(h_feature_types, i)) {
       h_out_columns_ptr.push_back(static_cast<size_t>(column_size));
     } else {
+      CHECK_LE(column_size, num_bins_);
       h_out_columns_ptr.push_back(std::min(static_cast<size_t>(column_size),
                                            static_cast<size_t>(num_bins_)));
     }
@@ -537,7 +538,6 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
   p_cuts->cut_values_.SetDevice(device_);
   p_cuts->cut_values_.Resize(total_bins);
   auto out_cut_values = p_cuts->cut_values_.DeviceSpan();
-  auto d_ft = feature_types_.ConstDeviceSpan();
 
   dh::LaunchN(0, total_bins, [=] __device__(size_t idx) {
     auto column_id = dh::SegmentId(d_out_columns_ptr, idx);
@@ -558,23 +558,8 @@ void SketchContainer::MakeCuts(HistogramCuts* p_cuts) {
       }
       return;
     }
-
-    if (IsCat(d_ft, column_id)) {
-      assert(out_column.size() == in_column.size());
-      out_column[idx] = in_column[idx].value;
-      return;
-    }
-
-    // Last thread is responsible for setting a value that's greater than other cuts.
-    if (idx == out_column.size() - 1) {
-      const bst_float cpt = in_column.back().value;
-      // this must be bigger than last value in a scale
-      const bst_float last = cpt + (fabs(cpt) + 1e-5);
-      out_column[idx] = last;
-      return;
-    }
-    assert(idx+1 < in_column.size());
-    out_column[idx] = in_column[idx+1].value;
+    assert(out_column.size() == in_column.size());
+    out_column[idx] = in_column[idx].value;
   });
   timer_.Stop(__func__);
 }
