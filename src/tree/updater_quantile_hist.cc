@@ -1297,18 +1297,17 @@ GradStats QuantileHistMaker::Builder<GradientSumT>::EnumerateSplit(
            static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
   CHECK_LE(cut_ptr[fid + 1],
            static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
-  // imin: index (offset) of the minimum value for feature fid
-  //       need this for backward enumeration
-  const auto imin = static_cast<int32_t>(cut_ptr[fid]);
   // ibegin, iend: smallest/largest cut points for feature fid
   // use int to allow for value -1
   int32_t ibegin, iend;
   if (d_step > 0) {
     ibegin = static_cast<int32_t>(cut_ptr[fid]);
-    iend = static_cast<int32_t>(cut_ptr[fid + 1]);
+    iend = static_cast<int32_t>(cut_ptr[fid + 1]) - 1;
+    CHECK_GE(iend, ibegin);
   } else {
     ibegin = static_cast<int32_t>(cut_ptr[fid + 1]) - 1;
-    iend = static_cast<int32_t>(cut_ptr[fid]) - 1;
+    iend = static_cast<int32_t>(cut_ptr[fid]);
+    CHECK_GE(ibegin, iend);
   }
 
   for (int32_t i = ibegin; i != iend; i += d_step) {
@@ -1332,12 +1331,7 @@ GradStats QuantileHistMaker::Builder<GradientSumT>::EnumerateSplit(
           loss_chg = static_cast<bst_float>(
               spliteval_->ComputeSplitScore(nodeID, fid, c, e) -
               snode.root_gain);
-          if (i == imin) {
-            // for leftmost bin, left bound is the smallest feature value
-            split_pt = common::kTrivialSplit;
-          } else {
-            split_pt = cut_val[i - 1];
-          }
+          split_pt = cut_val[i - 1];
           best.Update(loss_chg, fid, split_pt, d_step == -1, c, e);
         }
       }
