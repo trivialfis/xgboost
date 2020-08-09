@@ -25,9 +25,8 @@ inline void ValidateBasicOneHot(std::vector<uint32_t> const& h_cuts_ptr, std::ve
         common::Span<float const>(h_cuts_values)
             .subspan(h_cuts_ptr[i - 1], h_cuts_ptr[i] - h_cuts_ptr[i - 1]);
     EXPECT_EQ(feature.size(), 2);
-    // 0 is discarded as min value.
-    EXPECT_EQ(feature[0], 1.0f);
-    EXPECT_GT(feature[1], 1.0f);
+    EXPECT_EQ(feature[0], 0.0f);
+    EXPECT_EQ(feature[1], 1.0f);
   }
 }
 }  // namespace common
