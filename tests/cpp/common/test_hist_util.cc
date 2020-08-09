@@ -253,8 +253,8 @@ TEST(HistUtil, DenseCutsCategorical) {
        DenseCuts dense(&cuts);
        dense.Build(dmat.get(), num_bins);
        auto cuts_from_sketch = cuts.Values();
-       EXPECT_GT(cuts_from_sketch.front(), x_sorted.front());
-       EXPECT_GE(cuts_from_sketch.back(), x_sorted.back());
+       EXPECT_EQ(cuts_from_sketch.front(), x_sorted.front());
+       EXPECT_EQ(cuts_from_sketch.back(), x_sorted.back());
        EXPECT_EQ(cuts_from_sketch.size(), num_categories);
      }
    }
