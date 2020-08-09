@@ -128,15 +128,12 @@ inline void TestRank(const std::vector<float> &column_cuts,
 inline void ValidateColumn(const HistogramCuts& cuts, int column_idx,
                            const std::vector<float>& sorted_column,
                            const std::vector<float>& sorted_weights,
-                           size_t num_bins, bool is_cat = false) {
+                           size_t num_bins) {
   // Check the endpoints are correct
   CHECK_GT(sorted_column.size(), 0);
-  if (is_cat) {
-    EXPECT_EQ(cuts.Values()[cuts.Ptrs()[column_idx]], sorted_column.front());
-  } else {
-    EXPECT_GT(cuts.Values()[cuts.Ptrs()[column_idx]], sorted_column.front());
-  }
-  EXPECT_GE(cuts.Values()[cuts.Ptrs()[column_idx+1]-1], sorted_column.back());
+  EXPECT_EQ(cuts.Values()[cuts.Ptrs()[column_idx]], sorted_column.front());
+  EXPECT_EQ(cuts.Values()[cuts.Ptrs()[column_idx + 1] - 1],
+            sorted_column.back());
 
   // Check the cuts are sorted
   auto cuts_begin = cuts.Values().begin() + cuts.Ptrs()[column_idx];
@@ -171,7 +168,6 @@ inline void ValidateCuts(const HistogramCuts& cuts, DMatrix* dmat,
                          int num_bins) {
   // Collect data into columns
   auto const& info = dmat->Info();
-  auto const& ft = info.feature_types.ConstHostSpan();
   std::vector<std::vector<float>> columns(info.num_col_);
   for (auto& batch : dmat->GetBatches<SparsePage>()) {
     ASSERT_GT(batch.Size(), 0);
@@ -199,7 +195,7 @@ inline void ValidateCuts(const HistogramCuts& cuts, DMatrix* dmat,
       }
     }
 
-    ValidateColumn(cuts, i, sorted_column, sorted_weights, num_bins, IsCat(ft, i));
+    ValidateColumn(cuts, i, sorted_column, sorted_weights, num_bins);
   }
 }
 
