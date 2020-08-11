@@ -11,6 +11,7 @@
 #include <dmlc/registry.h>
 #include <cmath>
 
+#include "xgboost/json.h"
 #include "metric_common.h"
 #include "../common/math.h"
 #include "../common/common.h"
@@ -29,6 +30,13 @@ namespace xgboost {
 namespace metric {
 // tag the this file, used by force static link later.
 DMLC_REGISTRY_FILE_TAG(elementwise_metric);
+
+namespace {
+struct EmptyConfig : public Configurable {
+  void LoadConfig(Json const& in) override {}
+  void SaveConfig(Json* out) const override {}
+};
+}  // anonymous namespace
 
 template <typename EvalRow>
 class ElementWiseMetricsReduction {
@@ -128,7 +136,7 @@ class ElementWiseMetricsReduction {
 #endif  // defined(XGBOOST_USE_CUDA)
 };
 
-struct EvalRowRMSE {
+struct EvalRowRMSE : public EmptyConfig {
   void Configure(const Args& args) {}
   char const *Name() const {
     return "rmse";
@@ -143,7 +151,7 @@ struct EvalRowRMSE {
   }
 };
 
-struct EvalRowRMSLE {
+struct EvalRowRMSLE : public EmptyConfig {
   void Configure(const Args& args) {}
   char const* Name() const {
     return "rmsle";
@@ -158,7 +166,7 @@ struct EvalRowRMSLE {
   }
 };
 
-struct EvalRowMAE {
+struct EvalRowMAE : public EmptyConfig {
   void Configure(const Args& args) {}
   const char *Name() const {
     return "mae";
@@ -172,9 +180,8 @@ struct EvalRowMAE {
   }
 };
 
-struct EvalRowLogLoss {
+struct EvalRowLogLoss : public EmptyConfig {
   void Configure(const Args& args) {}
-
   const char *Name() const {
     return "logloss";
   }
@@ -196,10 +203,17 @@ struct EvalRowLogLoss {
   }
 };
 
-struct EvalRowMPHE {
+struct EvalRowMPHE : public Configurable {
   void Configure(const Args& args) {
     param.UpdateAllowUnknown(args);
   }
+  void LoadConfig(Json const& in) override {
+    FromJson(in["pseudo_huber_param"], &param);
+  }
+  void SaveConfig(Json* out) const override {
+    (*out)["pseudo_huber_param"] = ToJson(param);
+  }
+
 
   PseudoHuberParam param;
 
@@ -215,7 +229,7 @@ struct EvalRowMPHE {
   }
 };
 
-struct EvalError {
+struct EvalError : public EmptyConfig {
   void Configure(const Args& args) {}
   explicit EvalError(const char* param) {
     if (param != nullptr) {
@@ -255,7 +269,7 @@ struct EvalError {
   bool has_param_;
 };
 
-struct EvalPoissonNegLogLik {
+struct EvalPoissonNegLogLik : public EmptyConfig {
   void Configure(const Args& args) {}
   const char *Name() const {
     return "poisson-nloglik";
@@ -272,7 +286,7 @@ struct EvalPoissonNegLogLik {
   }
 };
 
-struct EvalGammaDeviance {
+struct EvalGammaDeviance : public EmptyConfig {
   void Configure(const Args& args) {}
   const char *Name() const {
     return "gamma-deviance";
@@ -288,7 +302,7 @@ struct EvalGammaDeviance {
   }
 };
 
-struct EvalGammaNLogLik {
+struct EvalGammaNLogLik : public EmptyConfig {
   void Configure(const Args& args) {}
 
   static const char *Name() {
@@ -308,7 +322,7 @@ struct EvalGammaNLogLik {
   }
 };
 
-struct EvalTweedieNLogLik {
+struct EvalTweedieNLogLik : public EmptyConfig {
   void Configure(const Args& args) {}
   explicit EvalTweedieNLogLik(const char* param) {
     CHECK(param != nullptr)
@@ -368,6 +382,13 @@ struct EvalEWiseBase : public Metric {
       rabit::Allreduce<rabit::op::Sum>(dat, 2);
     }
     return Policy::GetFinal(dat[0], dat[1]);
+  }
+
+  void LoadConfig(Json const& in) override {
+    policy_.LoadConfig(in);
+  }
+  void SaveConfig(Json* out) const override {
+    policy_.SaveConfig(out);
   }
 
   const char* Name() const override {
