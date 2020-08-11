@@ -1,5 +1,5 @@
 /*!
- * Copyright 2015-2019 by Contributors
+ * Copyright 2015-2020 by Contributors
  * \file regression_obj.cu
  * \brief Definition of single-value regression and classification objectives.
  * \author Tianqi Chen, Kailong Chen
@@ -151,10 +151,6 @@ XGBOOST_REGISTER_OBJECTIVE(LogisticRegression, LogisticRegression::Name())
 .describe("Logistic regression for probability regression task.")
 .set_body([]() { return new RegLossObj<LogisticRegression>(); });
 
-XGBOOST_REGISTER_OBJECTIVE(PseudoHuberError, PseudoHuberError::Name())
-.describe("Regression Pseudo Huber error.")
-.set_body([]() { return new RegLossObj<PseudoHuberError>(); });
-
 XGBOOST_REGISTER_OBJECTIVE(LogisticClassification, LogisticClassification::Name())
 .describe("Logistic regression for binary classification task.")
 .set_body([]() { return new RegLossObj<LogisticClassification>(); });
@@ -171,6 +167,91 @@ XGBOOST_REGISTER_OBJECTIVE(LinearRegression, "reg:linear")
     LOG(WARNING) << "reg:linear is now deprecated in favor of reg:squarederror.";
     return new RegLossObj<LinearSquareLoss>(); });
 // End deprecated
+
+struct PseudoHuberParam : public XGBoostParameter<PseudoHuberParam> {
+  float huber_residuals {1.0f};
+  DMLC_DECLARE_PARAMETER(PseudoHuberParam) {
+    DMLC_DECLARE_FIELD(huber_residuals).set_default(1.0f)
+        .describe("Residuals (alpha) for Pseudo Huber loss function.");
+  }
+};
+
+DMLC_REGISTER_PARAMETER(PseudoHuberParam);
+
+class PseudoHuberRegression : public ObjFunction {
+ public:
+  PseudoHuberRegression() = default;
+  void Configure(const std::vector<std::pair<std::string, std::string> >& args) override {
+    param_.UpdateAllowUnknown(args);
+  }
+
+  void GetGradient(const HostDeviceVector<bst_float>& preds,
+                   const MetaInfo &info,
+                   int iter,
+                   HostDeviceVector<GradientPair>* out_gpair) override {
+    CHECK_EQ(preds.Size(), info.labels_.Size())
+        << " " << "labels are not correctly provided"
+        << "preds.size=" << preds.Size() << ", label.size=" << info.labels_.Size();
+    size_t const ndata = preds.Size();
+    out_gpair->Resize(ndata);
+    auto device = tparam_->gpu_id;
+
+    bool is_null_weight = info.weights_.Size() == 0;
+    if (!is_null_weight) {
+      CHECK_EQ(info.weights_.Size(), ndata)
+          << "Number of weights should be equal to number of data points.";
+    }
+
+    common::Transform<>::Init(
+        [=] XGBOOST_DEVICE(size_t _idx, common::Span<GradientPair> _out_gpair,
+                           common::Span<const bst_float> _preds,
+                           common::Span<const bst_float> _labels,
+                           common::Span<const bst_float> _weights) {
+          bst_float p = _preds[_idx];
+          bst_float w = is_null_weight ? 1.0f : _weights[_idx];
+          bst_float label = _labels[_idx];
+          auto grad = [](float predt, float label) {
+            const float z = predt - label;
+            const float scale_sqrt = std::sqrt(1 + std::pow(z, 2));
+            return z / scale_sqrt;
+          };
+          auto hess = [](float predt, float label) {
+            const float scale = 1 + std::pow(predt - label, 2);
+            const float scale_sqrt = std::sqrt(scale);
+            return 1 / (scale * scale_sqrt);
+          };
+          _out_gpair[_idx] =
+              GradientPair(grad(p, label) * w, hess(p, label) * w);
+        },
+        common::Range{0, static_cast<int64_t>(ndata)}, device)
+        .Eval(out_gpair, &preds, &info.labels_, &info.weights_);
+  }
+
+ public:
+  const char* DefaultEvalMetric() const override {
+    return "mphe";
+  }
+
+  void SaveConfig(Json* p_out) const override {
+    auto& out = *p_out;
+    out["name"] = String("reg:pseudohubererror");
+    out["pseudo_huber_param"] = ToJson(param_);
+  }
+
+  void LoadConfig(Json const& in) override {
+    auto const& object = get<Object const>(in);
+    if (object.find("pseudo_huber_param") != object.cend()){
+      FromJson(in["pseudo_huber_param"], &param_);
+    }
+  }
+
+ protected:
+  PseudoHuberParam param_;
+};
+
+XGBOOST_REGISTER_OBJECTIVE(PseudoHuberError, "reg:pseudohubererror")
+.describe("Regression Pseudo Huber error.")
+.set_body([]() { return new PseudoHuberRegression(); });
 
 // declare parameter
 struct PoissonRegressionParam : public XGBoostParameter<PoissonRegressionParam> {
