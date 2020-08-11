@@ -231,7 +231,7 @@ class PseudoHuberRegression : public ObjFunction {
 
   void LoadConfig(Json const& in) override {
     auto const& object = get<Object const>(in);
-    if (object.find("pseudo_huber_param") != object.cend()){
+    if (object.find("pseudo_huber_param") != object.cend()) {
       FromJson(in["pseudo_huber_param"], &param_);
     }
   }

@@ -1,5 +1,5 @@
 /*!
- * Copyright 2019 by XGBoost Contributors
+ * Copyright 2020 by XGBoost Contributors
  */
 #include "pseudo_huber.h"
 namespace xgboost {

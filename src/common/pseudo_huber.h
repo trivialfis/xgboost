@@ -1,6 +1,9 @@
 /*!
- * Copyright 2019 by XGBoost Contributors
+ * Copyright 2020 by XGBoost Contributors
  */
+#ifndef XGBOOST_COMMON_PSEUDO_HUBER_H_
+#define XGBOOST_COMMON_PSEUDO_HUBER_H_
+
 #include <xgboost/parameter.h>
 namespace xgboost {
 struct PseudoHuberParam : public XGBoostParameter<PseudoHuberParam> {
@@ -11,3 +14,5 @@ struct PseudoHuberParam : public XGBoostParameter<PseudoHuberParam> {
   }
 };
 };  // namespace xgboost
+
+#endif  // XGBOOST_COMMON_PSEUDO_HUBER_H_
