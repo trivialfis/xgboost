@@ -19,6 +19,7 @@
 
 #include "../common/transform.h"
 #include "../common/common.h"
+#include "../common/pseudo_huber.h"
 #include "./regression_loss.h"
 
 
@@ -167,16 +168,6 @@ XGBOOST_REGISTER_OBJECTIVE(LinearRegression, "reg:linear")
     LOG(WARNING) << "reg:linear is now deprecated in favor of reg:squarederror.";
     return new RegLossObj<LinearSquareLoss>(); });
 // End deprecated
-
-struct PseudoHuberParam : public XGBoostParameter<PseudoHuberParam> {
-  float huber_residuals {1.0f};
-  DMLC_DECLARE_PARAMETER(PseudoHuberParam) {
-    DMLC_DECLARE_FIELD(huber_residuals).set_default(1.0f)
-        .describe("Residuals (alpha) for Pseudo Huber loss function.");
-  }
-};
-
-DMLC_REGISTER_PARAMETER(PseudoHuberParam);
 
 class PseudoHuberRegression : public ObjFunction {
  public:

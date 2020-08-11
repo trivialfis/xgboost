@@ -14,6 +14,7 @@
 #include "metric_common.h"
 #include "../common/math.h"
 #include "../common/common.h"
+#include "../common/pseudo_huber.h"
 
 #if defined(XGBOOST_USE_CUDA)
 #include <thrust/execution_policy.h>  // thrust::cuda::par
@@ -128,6 +129,7 @@ class ElementWiseMetricsReduction {
 };
 
 struct EvalRowRMSE {
+  void Configure(const Args& args) {}
   char const *Name() const {
     return "rmse";
   }
@@ -142,6 +144,7 @@ struct EvalRowRMSE {
 };
 
 struct EvalRowRMSLE {
+  void Configure(const Args& args) {}
   char const* Name() const {
     return "rmsle";
   }
@@ -156,6 +159,7 @@ struct EvalRowRMSLE {
 };
 
 struct EvalRowMAE {
+  void Configure(const Args& args) {}
   const char *Name() const {
     return "mae";
   }
@@ -169,6 +173,8 @@ struct EvalRowMAE {
 };
 
 struct EvalRowLogLoss {
+  void Configure(const Args& args) {}
+
   const char *Name() const {
     return "logloss";
   }
@@ -191,12 +197,18 @@ struct EvalRowLogLoss {
 };
 
 struct EvalRowMPHE {
+  void Configure(const Args& args) {
+    param.UpdateAllowUnknown(args);
+  }
+
+  PseudoHuberParam param;
+
   char const *Name() const {
     return "mphe";
   }
   XGBOOST_DEVICE bst_float EvalRow(bst_float label, bst_float pred) const {
     bst_float diff = label - pred;
-    return std::sqrt( 1 + diff * diff) - 1;
+    return std::sqrt(param.huber_residuals) * (std::sqrt( 1 + diff * diff) - 1);
   }
   static bst_float GetFinal(bst_float esum, bst_float wsum) {
     return wsum == 0 ? esum : esum / wsum;
@@ -204,6 +216,7 @@ struct EvalRowMPHE {
 };
 
 struct EvalError {
+  void Configure(const Args& args) {}
   explicit EvalError(const char* param) {
     if (param != nullptr) {
       CHECK_EQ(sscanf(param, "%f", &threshold_), 1)
@@ -243,6 +256,7 @@ struct EvalError {
 };
 
 struct EvalPoissonNegLogLik {
+  void Configure(const Args& args) {}
   const char *Name() const {
     return "poisson-nloglik";
   }
@@ -259,6 +273,7 @@ struct EvalPoissonNegLogLik {
 };
 
 struct EvalGammaDeviance {
+  void Configure(const Args& args) {}
   const char *Name() const {
     return "gamma-deviance";
   }
@@ -274,6 +289,8 @@ struct EvalGammaDeviance {
 };
 
 struct EvalGammaNLogLik {
+  void Configure(const Args& args) {}
+
   static const char *Name() {
     return "gamma-nloglik";
   }
@@ -292,6 +309,7 @@ struct EvalGammaNLogLik {
 };
 
 struct EvalTweedieNLogLik {
+  void Configure(const Args& args) {}
   explicit EvalTweedieNLogLik(const char* param) {
     CHECK(param != nullptr)
         << "tweedie-nloglik must be in format tweedie-nloglik@rho";
@@ -326,6 +344,10 @@ struct EvalTweedieNLogLik {
 template<typename Policy>
 struct EvalEWiseBase : public Metric {
   EvalEWiseBase() = default;
+  void Configure(const Args& args) override {
+    policy_.Configure(args);
+  }
+
   explicit EvalEWiseBase(char const* policy_param) :
     policy_{policy_param}, reducer_{policy_} {}
 

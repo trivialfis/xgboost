@@ -69,6 +69,7 @@
 #include "../src/logging.cc"
 #include "../src/common/common.cc"
 #include "../src/common/charconv.cc"
+#include "../src/common/pseudo_huber.cc"
 #include "../src/common/timer.cc"
 #include "../src/common/host_device_vector.cc"
 #include "../src/common/hist_util.cc"
