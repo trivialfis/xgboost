@@ -46,9 +46,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
     /*! \brief statics for node entry */
     GradStats stats;
     /*! \brief loss of this node, without split */
-    bst_float root_gain{.0f};
-    /*! \brief current best solution */
-    SplitEntry best;
+    bst_float root_gain;
   };
   std::vector<NodeEntry> snode_;
   RegTree* p_last_tree_ {nullptr};
@@ -120,12 +118,14 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
     snode_.resize(p_tree->GetNodes().size());
     CHECK_EQ(snode_.size(), 1);
-    snode_[0].stats = GradStats{root_sum.GetGrad(), root_sum.GetHess()};
     auto root_evaluator = evaluator_.GetCalculator();
-    auto weight = root_evaluator.CalcWeight(RegTree::kRoot, param_,
-                                            GradStats{snode_[0].stats});
+
+    snode_[0].stats = GradStats{root_sum.GetGrad(), root_sum.GetHess()};
     snode_[0].root_gain = root_evaluator.CalcGain(RegTree::kRoot, param_,
                                                   GradStats{snode_[0].stats});
+    auto weight = root_evaluator.CalcWeight(RegTree::kRoot, param_,
+                                            GradStats{snode_[0].stats});
+
 
     p_tree->Stat(RegTree::kRoot).sum_hess = root_sum.GetHess();
     p_tree->Stat(RegTree::kRoot).base_weight = weight;
@@ -237,7 +237,11 @@ template <typename GradientSumT> class GloablApproxBuilder {
     max_node = std::max(candidate.nid, max_node);
     snode_.resize(tree.GetNodes().size());
     snode_.at(left_child).stats = candidate.split.left_sum;
+    snode_.at(left_child).root_gain = tree_evalator.CalcGain(
+        candidate.nid, param_, GradStats{candidate.split.left_sum});
     snode_.at(right_child).stats = candidate.split.right_sum;
+    snode_.at(right_child).root_gain = tree_evalator.CalcGain(
+        candidate.nid, param_, GradStats{candidate.split.right_sum});
 
     interaction_constraints_.Split(candidate.nid,
                                    tree[candidate.nid].SplitIndex(), left_child,
