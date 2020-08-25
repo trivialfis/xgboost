@@ -24,7 +24,6 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
   TrainParam param_;
   CPUHistMakerTrainParam hist_param_;
-  std::vector<float> leaf_value_cache_;
 
   TreeEvaluator evaluator_;
   FeatureInteractionConstraintHost interaction_constraints_;
@@ -91,10 +90,6 @@ template <typename GradientSumT> class GloablApproxBuilder {
       monotonic_constraint_.resize(info.num_col_, 0);
     }
 
-    std::vector<float> hessians(gpair_.size());
-    std::transform(gpair_.cbegin(), gpair_.cend(), hessians.begin(),
-                   [](auto g) { return g.GetHess(); });
-
     histograms_.Init(index.cut.TotalBins());
     histogram_mapper_.Init(index.cut.TotalBins());
     histogram_builder_ =
@@ -109,10 +104,11 @@ template <typename GradientSumT> class GloablApproxBuilder {
     LocalExpandEntry best;
     best.nid = RegTree::kRoot;
     best.depth = 0;
-    auto root_sum =
-        std::accumulate(gpair.cbegin(), gpair.cend(), GradientPair{});
-    rabit::Allreduce<rabit::op::Sum, float>(
-        reinterpret_cast<float *>(&root_sum), 2);
+    GradStats root_sum;
+    for (auto const& g : gpair) {
+      root_sum.Add(g);
+    }
+    rabit::Allreduce<rabit::op::Sum, double>(reinterpret_cast<double *>(&root_sum), 2);
 
     this->BuildNodeHistogram(gpair, m, m.IsDense(), {RegTree::kRoot});
 
