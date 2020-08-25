@@ -209,7 +209,7 @@ TEST(Span, FromArray) {
   {
     Span<float> s (arr);
     ASSERT_EQ(&arr[0], s.data());
-    ASSERT_EQ(s.size(), 16);
+    ASSERT_EQ(s.size(), 16ul);
     for (size_t i = 0; i < 16; ++i) {
       ASSERT_EQ(arr[i], s[i]);
     }

@@ -98,7 +98,7 @@ TEST(Param, SplitEntry) {
   se3.Update(2, 101, 0, false, xgboost::tree::GradStats(),
              xgboost::tree::GradStats());
   xgboost::tree::SplitEntry::Reduce(se2, se3);
-  EXPECT_EQ(se2.SplitIndex(), 101);
+  EXPECT_EQ(se2.SplitIndex(), 101ul);
   EXPECT_FALSE(se2.DefaultLeft());
 
   EXPECT_TRUE(se1.NeedReplace(3, 1));

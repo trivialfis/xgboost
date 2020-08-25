@@ -13,7 +13,7 @@ TEST(ColumnSampler, Test) {
   // No node sampling
   cs.Init(n, feature_weights, 1.0f, 0.5f, 0.5f);
   auto set0 = cs.GetFeatureSet(0);
-  ASSERT_EQ(set0->Size(), 32);
+  ASSERT_EQ(set0->Size(), 32ul);
 
   auto set1 = cs.GetFeatureSet(0);
 
@@ -21,17 +21,17 @@ TEST(ColumnSampler, Test) {
 
   auto set2 = cs.GetFeatureSet(1);
   ASSERT_NE(set1->HostVector(), set2->HostVector());
-  ASSERT_EQ(set2->Size(), 32);
+  ASSERT_EQ(set2->Size(), 32ul);
 
   // Node sampling
   cs.Init(n, feature_weights, 0.5f, 1.0f, 0.5f);
   auto set3 = cs.GetFeatureSet(0);
-  ASSERT_EQ(set3->Size(), 32);
+  ASSERT_EQ(set3->Size(), 32ul);
 
   auto set4 = cs.GetFeatureSet(0);
 
   ASSERT_NE(set3->HostVector(), set4->HostVector());
-  ASSERT_EQ(set4->Size(), 32);
+  ASSERT_EQ(set4->Size(), 32ul);
 
   // No level or node sampling, should be the same at different depth
   cs.Init(n, feature_weights, 1.0f, 1.0f, 0.5f);

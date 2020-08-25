@@ -57,6 +57,6 @@ TEST(Version, Basic) {
   ASSERT_EQ(v, XGBOOST_VER_PATCH) << "patch: " << v;;
 
   str = str.substr(ptr);
-  ASSERT_EQ(str.size(), 0);
+  ASSERT_EQ(str.size(), 0ul);
 }
 }  // namespace xgboost

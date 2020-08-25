@@ -154,9 +154,9 @@ TEST(GBTree, JsonIO) {
   ASSERT_EQ(get<String>(model["model"]["name"]), "gbtree");
 
   auto const& gbtree_model = model["model"]["model"];
-  ASSERT_EQ(get<Array>(gbtree_model["trees"]).size(), 1);
+  ASSERT_EQ(get<Array>(gbtree_model["trees"]).size(), 1ul);
   ASSERT_EQ(get<Integer>(get<Object>(get<Array>(gbtree_model["trees"]).front()).at("id")), 0);
-  ASSERT_EQ(get<Array>(gbtree_model["tree_info"]).size(), 1);
+  ASSERT_EQ(get<Array>(gbtree_model["tree_info"]).size(), 1ul);
 
   auto j_train_param = model["config"]["gbtree_train_param"];
   ASSERT_EQ(get<String>(j_train_param["num_parallel_tree"]), "1");

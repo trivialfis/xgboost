@@ -44,9 +44,9 @@ TEST(SparsePage, PushCSC) {
   }
 
   auto inst = page[0];
-  ASSERT_EQ(inst.size(), 2);
+  ASSERT_EQ(inst.size(), 2ul);
   for (auto entry : inst) {
-    ASSERT_EQ(entry.index, 0);
+    ASSERT_EQ(entry.index, 0ul);
   }
 
   inst = page[1];
