@@ -564,7 +564,7 @@ class GlobalApproxUpdater : public TreeUpdater {
   TrainParam param_;
   common::Monitor monitor_;
   CPUHistMakerTrainParam hist_param_;
-  std::vector<bst_row_t> reduced;
+  std::vector<bst_row_t> columns_size_;
 
   std::unique_ptr<GloablApproxBuilder<float>> f32_impl_;
   std::unique_ptr<GloablApproxBuilder<double>> f64_impl_;
@@ -608,8 +608,8 @@ class GlobalApproxUpdater : public TreeUpdater {
         << "Feature grouping is not implemented for approx.";
 
     auto const &info = m->Info();
-    if (reduced.empty()) {
-      reduced.resize(info.num_col_, 0);
+    if (columns_size_.empty()) {
+      columns_size_.resize(info.num_col_, 0);
       const auto threads = omp_get_max_threads();
       std::vector<std::vector<bst_row_t>> column_sizes(threads);
       for (auto &column : column_sizes) {
@@ -620,7 +620,7 @@ class GlobalApproxUpdater : public TreeUpdater {
             common::HostSketchContainer::CalcColumnSize(page, info.num_col_,
                                                         threads);
         for (size_t i = 0; i < entries_per_column.size(); ++i) {
-          reduced[i] += entries_per_column[i];
+          columns_size_[i] += entries_per_column[i];
         }
       }
     }
@@ -630,7 +630,7 @@ class GlobalApproxUpdater : public TreeUpdater {
     monitor_.Start("Sketch");
     common::HistogramCuts cuts;
     for (auto const& page : m->GetBatches<SortedCSCPage>()) {
-      common::HostSketchContainer container(reduced, param_.max_bin, false);
+      common::HostSketchContainer container(columns_size_, param_.max_bin, false);
       container.PushSortedCSC(page, info, nullptr);
       container.MakeCuts(&cuts);
     }
