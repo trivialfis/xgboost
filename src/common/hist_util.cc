@@ -107,13 +107,12 @@ void GHistIndexMatrix::SetIndexDataForSparse(
   }
 }
 
-void GHistIndexMatrix::SetIndexForRowSet(SparsePage const& page,
-                                         common::Span<bst_row_t const> row_set,
-                                         HistogramCuts const &cuts) {
+template <typename T>
+void SetIndexForRowSetImpl(common::Span<T> index_data_span,
+                           common::Span<bst_row_t const> row_set,
+                           SparsePage const& page,
+                           HistogramCuts const &cuts) {
   auto const& offset = page.offset.ConstHostVector();
-  auto n_index = page.Size();
-  common::Span<uint32_t> index_data_span = {index.data<uint32_t>(), n_index};
-
   for (size_t i = 0; i < row_set.size(); ++i) {  // NOLINT
     auto ridx = row_set[i];
     auto inst = page[ridx];
@@ -122,6 +121,29 @@ void GHistIndexMatrix::SetIndexForRowSet(SparsePage const& page,
       auto idx = offset[ridx] + e.index;
       index_data_span[idx] = bin;
     }
+  }
+}
+
+void GHistIndexMatrix::SetIndexForRowSet(SparsePage const& page,
+                                         common::Span<bst_row_t const> row_set,
+                                         HistogramCuts const &cuts) {
+  auto n_index = row_ptr.back();
+  switch(index.GetBinTypeSize()) {
+  case kUint8BinsTypeSize: {
+    auto s_index = Span<uint8_t>{index.data<uint8_t>(), n_index};
+    SetIndexForRowSetImpl(s_index, row_set, page, cuts);
+    break;
+  }
+  case kUint16BinsTypeSize: {
+    auto s_index = Span<uint16_t>{index.data<uint16_t>(), n_index};
+    SetIndexForRowSetImpl(s_index, row_set, page, cuts);
+    break;
+  }
+  case kUint32BinsTypeSize: {
+    auto s_index = Span<uint32_t>{index.data<uint32_t>(), n_index};
+    SetIndexForRowSetImpl(s_index, row_set, page, cuts);
+    break;
+  }
   }
 }
 

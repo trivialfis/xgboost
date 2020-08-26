@@ -101,6 +101,7 @@ struct GBTreeTrainParam : public XGBoostParameter<GBTreeTrainParam> {
         .add_enum("auto",      TreeMethod::kAuto)
         .add_enum("approx",    TreeMethod::kApprox)
         .add_enum("exact",     TreeMethod::kExact)
+        .add_enum("local",     TreeMethod::kLocal)
         .add_enum("hist",      TreeMethod::kHist)
         .add_enum("gpu_hist",  TreeMethod::kGPUHist)
         .describe("Choice of tree construction method.");

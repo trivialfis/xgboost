@@ -22,11 +22,11 @@ template <typename GradientSumT> class LocalApproxBuilder {
                          GradientPairPrecise>;
 
   TrainParam param_;
-  ApproxEvaluator<GradientSumT> evaluator_;
-  ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
   common::HostSketchContainer sketches_;
   common::GHistIndexMatrix index_;
+  ApproxHistogramBuilder<GradientSumT> histogram_builder_;
+  ApproxEvaluator<GradientSumT> evaluator_;
   ApproxRowPartitioner partitioner_;
 
   RegTree* p_last_tree_ {nullptr};
@@ -35,6 +35,13 @@ template <typename GradientSumT> class LocalApproxBuilder {
   void InitData(DMatrix *m, std::vector<GradientPair> const &gpair) {
     monitor_->Start(__func__);
     auto const &info = m->Info();
+    for (auto const& page : m->GetBatches<SparsePage>()) {
+      this->sketches_.PushRowPage(page, info);
+    }
+    common::HistogramCuts cuts;
+    sketches_.MakeCuts(&cuts);
+    index_.Init(m, cuts, param_.max_bin);
+
     partitioner_ = ApproxRowPartitioner(info.num_row_);
     histogram_builder_ = ApproxHistogramBuilder<GradientSumT>(index_.cut.TotalBins());
     monitor_->Stop(__func__);
@@ -49,14 +56,6 @@ template <typename GradientSumT> class LocalApproxBuilder {
       root_sum.Add(g);
     }
     rabit::Allreduce<rabit::op::Sum, double>(reinterpret_cast<double *>(&root_sum), 2);
-
-    auto const& info = m->Info();
-    for (auto const& page : m->GetBatches<SparsePage>()) {
-      this->sketches_.PushRowPage(page, info);
-    }
-    common::HistogramCuts cuts;
-    sketches_.MakeCuts(&cuts);
-    index_.Init(m, cuts, param_.max_bin);
 
     this->BuildNodeHistogram(gpair, index_, index_.IsDense(), {RegTree::kRoot});
     auto weight = evaluator_.InitRoot(root_sum);
@@ -238,6 +237,10 @@ class LocalApproxUpdater : public TreeUpdater {
     param_.learning_rate = lr / trees.size();
     auto const &info = m->Info();
 
+    std::vector<GradientPair> h_gpair;
+    ApproxLazyInitData(param_, gpair, m, cached_, &h_gpair, &columns_size_);
+    cached_ = m;
+
     if (hist_param_.single_precision_histogram) {
       f32_impl_ = std::make_unique<LocalApproxBuilder<float>>(
           param_, hist_param_, m->Info(), columns_size_,
@@ -250,10 +253,6 @@ class LocalApproxUpdater : public TreeUpdater {
 
     CHECK(!param_.enable_feature_grouping)
         << "Feature grouping is not implemented for approx.";
-
-    std::vector<GradientPair> h_gpair;
-    ApproxLazyInitData(param_, gpair, m, cached_, &h_gpair, &columns_size_);
-    cached_ = m;
 
     for (auto p_tree : trees) {
       if (hist_param_.single_precision_histogram) {
