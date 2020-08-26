@@ -105,7 +105,6 @@ void HostSketchContainer::PushRowPage(
   // Parallel over columns.  Each thread owns a set of consecutive columns.
   auto const ncol = static_cast<uint32_t>(info.num_col_);
   auto thread_columns_ptr = LoadBalance(page, info.num_col_, nthread);
-  auto const& weights = info.weights_.HostVector();
 
 #pragma omp parallel num_threads(nthread)
   {
@@ -151,7 +150,6 @@ void HostSketchContainer::PushSortedCSC(
     std::vector<float> const &weights) {
   auto page = batch.GetView();
   monitor_.Start(__func__);
-  monitor_.Start("Balance");
   std::vector<size_t> entries_per_column(info.num_col_);
   for (size_t column_id = 0; column_id < page.Size(); ++column_id) {
     auto column = page[column_id];
@@ -178,9 +176,7 @@ void HostSketchContainer::PushSortedCSC(
   for (; current_thread < cols_ptr.size() - 1; ++current_thread) {
     cols_ptr[current_thread+1] = cols_ptr[current_thread];
   }
-  monitor_.Stop("Balance");
 
-  monitor_.Start("Run Sketch");
   dmlc::OMPException exec;
   auto const* p_weights = weights.data();
 #pragma omp parallel num_threads(nthreads)
@@ -198,7 +194,6 @@ void HostSketchContainer::PushSortedCSC(
       }
     });
   }
-  monitor_.Stop("Run Sketch");
   exec.Rethrow();
   monitor_.Stop(__func__);
 }
@@ -351,7 +346,6 @@ void HostSketchContainer::MakeCuts(HistogramCuts* cuts) {
   cuts->min_vals_.HostVector().resize(sketches_.size(), 0.0f);
   std::vector<WQSketch::SummaryContainer> final_summaries(reduced.size());
 
-  monitor_.Start("Get final");
   ParallelFor(reduced.size(), omp_get_max_threads(), [&](size_t fidx) {
     WQSketch::SummaryContainer &a = final_summaries[fidx];
     size_t max_num_bins = std::min(num_cuts[fidx], max_bins_);
@@ -368,9 +362,7 @@ void HostSketchContainer::MakeCuts(HistogramCuts* cuts) {
       cuts->min_vals_.HostVector()[fidx] = mval;
     }
   });
-  monitor_.Stop("Get final");
 
-  monitor_.Start("Add cuts");
   for (size_t fid = 0; fid < reduced.size(); ++fid) {
     size_t max_num_bins = std::min(num_cuts[fid], max_bins_);
     WQSketch::SummaryContainer const& a = final_summaries[fid];
@@ -388,7 +380,6 @@ void HostSketchContainer::MakeCuts(HistogramCuts* cuts) {
     CHECK_GT(cut_size, cuts->cut_ptrs_.HostVector().back());
     cuts->cut_ptrs_.HostVector().push_back(cut_size);
   }
-  monitor_.Stop("Add cuts");
   monitor_.Stop(__func__);
 }
 }  // namespace common
