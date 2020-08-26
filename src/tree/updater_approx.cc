@@ -33,9 +33,10 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
-  static constexpr size_t kPartitionBlockSize = 2048;
-  PartitionBuilder<kPartitionBlockSize> partition_builder_;
-  common::RowSetCollection row_set_collection_;
+  ApproxRowPartitioner partitioner_;
+  // static constexpr size_t kPartitionBlockSize = 2048;
+  // PartitionBuilder<kPartitionBlockSize> partition_builder_;
+  // common::RowSetCollection row_set_collection_;
 
   // common::GHistBuilder<GradientSumT> histogram_builder_;
   // common::HistCollection<GradientSumT> histograms_;
@@ -52,11 +53,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
     monitor_->Start(__func__);
     auto const &info = m->Info();
 
-    row_set_collection_.Clear();
-    auto p_positions = row_set_collection_.Data();
-    p_positions->resize(info.num_row_);
-    std::iota(p_positions->begin(), p_positions->end(), 0);
-    row_set_collection_.Init();
+    partitioner_ = ApproxRowPartitioner(info.num_row_);
 
     column_sampler_.Init(info.num_col_, m->Info().feature_weigths.HostVector(),
                          param_.colsample_bynode, param_.colsample_bylevel,
@@ -186,79 +183,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
                       std::vector<LocalExpandEntry> const &candidates,
                       RegTree const *p_tree) {
     monitor_->Start(__func__);
-    size_t n_nodes = candidates.size();
-
-    auto const& cut_values = index.cut.Values();
-    auto const& cut_ptrs = index.cut.Ptrs();
-    auto search_cut_value = [&](bst_row_t ridx, bst_feature_t fidx) {
-      int32_t gidx = -1;
-      if (index.IsDense()) {
-        gidx = index.index[index.row_ptr[ridx] + fidx];
-      } else {
-        auto begin = index.row_ptr[ridx];
-        auto end = index.row_ptr[ridx + 1];
-        auto f_begin = cut_ptrs[fidx];
-        auto f_end = cut_ptrs[fidx + 1];
-        gidx = common::BinarySearchBin(begin, end, index.index, f_begin, f_end);
-      }
-      if (gidx == -1){
-        return std::numeric_limits<float>::quiet_NaN();
-      }
-      return cut_values[gidx];
-    };
-
-    common::BlockedSpace2d space{n_nodes,
-                                 [&](size_t node_in_set) {
-                                   auto candidate = candidates[node_in_set];
-                                   int32_t nid = candidate.nid;
-                                   return row_set_collection_[nid].Size();
-                                 },
-                                 kPartitionBlockSize};
-    partition_builder_.Init(space.Size(), n_nodes, [&](size_t node_in_set) {
-      auto candidate = candidates[node_in_set];
-      const int32_t nid = candidate.nid;
-      const size_t size = row_set_collection_[nid].Size();
-      const size_t n_tasks =
-          size / kPartitionBlockSize + !!(size % kPartitionBlockSize);
-      return n_tasks;
-    });
-    auto threads = omp_get_max_threads();
-    common::ParallelFor2d(
-        space, threads, [&](size_t node_in_set, common::Range1d r) {
-          auto candidate = candidates[node_in_set];
-          const int32_t nid = candidate.nid;
-          auto fidx = candidate.split.SplitIndex();
-          partition_builder_.template PartitionRange(
-              node_in_set, nid, r, fidx, &row_set_collection_,
-              [&](size_t row_id) {
-                auto cut_value = search_cut_value(row_id, fidx);
-                if (std::isnan(cut_value)) {
-                  return candidate.split.DefaultLeft();
-                }
-                return cut_value <= candidate.split.split_value;
-              });
-        });
-
-    partition_builder_.CalculateRowOffsets();
-    common::ParallelFor2d(
-        space, threads, [&](size_t node_in_set, common::Range1d r) {
-          auto candidate = candidates[node_in_set];
-          const int32_t nid = candidate.nid;
-          partition_builder_.MergeToArray(
-              node_in_set, r.begin(),
-              const_cast<size_t *>(row_set_collection_[nid].begin));
-        });
-    for (size_t i = 0; i < candidates.size(); ++i) {
-      auto const& candidate = candidates[i];
-      auto nidx = candidate.nid;
-      auto n_left = partition_builder_.GetNLeftElems(i);
-      auto n_right = partition_builder_.GetNRightElems(i);
-      CHECK_EQ(n_left + n_right, row_set_collection_[nidx].Size());
-      bst_node_t left_nidx = (*p_tree)[nidx].LeftChild();
-      bst_node_t right_nidx = (*p_tree)[nidx].RightChild();
-      row_set_collection_.AddSplit(nidx, left_nidx, right_nidx, n_left,
-                                   n_right);
-    }
+    partitioner_.UpdatePosition(index, candidates, p_tree);
     monitor_->Stop(__func__);
   }
 
@@ -272,9 +197,9 @@ template <typename GradientSumT> class GloablApproxBuilder {
     CHECK(p_last_tree_);
 
     size_t n_nodes = p_last_tree_->GetNodes().size();
-    CHECK_EQ(std::distance(row_set_collection_.begin(), row_set_collection_.end()), n_nodes);
+    CHECK_EQ(partitioner_.Size(), n_nodes);
     common::BlockedSpace2d space(
-        n_nodes, [&](size_t node) { return row_set_collection_[node].Size(); },
+        n_nodes, [&](size_t node) { return partitioner_[node].Size(); },
         1024);
 
     auto evaluator = evaluator_.GetEvaluator();
@@ -282,7 +207,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
     common::ParallelFor2d(
         space, omp_get_max_threads(), [&](size_t nidx, common::Range1d r) {
           if (tree[nidx].IsLeaf()) {
-            const auto rowset = row_set_collection_[nidx];
+            const auto rowset = partitioner_[nidx];
             auto const &stats = snode_.at(nidx);
             auto leaf_value =
                 evaluator.CalcWeight(nidx, param_, GradStats{stats.stats}) *
@@ -301,7 +226,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
                           bool is_dense,
                           std::vector<bst_node_t> const &nodes_to_build) {
     monitor_->Start(__func__);
-    histogram_builder_.BuildNodeHistogram(gpair, row_set_collection_, gidx,
+    histogram_builder_.BuildNodeHistogram(gpair, partitioner_.Partitions(), gidx,
                                           is_dense, nodes_to_build);
     monitor_->Stop(__func__);
   }
@@ -366,7 +291,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
       this->UpdatePosition(index, applid, p_tree);
 
       if (!valid_candidates.empty()) {
-        this->BuildHistogram(gpair, valid_candidates, row_set_collection_,
+        this->BuildHistogram(gpair, valid_candidates, partitioner_.Partitions(),
                              m->IsDense(), index, p_tree);
         std::vector<LocalExpandEntry*> best_splits;
         std::vector<size_t> new_candidates_pos;
