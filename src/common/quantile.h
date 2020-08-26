@@ -594,7 +594,7 @@ class QuantileSketchTemplate {
     inqueue.Push(x, w);
   }
 
-  void PushSorted(DType x, RType w = 1) {
+  void PushSorted(DType x, RType w) {
     if (w == static_cast<RType>(0)) return;
     if (inqueue.qtail == inqueue.queue.size()) {
       // jump from lazy one value to limit_size * 2
@@ -777,16 +777,11 @@ class HostSketchContainer {
   // Merge sketches from all workers.
   void AllReduce(std::vector<WQSketch::SummaryContainer> *p_reduced,
                  std::vector<int32_t>* p_num_cuts);
-  /* \brief Push a CSR matrix. */
-  void PushRowPage(SparsePage const &page, MetaInfo const &info,
-                   std::function<float(bst_row_t idx)> get_weight);
   /*\brief Push a CSC matrix with sorted columns. */
-  void PushSortedCSC(SortedCSCPage const& page, MetaInfo const &info,
-                     std::function<float(bst_row_t idx)> get_weight);
-
-  void PushRowPage(SparsePage const &page, MetaInfo const &info) {
-    this->PushRowPage(page, info, [&](bst_row_t idx) { return info.GetWeight(idx); });
-  }
+  void PushSortedCSC(SortedCSCPage const &page, MetaInfo const &info,
+                     std::vector<float> const &weights);
+  /* \brief Push a CSR matrix. */
+  void PushRowPage(SparsePage const &page, MetaInfo const &info);
 
   void MakeCuts(HistogramCuts* cuts);
 };

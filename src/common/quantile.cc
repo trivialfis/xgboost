@@ -90,8 +90,7 @@ std::vector<bst_feature_t> HostSketchContainer::LoadBalance(
 }
 
 void HostSketchContainer::PushRowPage(
-    SparsePage const &page, MetaInfo const &info,
-    std::function<float(bst_row_t idx)> get_weight) {
+    SparsePage const &page, MetaInfo const &info) {
   monitor_.Start(__func__);
   int nthread = omp_get_max_threads();
   bst_feature_t n_columns = info.num_col_;
@@ -106,6 +105,7 @@ void HostSketchContainer::PushRowPage(
   // Parallel over columns.  Each thread owns a set of consecutive columns.
   auto const ncol = static_cast<uint32_t>(info.num_col_);
   auto thread_columns_ptr = LoadBalance(page, info.num_col_, nthread);
+  auto const& weights = info.weights_.HostVector();
 
 #pragma omp parallel num_threads(nthread)
   {
@@ -124,7 +124,7 @@ void HostSketchContainer::PushRowPage(
             group_ind = this->SearchGroupIndFromRow(group_ptr, i + page.base_rowid);
           }
           size_t w_idx = use_group_ind_ ? group_ind : ridx;
-          auto w = get_weight(w_idx);
+          auto w = info.GetWeight(w_idx);
           auto p_inst = inst.data();
           if (is_dense) {
             for (size_t ii = begin; ii < end; ii++) {
@@ -148,7 +148,7 @@ void HostSketchContainer::PushRowPage(
 
 void HostSketchContainer::PushSortedCSC(
     SortedCSCPage const &batch, MetaInfo const &info,
-    std::function<float(bst_row_t idx)> get_weight) {
+    std::vector<float> const &weights) {
   auto page = batch.GetView();
   monitor_.Start(__func__);
   monitor_.Start("Balance");
@@ -182,6 +182,7 @@ void HostSketchContainer::PushSortedCSC(
 
   monitor_.Start("Run Sketch");
   dmlc::OMPException exec;
+  auto const* p_weights = weights.data();
 #pragma omp parallel num_threads(nthreads)
   {
     exec.Run([&]() {
@@ -191,8 +192,7 @@ void HostSketchContainer::PushSortedCSC(
         auto p_column = column.data();
         for (size_t j = 0; j < column.size(); ++j) {
           auto const& e = p_column[j];
-          // auto w = get_weight(e.index);
-          float w = 1;
+          float w = p_weights[e.index];
           this->sketches_[i].PushSorted(e.fvalue, w);
         }
       }

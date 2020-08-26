@@ -328,8 +328,8 @@ template <typename GradientSumT> class GloablApproxBuilder {
   void UpdatePredictionCache(const DMatrix *data,
                              HostDeviceVector<bst_float> *p_out_preds) {
     monitor_->Start(__func__);
-    // Caching prediction seems redundant for approx tree method, as sketching and
-    // creating column index together takes up majority of training time.
+    // Caching prediction seems redundant for approx tree method, as sketching takes up
+    // majority of training time.
     std::vector<bst_float>& out_preds = p_out_preds->HostVector();
     CHECK_EQ(out_preds.size(), data->Info().num_row_);
     CHECK(p_last_tree_);
@@ -568,6 +568,7 @@ class GlobalApproxUpdater : public TreeUpdater {
 
   std::unique_ptr<GloablApproxBuilder<float>> f32_impl_;
   std::unique_ptr<GloablApproxBuilder<double>> f64_impl_;
+  DMatrix* cached_ { nullptr };
 
  public:
   GlobalApproxUpdater() {
@@ -608,7 +609,8 @@ class GlobalApproxUpdater : public TreeUpdater {
         << "Feature grouping is not implemented for approx.";
 
     auto const &info = m->Info();
-    if (columns_size_.empty()) {
+    if (columns_size_.empty() || cached_ != m) {
+      cached_ = m;
       columns_size_.resize(info.num_col_, 0);
       const auto threads = omp_get_max_threads();
       std::vector<std::vector<bst_row_t>> column_sizes(threads);
@@ -629,9 +631,12 @@ class GlobalApproxUpdater : public TreeUpdater {
     m->GetBatches<SortedCSCPage>();
     monitor_.Start("Sketch");
     common::HistogramCuts cuts;
+    std::vector<float> hessians(h_gpair.size());
+    std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians.begin(),
+                   [](auto const &g) { return g.GetHess(); });
     for (auto const& page : m->GetBatches<SortedCSCPage>()) {
       common::HostSketchContainer container(columns_size_, param_.max_bin, false);
-      container.PushSortedCSC(page, info, nullptr);
+      container.PushSortedCSC(page, info, hessians);
       container.MakeCuts(&cuts);
     }
     monitor_.Stop("Sketch");

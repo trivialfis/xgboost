@@ -122,9 +122,7 @@ class HistogramCuts {
 };
 
 inline HistogramCuts
-SketchOnDMatrix(DMatrix *m, int32_t max_bins,
-                std::function<float(bst_row_t idx)> get_weight = nullptr,
-                bool row_major = true) {
+SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
   HistogramCuts out;
   auto const &info = m->Info();
   const auto threads = omp_get_max_threads();
@@ -141,29 +139,12 @@ SketchOnDMatrix(DMatrix *m, int32_t max_bins,
     }
   }
 
-  if (row_major) {
-    for (auto const &page : m->GetBatches<SparsePage>()) {
-      if (!get_weight) {
-        HostSketchContainer container(reduced, max_bins,
-                                      HostSketchContainer::UseGroup(info));
-        container.PushRowPage(page, info);
-        container.MakeCuts(&out);
-      } else {
-        HostSketchContainer container(reduced, max_bins, false);
-        container.PushRowPage(page, info, get_weight);
-        container.MakeCuts(&out);
-      }
-    }
-  } else {
-    // CHECK_EQ(weights.size(), info.num_row_);
-    CHECK(get_weight);
-    for (auto const& page : m->GetBatches<SortedCSCPage>()) {
-      HostSketchContainer container(reduced, max_bins, false);
-      container.PushSortedCSC(page, info, get_weight);
-      container.MakeCuts(&out);
-    }
+  for (auto const &page : m->GetBatches<SparsePage>()) {
+    HostSketchContainer container(reduced, max_bins,
+                                  HostSketchContainer::UseGroup(info));
+    container.PushRowPage(page, info);
+    container.MakeCuts(&out);
   }
-
   return out;
 }
 
