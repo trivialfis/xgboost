@@ -19,7 +19,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
       std::conditional_t<std::is_same<GradientSumT, float>::value, GradientPair,
                          GradientPairPrecise>;
 
-  common::Monitor* monitor_;
   common::HistCollection<GradientSumT> histograms_;
   common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
   common::GHistBuilder<GradientSumT> histogram_builder_;
@@ -31,7 +30,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                           common::GHistIndexMatrix const &gidx,
                           bool is_dense,
                           std::vector<bst_node_t> const &nodes_to_build) {
-    monitor_->Start(__func__);
     size_t n_nodes = nodes_to_build.size();
     CHECK_NE(n_nodes, 0);
     common::BlockedSpace2d space(n_nodes, [&](size_t nidx_in_set) {
@@ -71,7 +69,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                           });
 
     if (!rabit::IsDistributed()) {
-      monitor_->Stop(__func__);
       return;
     }
 
@@ -96,7 +93,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                             auto hist = this->histograms_[nidx];
                             common::CopyHist(hist, src, r.begin(), r.end());
                           });
-    monitor_->Stop(__func__);
   }
 
   void BuildHistogram(const std::vector<GradientPair> &gpair,
@@ -104,7 +100,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                       common::RowSetCollection const &row_indices,
                       bool is_dense, common::GHistIndexMatrix const &gidx,
                       RegTree const* p_tree) {
-    monitor_->Start(__func__);
     CHECK_NE(candidates.size(), 0);
     auto const& tree = *p_tree;
     std::vector<bst_node_t> nodes_to_build;
@@ -150,7 +145,6 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                                 histograms_[build_hist_nidx], r.begin(),
                                 r.end());
                           });
-    monitor_->Stop(__func__);
   }
 
   auto const& Histograms() const { return histograms_; }

@@ -64,7 +64,7 @@ class ApproxForTest : public GloablApproxBuilder<double> {
                               bool is_dense,
                               std::vector<bst_node_t> const &nodes_to_build) {
     SuperT::BuildNodeHistogram(gpair, gidx, is_dense, nodes_to_build);
-    auto root_hist = histograms_[RegTree::kRoot];
+    auto root_hist = histogram_builder_.Histograms()[RegTree::kRoot];
     ASSERT_EQ(root_hist.size(), rows_ * cols_);
 
     for (size_t i = 0; i < rows_; ++i) {
