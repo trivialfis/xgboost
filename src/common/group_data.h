@@ -28,12 +28,10 @@ namespace common {
  * \tparam ValueType type of entries in the sparse matrix
  * \tparam SizeType type of the index range holder
  */
-template<typename ValueType>
+template<typename ValueType, typename SizeType = bst_ulong>
 class ParallelGroupBuilder {
-  using SizeType = bst_ulong;
-
  public:
-  /*!
+  /**
    * \brief parallel group builder of data.
    *
    * \param [in,out]  p_rptr          Row offsets for CSR matrix.
@@ -78,7 +76,8 @@ class ParallelGroupBuilder {
     trptr[offset_key] += nelem;
   }
 
-  void InitThreadStorage() {
+  /*! \brief step 3: initialize the necessary storage */
+  inline void InitStorage() {
     // set rptr to correct size
     SizeType rptr_fill_value = rptr_.empty() ? 0 : rptr_.back();
     for (std::size_t tid = 0; tid < thread_rptr_.size(); ++tid) {
@@ -102,17 +101,7 @@ class ParallelGroupBuilder {
       }
       rptr_[i + 1] += count;  // pointer accumulated from all thread
     }
-  }
-
-  /*! \brief step 3: initialize the necessary storage */
-  void InitStorage() {
-    this->InitThreadStorage();
     data_.resize(rptr_.back());
-  }
-
-  template <typename T>
-  void InitStorage(std::vector<T>* data) {
-    data->resize(rptr_.back());
   }
 
   /*!
@@ -127,19 +116,6 @@ class ParallelGroupBuilder {
     size_t offset_key = key - base_row_offset_;
     SizeType &rp = thread_rptr_[threadid][offset_key];
     data_[rp++] = std::move(value);
-  }
-
-  template <typename T, typename Container>
-  void Transform(size_t key, T value, int32_t threadid, Container* data) {
-    size_t offset_key = key - base_row_offset_;
-    SizeType &rp = thread_rptr_[threadid][offset_key];
-    (*data)[rp] = value;
-  }
-
-  void Increase(size_t key, int32_t threadid) {
-    size_t offset_key = key - base_row_offset_;
-    SizeType &rp = thread_rptr_[threadid][offset_key];
-    rp++;
   }
 
  private:
