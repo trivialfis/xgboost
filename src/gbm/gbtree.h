@@ -33,7 +33,7 @@
 namespace xgboost {
 enum class TreeMethod : int {
   kAuto = 0, kApprox = 1, kExact = 2, kHist = 3,
-  kGPUHist = 5
+  kGPUHist = 5, kLocal = 6
 };
 
 // boosting process types

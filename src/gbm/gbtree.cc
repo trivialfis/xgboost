@@ -170,6 +170,9 @@ void GBTree::ConfigureUpdaters() {
     case TreeMethod::kApprox:
       tparam_.updater_seq = "grow_global_approx_histmaker";
       break;
+    case TreeMethod::kLocal:
+      tparam_.updater_seq = "grow_local_approx_histmaker";
+      break;
     case TreeMethod::kExact:
       tparam_.updater_seq = "grow_colmaker,prune";
       break;
