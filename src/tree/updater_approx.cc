@@ -26,23 +26,12 @@ template <typename GradientSumT> class GloablApproxBuilder {
   TrainParam param_;
   CPUHistMakerTrainParam hist_param_;
 
-  TreeEvaluator evaluator_;
+  ApproxEvaluator<GradientSumT> evaluator_;
   FeatureInteractionConstraintHost interaction_constraints_;
-  common::ColumnSampler column_sampler_;
-  std::vector<int> monotonic_constraint_;
 
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
   ApproxRowPartitioner partitioner_;
-  // static constexpr size_t kPartitionBlockSize = 2048;
-  // PartitionBuilder<kPartitionBlockSize> partition_builder_;
-  // common::RowSetCollection row_set_collection_;
-
-  // common::GHistBuilder<GradientSumT> histogram_builder_;
-  // common::HistCollection<GradientSumT> histograms_;
-  // rabit::Reducer<GradientPairT, GradientPairT::Reduce> histogram_reducer_;
-  // common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
-
   std::vector<NodeEntry> snode_;
   RegTree* p_last_tree_ {nullptr};
   common::Monitor* monitor_;
@@ -52,24 +41,8 @@ template <typename GradientSumT> class GloablApproxBuilder {
                 common::GHistIndexMatrix const &index) {
     monitor_->Start(__func__);
     auto const &info = m->Info();
-
     partitioner_ = ApproxRowPartitioner(info.num_row_);
-
-    column_sampler_.Init(info.num_col_, m->Info().feature_weigths.HostVector(),
-                         param_.colsample_bynode, param_.colsample_bylevel,
-                         param_.colsample_bytree, false);
-
-    if (!param_.monotone_constraints.empty()) {
-      monotonic_constraint_ = param_.monotone_constraints;
-    } else {
-      monotonic_constraint_.resize(info.num_col_, 0);
-    }
-
     histogram_builder_ = ApproxHistogramBuilder<GradientSumT>(index.cut.TotalBins());
-    // histograms_.Init(index.cut.TotalBins());
-    // histogram_mapper_.Init(index.cut.TotalBins());
-    // histogram_builder_ =
-    //     common::GHistBuilder<GradientSumT>(omp_get_max_threads(), index.cut.TotalBins());
     monitor_->Stop(__func__);
   }
 
@@ -88,17 +61,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
     this->BuildNodeHistogram(gpair, m, m.IsDense(), {RegTree::kRoot});
 
-    snode_.resize(p_tree->GetNodes().size());
-    CHECK_EQ(snode_.size(), 1);
-    auto root_evaluator = evaluator_.GetEvaluator();
-
-    snode_[0].stats = GradStats{root_sum.GetGrad(), root_sum.GetHess()};
-    snode_[0].root_gain = root_evaluator.CalcGain(RegTree::kRoot, param_,
-                                                  GradStats{snode_[0].stats});
-    auto weight = root_evaluator.CalcWeight(RegTree::kRoot, param_,
-                                            GradStats{snode_[0].stats});
-
-
+    auto weight = evaluator_.InitRoot(root_sum);
     p_tree->Stat(RegTree::kRoot).sum_hess = root_sum.GetHess();
     p_tree->Stat(RegTree::kRoot).base_weight = weight;
     (*p_tree)[RegTree::kRoot].SetLeaf(param_.learning_rate * weight);
@@ -114,68 +77,13 @@ template <typename GradientSumT> class GloablApproxBuilder {
                       common::GHistIndexMatrix const &gidx, const RegTree &tree,
                       std::vector<LocalExpandEntry *> entries) {
     monitor_->Start(__func__);
-    const size_t grain_size = std::max<size_t>(
-        1,
-        column_sampler_.GetFeatureSet(tree.GetDepth(entries[0]->nid))->Size() /
-        omp_get_max_threads());
-
-    // All nodes are on the same level, so we can store the shared ptr.
-    std::vector<std::shared_ptr<HostDeviceVector<bst_feature_t>>> features(
-        entries.size());
-    for (size_t nidx_in_set = 0; nidx_in_set < entries.size(); ++nidx_in_set) {
-      auto nidx = entries[nidx_in_set]->nid;
-      features[nidx_in_set] = column_sampler_.GetFeatureSet(tree.GetDepth(nidx));
-    }
-    common::BlockedSpace2d space(entries.size(), [&](size_t nidx_in_set) {
-      return features[nidx_in_set]->Size();
-    }, grain_size);
-
-    auto num_threads = omp_get_max_threads();
-    std::vector<LocalExpandEntry> tloc_candidates(omp_get_max_threads() * entries.size());
-    for (size_t i = 0; i < entries.size(); ++i) {
-      for (decltype(num_threads) j = 0; j < num_threads; ++j) {
-        tloc_candidates[i * num_threads + j] = *entries[i];
-      }
-    }
-    auto evaluator = evaluator_.GetEvaluator();
-
-    common::ParallelFor2d(space, num_threads, [&](size_t nidx_in_set, common::Range1d r) {
-      auto tidx = omp_get_thread_num();
-      auto entry = &tloc_candidates[num_threads * nidx_in_set + tidx];
-      auto best = &entry->split;
-      auto nidx = entry->nid;
-      auto histogram = hist[nidx];
-      auto features_set = features[nidx_in_set]->ConstHostSpan();
-      for (auto fidx_in_set = r.begin(); fidx_in_set < r.end(); fidx_in_set++) {
-        auto fidx = features_set[fidx_in_set];
-        if (interaction_constraints_.Query(nidx, fidx)) {
-          auto grad_stats = EnumerateSplit<common::GHistRow<GradientSumT>,
-                                           NodeEntry, SplitEntry, +1>(
-              gidx, histogram, snode_[nidx], best, nidx, fidx, param_,
-              evaluator);
-          if (SplitContainsMissingValues(grad_stats, snode_[nidx])) {
-            EnumerateSplit<common::GHistRow<GradientSumT>, NodeEntry,
-                           SplitEntry, -1>(gidx, histogram, snode_[nidx], best,
-                                           nidx, fidx, param_, evaluator);
-          }
-        }
-      }
-    });
-
-    for (unsigned nidx_in_set = 0; nidx_in_set < entries.size();
-         ++nidx_in_set) {
-      for (auto tidx = 0; tidx < num_threads; ++tidx) {
-        entries[nidx_in_set]->split.Update(
-            tloc_candidates[num_threads * nidx_in_set + tidx].split);
-      }
-    }
+    evaluator_.EvaluateSplits(hist, gidx, tree, entries);
     monitor_->Stop(__func__);
   }
 
   void ApplySplit(LocalExpandEntry candidate, RegTree *p_tree) {
     monitor_->Start(__func__);
-    ApplyTreeSplit(candidate, param_, p_tree, &snode_, &evaluator_,
-                   &interaction_constraints_);
+    evaluator_.ApplyTreeSplit(candidate, param_, p_tree);
     monitor_->Stop(__func__);
   }
 
@@ -244,9 +152,9 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
  public:
   explicit GloablApproxBuilder(TrainParam param, CPUHistMakerTrainParam hparam,
-                               bst_feature_t n_features, common::Monitor* monitor)
-      : param_{param}, hist_param_{hparam},
-        evaluator_(param, n_features, GenericParameter::kCpuId), monitor_{monitor} {}
+                               MetaInfo const &info, common::Monitor *monitor)
+      : param_{std::move(param)}, hist_param_{hparam},
+        evaluator_{param_, info}, monitor_{monitor} {}
 
   void UpdateTree(RegTree *p_tree, DMatrix *m,
                   std::vector<GradientPair> const &gpair,
@@ -397,10 +305,10 @@ class GlobalApproxUpdater : public TreeUpdater {
 
     if (hist_param_.single_precision_histogram) {
       f32_impl_ = std::make_unique<GloablApproxBuilder<float>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
+          param_, hist_param_, m->Info(), &monitor_);
     } else {
       f64_impl_ = std::make_unique<GloablApproxBuilder<double>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
+          param_, hist_param_, m->Info(), &monitor_);
     }
 
     CHECK(!param_.enable_feature_grouping)

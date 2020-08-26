@@ -26,11 +26,12 @@ TEST(Approx, InitData) {
   CPUHistMakerTrainParam hist_param;
   hist_param.UpdateAllowUnknown(Args{});
   common::Monitor monitor;
-  GloablApproxBuilder<double> updater(tparam, hist_param, kCols, &monitor);
   common::GHistIndexMatrix gidx;
   common::ColumnMatrix columns;
 
   auto m = GenerateDMatrix(kRows, kCols);
+  auto const& info = m->Info();
+  GloablApproxBuilder<double> updater(tparam, hist_param, info, &monitor);
   // updater.InitData(m.get(), h_gpair, &gidx, &columns);
 
   // auto const& cuts = gidx.cut;
@@ -56,8 +57,8 @@ class ApproxForTest : public GloablApproxBuilder<double> {
  public:
   ApproxForTest(TrainParam param, CPUHistMakerTrainParam hparam,
                 size_t n_rows,
-                bst_feature_t n_features)
-      : SuperT{param, hparam, n_features, &monitor_}, rows_{n_rows}, cols_{n_features} {}
+                MetaInfo const& info)
+      : SuperT{param, hparam, info, &monitor_}, rows_{n_rows}, cols_{info.num_col_} {}
 
   void TestBuildRootHistogram(const std::vector<GradientPair> &gpair,
                               common::GHistIndexMatrix const &gidx,
@@ -102,7 +103,6 @@ TEST(Approx, BuildHistogram) {
   tparam.UpdateAllowUnknown(Args{});
   CPUHistMakerTrainParam hist_param;
   hist_param.UpdateAllowUnknown(Args{});
-  ApproxForTest updater(tparam, hist_param, kRows, kCols);
 
   common::GHistIndexMatrix gidx;
   common::ColumnMatrix columns;
@@ -110,6 +110,8 @@ TEST(Approx, BuildHistogram) {
   auto h_gpair = GenerateConstantGradients(kRows, 1.0f, 2.0f);
 
   auto m = GenerateDMatrix(kRows, kCols);
+  ApproxForTest updater(tparam, hist_param, kRows, m->Info());
+
   // updater.InitData(m.get(), h_gpair, &gidx, &columns);
 
   // updater.TestBuildRootHistogram(h_gpair, gidx, true, {0});
@@ -133,7 +135,10 @@ TEST(Approx, ApplySplit) {
   tparam.UpdateAllowUnknown(Args{});
   CPUHistMakerTrainParam hist_param;
   hist_param.UpdateAllowUnknown(Args{});
-  ApproxForTest updater(tparam, hist_param, kRows, kCols);
+  MetaInfo info;
+  info.num_row_ = kRows;
+  info.num_col_ = kCols;
+  ApproxForTest updater(tparam, hist_param, kRows, info);
 
   RegTree tree;
   GradStats left_sum {0.1f, 0.3f}, right_sum {0.2f, 0.4f};
