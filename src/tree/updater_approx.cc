@@ -114,7 +114,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
     snode_.resize(p_tree->GetNodes().size());
     CHECK_EQ(snode_.size(), 1);
-    auto root_evaluator = evaluator_.GetCalculator();
+    auto root_evaluator = evaluator_.GetEvaluator();
 
     snode_[0].stats = GradStats{root_sum.GetGrad(), root_sum.GetHess()};
     snode_[0].root_gain = root_evaluator.CalcGain(RegTree::kRoot, param_,
@@ -160,7 +160,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
         tloc_candidates[i * num_threads + j] = *entries[i];
       }
     }
-    auto evaluator = evaluator_.GetCalculator();
+    auto evaluator = evaluator_.GetEvaluator();
 
     common::ParallelFor2d(space, num_threads, [&](size_t nidx_in_set, common::Range1d r) {
       auto tidx = omp_get_thread_num();
@@ -202,7 +202,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
     GradStats parent_sum = candidate.split.left_sum;
     parent_sum.Add(candidate.split.right_sum);
-    auto tree_evalator = evaluator_.GetCalculator();
+    auto tree_evalator = evaluator_.GetEvaluator();
     auto base_weight =
         tree_evalator.CalcWeight(candidate.nid, param_, GradStats{parent_sum});
 
@@ -340,7 +340,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
         n_nodes, [&](size_t node) { return row_set_collection_[node].Size(); },
         1024);
 
-    auto evaluator = evaluator_.GetCalculator();
+    auto evaluator = evaluator_.GetEvaluator();
     auto const& tree = *p_last_tree_;
     common::ParallelFor2d(
         space, omp_get_max_threads(), [&](size_t nidx, common::Range1d r) {
