@@ -275,6 +275,10 @@ struct GHistIndexMatrix {
                              size_t batch_threads, const SparsePage& batch,
                              size_t rbegin, size_t nbins);
 
+  void SetIndexForRowSet(SparsePage const &page,
+                         common::Span<bst_row_t const> row_set,
+                         HistogramCuts const &cuts);
+
   void ResizeIndex(const size_t n_index, const bool isDense);
 
   void GetFeatureCounts(size_t* counts) const {

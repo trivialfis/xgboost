@@ -686,7 +686,7 @@ class GlobalApproxUpdater : public TreeUpdater {
 
 #if !defined(GTEST_TEST)
 DMLC_REGISTRY_FILE_TAG(grow_global_approx_histmaker);
-XGBOOST_REGISTER_TREE_UPDATER(LocalHistMaker, "grow_global_approx_histmaker")
+XGBOOST_REGISTER_TREE_UPDATER(GlobalHistMaker, "grow_global_approx_histmaker")
     .describe("Tree constructor that uses approximate histogram construction "
               "for each node.")
     .set_body([]() { return new GlobalApproxUpdater(); });

@@ -107,6 +107,24 @@ void GHistIndexMatrix::SetIndexDataForSparse(
   }
 }
 
+void GHistIndexMatrix::SetIndexForRowSet(SparsePage const& page,
+                                         common::Span<bst_row_t const> row_set,
+                                         HistogramCuts const &cuts) {
+  auto const& offset = page.offset.ConstHostVector();
+  auto n_index = page.Size();
+  common::Span<uint32_t> index_data_span = {index.data<uint32_t>(), n_index};
+
+  for (size_t i = 0; i < row_set.size(); ++i) {  // NOLINT
+    auto ridx = row_set[i];
+    auto inst = page[ridx];
+    for (auto e : inst) {
+      auto bin = cuts.SearchBin(e);
+      auto idx = offset[ridx] + e.index;
+      index_data_span[idx] = bin;
+    }
+  }
+}
+
 void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
   cut = SketchOnDMatrix(p_fmat, max_bins);
   max_num_bins = max_bins;

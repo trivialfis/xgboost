@@ -196,6 +196,12 @@ void HostSketchContainer::PushSortedCSC(
   exec.Rethrow();
 }
 
+void HostSketchContainer::PushInstance(SparsePage::Inst const& inst, float w) {
+  for (size_t i = 0; i < inst.size(); i++) {
+    sketches_[i].Push(inst[i].fvalue, w);
+  }
+}
+
 void HostSketchContainer::GatherSketchInfo(
     std::vector<WQSketch::SummaryContainer> const &reduced,
     std::vector<size_t> *p_worker_segments,

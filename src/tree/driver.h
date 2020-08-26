@@ -1,3 +1,5 @@
+#ifndef XGBOOST_TREE_DRIVER_H_
+#define XGBOOST_TREE_DRIVER_H_
 #include <functional>
 #include <queue>
 #include "param.h"
@@ -71,3 +73,4 @@ class DriverContainer {
 };
 }  // namespace tree
 }  // namespace xgboost
+#endif  // XGBOOST_TREE_DRIVER_H_
