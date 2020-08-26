@@ -603,6 +603,7 @@ class GlobalApproxUpdater : public TreeUpdater {
       f64_impl_ = std::make_unique<GloablApproxBuilder<double>>(
           param_, hist_param_, m->Info().num_col_, &monitor_);
     }
+    // FIXME: move gradient subsampling here.
 
     CHECK(!param_.enable_feature_grouping)
         << "Feature grouping is not implemented for approx.";
