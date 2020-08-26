@@ -38,7 +38,6 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
   common::HistCollection<GradientSumT> histograms_;
   rabit::Reducer<GradientPairT, GradientPairT::Reduce> histogram_reducer_;
-  std::vector<GradientPair> gpair_;
   common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
 
   struct NodeEntry {
@@ -56,23 +55,6 @@ template <typename GradientSumT> class GloablApproxBuilder {
                 common::GHistIndexMatrix const &index) {
     monitor_->Start(__func__);
     auto const &info = m->Info();
-
-    gpair_.resize(gpair.size());
-    std::copy(gpair.cbegin(), gpair.cend(), gpair_.begin());
-    auto &rnd = common::GlobalRandom();
-    if (param_.subsample != 1.0) {
-      CHECK(param_.sampling_method != TrainParam::kGradientBased)
-          << "Gradient based sampling is not supported for approx tree method.";
-      std::bernoulli_distribution coin_flip(param_.subsample);
-      std::transform(gpair_.begin(), gpair_.end(), gpair_.begin(),
-                     [&](GradientPair &g) {
-                       if (coin_flip(rnd)) {
-                         return g;
-                       } else {
-                         return GradientPair{};
-                       }
-                     });
-    }
 
     row_set_collection_.Clear();
     auto p_positions = row_set_collection_.Data();
@@ -501,7 +483,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
     DriverContainer<LocalExpandEntry> driver(
         static_cast<TrainParam::TreeGrowPolicy>(param_.grow_policy));
 
-    driver.Push({this->InitRoot(index, gpair_, p_tree)});
+    driver.Push({this->InitRoot(index, gpair, p_tree)});
     auto num_leaves = 1;
     auto expand_set = driver.Pop();
 
@@ -533,7 +515,7 @@ template <typename GradientSumT> class GloablApproxBuilder {
       this->UpdatePosition(index, applid, p_tree);
 
       if (!valid_candidates.empty()) {
-        this->BuildHistogram(gpair_, valid_candidates, row_set_collection_,
+        this->BuildHistogram(gpair, valid_candidates, row_set_collection_,
                              m->IsDense(), index, p_tree);
         std::vector<LocalExpandEntry*> best_splits;
         std::vector<size_t> new_candidates_pos;
@@ -591,23 +573,8 @@ class GlobalApproxUpdater : public TreeUpdater {
 
   char const *Name() const override { return "grow_global_approx_histmaker"; }
 
-  void Update(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
-              const std::vector<RegTree *> &trees) override {
-    float lr = param_.learning_rate;
-    param_.learning_rate = lr / trees.size();
-
-    if (hist_param_.single_precision_histogram) {
-      f32_impl_ = std::make_unique<GloablApproxBuilder<float>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
-    } else {
-      f64_impl_ = std::make_unique<GloablApproxBuilder<double>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
-    }
-    // FIXME: move gradient subsampling here.
-
-    CHECK(!param_.enable_feature_grouping)
-        << "Feature grouping is not implemented for approx.";
-
+  void InitData(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
+                std::vector<GradientPair> *sampled) {
     auto const &info = m->Info();
     if (columns_size_.empty() || cached_ != m) {
       cached_ = m;
@@ -627,7 +594,45 @@ class GlobalApproxUpdater : public TreeUpdater {
       }
     }
 
-    auto const& h_gpair = gpair->ConstHostVector();
+    auto const &h_gpair = gpair->HostVector();
+    sampled->resize(h_gpair.size());
+    std::copy(h_gpair.cbegin(), h_gpair.cend(), sampled->begin());
+    auto &rnd = common::GlobalRandom();
+    if (param_.subsample != 1.0) {
+      CHECK(param_.sampling_method != TrainParam::kGradientBased)
+          << "Gradient based sampling is not supported for approx tree method.";
+      std::bernoulli_distribution coin_flip(param_.subsample);
+      std::transform(sampled->begin(), sampled->end(), sampled->begin(),
+                     [&](GradientPair &g) {
+                       if (coin_flip(rnd)) {
+                         return g;
+                       } else {
+                         return GradientPair{};
+                       }
+                     });
+    }
+  }
+
+  void Update(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
+              const std::vector<RegTree *> &trees) override {
+    float lr = param_.learning_rate;
+    param_.learning_rate = lr / trees.size();
+
+    if (hist_param_.single_precision_histogram) {
+      f32_impl_ = std::make_unique<GloablApproxBuilder<float>>(
+          param_, hist_param_, m->Info().num_col_, &monitor_);
+    } else {
+      f64_impl_ = std::make_unique<GloablApproxBuilder<double>>(
+          param_, hist_param_, m->Info().num_col_, &monitor_);
+    }
+
+    CHECK(!param_.enable_feature_grouping)
+        << "Feature grouping is not implemented for approx.";
+
+    std::vector<GradientPair> h_gpair;
+    this->InitData(gpair, m, &h_gpair);
+    auto const &info = m->Info();
+
     common::HistogramCuts cuts;
     std::vector<float> hessians(h_gpair.size());
     std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians.begin(),
@@ -641,8 +646,8 @@ class GlobalApproxUpdater : public TreeUpdater {
       }
       monitor_.Stop("Dense Sketch");
     } else {
-      monitor_.Start("Sparse Sketch");
       m->GetBatches<SortedCSCPage>();
+      monitor_.Start("Sparse Sketch");
       for (auto const &page : m->GetBatches<SortedCSCPage>()) {
         container.PushSortedCSC(page, info, hessians);
       }
@@ -668,6 +673,8 @@ class GlobalApproxUpdater : public TreeUpdater {
   bool
   UpdatePredictionCache(const DMatrix *data,
                         HostDeviceVector<bst_float> *p_out_preds) override {
+    if (data != cached_) { return false; }
+
     if (hist_param_.single_precision_histogram) {
       this->f32_impl_->UpdatePredictionCache(data, p_out_preds);
     } else {
