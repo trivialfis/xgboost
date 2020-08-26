@@ -634,11 +634,11 @@ class GlobalApproxUpdater : public TreeUpdater {
     std::vector<float> hessians(h_gpair.size());
     std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians.begin(),
                    [](auto const &g) { return g.GetHess(); });
+    common::HostSketchContainer container(columns_size_, param_.max_bin, false);
     for (auto const& page : m->GetBatches<SortedCSCPage>()) {
-      common::HostSketchContainer container(columns_size_, param_.max_bin, false);
       container.PushSortedCSC(page, info, hessians);
-      container.MakeCuts(&cuts);
     }
+    container.MakeCuts(&cuts);
     monitor_.Stop("Sketch");
 
     monitor_.Start("GHistIndexMatrix");
