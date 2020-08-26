@@ -31,7 +31,7 @@ TEST(Approx, InitData) {
 
   auto m = GenerateDMatrix(kRows, kCols);
   auto const& info = m->Info();
-  GloablApproxBuilder<double> updater(tparam, hist_param, info, &monitor);
+  GloablApproxBuilder<double> updater(tparam, info, &monitor);
   // updater.InitData(m.get(), h_gpair, &gidx, &columns);
 
   // auto const& cuts = gidx.cut;
@@ -55,10 +55,10 @@ class ApproxForTest : public GloablApproxBuilder<double> {
   common::Monitor monitor_;
 
  public:
-  ApproxForTest(TrainParam param, CPUHistMakerTrainParam hparam,
+  ApproxForTest(TrainParam param,
                 size_t n_rows,
                 MetaInfo const& info)
-      : SuperT{param, hparam, info, &monitor_}, rows_{n_rows}, cols_{info.num_col_} {}
+      : SuperT{param, info, &monitor_}, rows_{n_rows}, cols_{info.num_col_} {}
 
   void TestBuildRootHistogram(const std::vector<GradientPair> &gpair,
                               common::GHistIndexMatrix const &gidx,
@@ -110,7 +110,7 @@ TEST(Approx, BuildHistogram) {
   auto h_gpair = GenerateConstantGradients(kRows, 1.0f, 2.0f);
 
   auto m = GenerateDMatrix(kRows, kCols);
-  ApproxForTest updater(tparam, hist_param, kRows, m->Info());
+  ApproxForTest updater(tparam, kRows, m->Info());
 
   // updater.InitData(m.get(), h_gpair, &gidx, &columns);
 
@@ -138,7 +138,7 @@ TEST(Approx, ApplySplit) {
   MetaInfo info;
   info.num_row_ = kRows;
   info.num_col_ = kCols;
-  ApproxForTest updater(tparam, hist_param, kRows, info);
+  ApproxForTest updater(tparam, kRows, info);
 
   RegTree tree;
   GradStats left_sum {0.1f, 0.3f}, right_sum {0.2f, 0.4f};

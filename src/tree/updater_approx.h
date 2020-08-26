@@ -388,6 +388,7 @@ template <typename GradientSumT> class ApproxEvaluator {
   }
 
   auto GetEvaluator() const { return tree_evaluator_.GetEvaluator(); }
+  auto const& Stats() const { return snode_; }
 
   float InitRoot(GradStats const& root_sum) {
     snode_.resize(1);
@@ -412,6 +413,49 @@ template <typename GradientSumT> class ApproxEvaluator {
                          param_.colsample_bytree, false);
   }
 };
+
+inline void ApproxLazyInitData(TrainParam const &param,
+                               HostDeviceVector<GradientPair> *gpair,
+                               DMatrix *m, DMatrix *cached,
+                               std::vector<GradientPair> *sampled,
+                               std::vector<bst_row_t> *p_columns_size) {
+  auto const &info = m->Info();
+  auto& columns_size = *p_columns_size;
+  if (columns_size.empty() || cached != m) {
+    columns_size.resize(info.num_col_, 0);
+    const auto threads = omp_get_max_threads();
+    std::vector<std::vector<bst_row_t>> column_sizes(threads);
+    for (auto &column : column_sizes) {
+      column.resize(info.num_col_, 0);
+    }
+    for (auto const &page : m->GetBatches<SparsePage>()) {
+      auto const &entries_per_column =
+          common::HostSketchContainer::CalcColumnSize(page, info.num_col_,
+                                                      threads);
+      for (size_t i = 0; i < entries_per_column.size(); ++i) {
+        columns_size[i] += entries_per_column[i];
+      }
+    }
+  }
+
+  auto const &h_gpair = gpair->HostVector();
+  sampled->resize(h_gpair.size());
+  std::copy(h_gpair.cbegin(), h_gpair.cend(), sampled->begin());
+  auto &rnd = common::GlobalRandom();
+  if (param.subsample != 1.0) {
+    CHECK(param.sampling_method != TrainParam::kGradientBased)
+        << "Gradient based sampling is not supported for approx tree method.";
+    std::bernoulli_distribution coin_flip(param.subsample);
+    std::transform(sampled->begin(), sampled->end(), sampled->begin(),
+                   [&](GradientPair &g) {
+                     if (coin_flip(rnd)) {
+                       return g;
+                     } else {
+                       return GradientPair{};
+                     }
+                   });
+  }
+}
 }      // namespace tree
 }      // namespace xgboost
 #endif  // XGBOOST_TREE_APPROX_H_

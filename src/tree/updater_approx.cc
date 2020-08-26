@@ -24,15 +24,11 @@ template <typename GradientSumT> class GloablApproxBuilder {
                          GradientPairPrecise>;
 
   TrainParam param_;
-  CPUHistMakerTrainParam hist_param_;
 
   ApproxEvaluator<GradientSumT> evaluator_;
-  FeatureInteractionConstraintHost interaction_constraints_;
-
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
   ApproxRowPartitioner partitioner_;
-  std::vector<NodeEntry> snode_;
   RegTree* p_last_tree_ {nullptr};
   common::Monitor* monitor_;
 
@@ -112,11 +108,12 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
     auto evaluator = evaluator_.GetEvaluator();
     auto const& tree = *p_last_tree_;
+    auto const& snode = evaluator_.Stats();
     common::ParallelFor2d(
         space, omp_get_max_threads(), [&](size_t nidx, common::Range1d r) {
           if (tree[nidx].IsLeaf()) {
             const auto rowset = partitioner_[nidx];
-            auto const &stats = snode_.at(nidx);
+            auto const &stats = snode.at(nidx);
             auto leaf_value =
                 evaluator.CalcWeight(nidx, param_, GradStats{stats.stats}) *
                 param_.learning_rate;
@@ -150,11 +147,10 @@ template <typename GradientSumT> class GloablApproxBuilder {
     monitor_->Stop(__func__);
   }
 
- public:
-  explicit GloablApproxBuilder(TrainParam param, CPUHistMakerTrainParam hparam,
-                               MetaInfo const &info, common::Monitor *monitor)
-      : param_{std::move(param)}, hist_param_{hparam},
-        evaluator_{param_, info}, monitor_{monitor} {}
+public:
+  explicit GloablApproxBuilder(TrainParam param, MetaInfo const &info,
+                               common::Monitor *monitor)
+      : param_{std::move(param)}, evaluator_{param_, info}, monitor_{monitor} {}
 
   void UpdateTree(RegTree *p_tree, DMatrix *m,
                   std::vector<GradientPair> const &gpair,
@@ -258,46 +254,6 @@ class GlobalApproxUpdater : public TreeUpdater {
 
   char const *Name() const override { return "grow_global_approx_histmaker"; }
 
-  void InitData(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
-                std::vector<GradientPair> *sampled) {
-    auto const &info = m->Info();
-    if (columns_size_.empty() || cached_ != m) {
-      cached_ = m;
-      columns_size_.resize(info.num_col_, 0);
-      const auto threads = omp_get_max_threads();
-      std::vector<std::vector<bst_row_t>> column_sizes(threads);
-      for (auto &column : column_sizes) {
-        column.resize(info.num_col_, 0);
-      }
-      for (auto const &page : m->GetBatches<SparsePage>()) {
-        auto const &entries_per_column =
-            common::HostSketchContainer::CalcColumnSize(page, info.num_col_,
-                                                        threads);
-        for (size_t i = 0; i < entries_per_column.size(); ++i) {
-          columns_size_[i] += entries_per_column[i];
-        }
-      }
-    }
-
-    auto const &h_gpair = gpair->HostVector();
-    sampled->resize(h_gpair.size());
-    std::copy(h_gpair.cbegin(), h_gpair.cend(), sampled->begin());
-    auto &rnd = common::GlobalRandom();
-    if (param_.subsample != 1.0) {
-      CHECK(param_.sampling_method != TrainParam::kGradientBased)
-          << "Gradient based sampling is not supported for approx tree method.";
-      std::bernoulli_distribution coin_flip(param_.subsample);
-      std::transform(sampled->begin(), sampled->end(), sampled->begin(),
-                     [&](GradientPair &g) {
-                       if (coin_flip(rnd)) {
-                         return g;
-                       } else {
-                         return GradientPair{};
-                       }
-                     });
-    }
-  }
-
   void Update(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
               const std::vector<RegTree *> &trees) override {
     float lr = param_.learning_rate;
@@ -305,17 +261,18 @@ class GlobalApproxUpdater : public TreeUpdater {
 
     if (hist_param_.single_precision_histogram) {
       f32_impl_ = std::make_unique<GloablApproxBuilder<float>>(
-          param_, hist_param_, m->Info(), &monitor_);
+          param_, m->Info(), &monitor_);
     } else {
       f64_impl_ = std::make_unique<GloablApproxBuilder<double>>(
-          param_, hist_param_, m->Info(), &monitor_);
+          param_, m->Info(), &monitor_);
     }
 
     CHECK(!param_.enable_feature_grouping)
         << "Feature grouping is not implemented for approx.";
 
     std::vector<GradientPair> h_gpair;
-    this->InitData(gpair, m, &h_gpair);
+    ApproxLazyInitData(param_, gpair, m, cached_, &h_gpair, &columns_size_);
+    cached_ = m;
     auto const &info = m->Info();
 
     common::HistogramCuts cuts;

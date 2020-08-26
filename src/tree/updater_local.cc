@@ -22,11 +22,7 @@ template <typename GradientSumT> class LocalApproxBuilder {
                          GradientPairPrecise>;
 
   TrainParam param_;
-  CPUHistMakerTrainParam hist_param_;
-
-  // TreeEvaluator evaluator_;
   ApproxEvaluator<GradientSumT> evaluator_;
-
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
   common::HostSketchContainer sketches_;
@@ -36,43 +32,42 @@ template <typename GradientSumT> class LocalApproxBuilder {
   RegTree* p_last_tree_ {nullptr};
   common::Monitor* monitor_;
 
-  std::vector<NodeEntry> snode_;
-
   void InitData(DMatrix *m, std::vector<GradientPair> const &gpair) {
     monitor_->Start(__func__);
     auto const &info = m->Info();
-
     partitioner_ = ApproxRowPartitioner(info.num_row_);
-    evaluator_ = ApproxEvaluator<GradientSumT>(param_, info);
-
     histogram_builder_ = ApproxHistogramBuilder<GradientSumT>(index_.cut.TotalBins());
     monitor_->Stop(__func__);
   }
 
-  LocalExpandEntry InitRoot(common::GHistIndexMatrix const &m,
-                            std::vector<GradientPair> const &gpair,
+  LocalExpandEntry InitRoot(DMatrix* m, std::vector<GradientPair> const &gpair,
                             RegTree *p_tree) {
     monitor_->Start(__func__);
-    LocalExpandEntry best;
-    best.nid = RegTree::kRoot;
-    best.depth = 0;
+    LocalExpandEntry best{RegTree::kRoot, 0, {}};
     GradStats root_sum;
     for (auto const& g : gpair) {
       root_sum.Add(g);
     }
     rabit::Allreduce<rabit::op::Sum, double>(reinterpret_cast<double *>(&root_sum), 2);
 
-    this->BuildNodeHistogram(gpair, m, m.IsDense(), {RegTree::kRoot});
+    auto const& info = m->Info();
+    for (auto const& page : m->GetBatches<SparsePage>()) {
+      this->sketches_.PushRowPage(page, info);
+    }
+    common::HistogramCuts cuts;
+    sketches_.MakeCuts(&cuts);
+    index_.Init(m, cuts, param_.max_bin);
 
+    this->BuildNodeHistogram(gpair, index_, index_.IsDense(), {RegTree::kRoot});
     auto weight = evaluator_.InitRoot(root_sum);
     p_tree->Stat(RegTree::kRoot).sum_hess = root_sum.GetHess();
     p_tree->Stat(RegTree::kRoot).base_weight = weight;
     (*p_tree)[RegTree::kRoot].SetLeaf(param_.learning_rate * weight);
 
     auto const& histograms = histogram_builder_.Histograms();
-    this->EvaluateSplits(histograms, m, *p_tree, {&best});
-    monitor_->Stop(__func__);
+    this->EvaluateSplits(histograms, index_, *p_tree, {&best});
 
+    monitor_->Stop(__func__);
     return best;
   }
 
@@ -121,9 +116,7 @@ public:
                      MetaInfo const &info,
                      std::vector<bst_row_t> const &columns_size,
                      bool is_ranking, common::Monitor *monitor)
-      : param_{param}, hist_param_{hparam}, sketches_{columns_size,
-                                                      param_.max_bin,
-                                                      is_ranking},
+      : param_{param}, sketches_{columns_size, param_.max_bin, is_ranking},
         evaluator_(param, info), monitor_{monitor} {}
 
   void UpdateTree(RegTree *p_tree, DMatrix *m,
@@ -136,7 +129,7 @@ public:
     DriverContainer<LocalExpandEntry> driver(
         static_cast<TrainParam::TreeGrowPolicy>(param_.grow_policy));
 
-    driver.Push({this->InitRoot(index_, gpair, p_tree)});
+    driver.Push({this->InitRoot(m, gpair, p_tree)});
     auto num_leaves = 1;
     auto expand_set = driver.Pop();
 
@@ -165,9 +158,12 @@ public:
           new_candidates[i * 2 + 1] = LocalExpandEntry();
         }
       }
-      this->UpdatePosition(index_, applid, p_tree);
+      this->UpdatePosition(applid, p_tree);
 
       if (!valid_candidates.empty()) {
+        for (auto candidate : valid_candidates) {
+          this->UpdateSketch(m, gpair, candidate.nid);
+        }
         this->BuildHistogram(gpair, valid_candidates, partitioner_.Partitions(),
                              m->IsDense(), index_, p_tree);
         std::vector<LocalExpandEntry*> best_splits;
@@ -194,11 +190,10 @@ public:
     }
   }
 
-  void UpdatePosition(common::GHistIndexMatrix const &index,
-                      std::vector<LocalExpandEntry> const &candidates,
+  void UpdatePosition(std::vector<LocalExpandEntry> const &candidates,
                       RegTree const *p_tree) {
     monitor_->Start(__func__);
-    partitioner_.UpdatePosition(index, candidates, p_tree);
+    partitioner_.UpdatePosition(index_, candidates, p_tree);
     monitor_->Stop(__func__);
   }
 
@@ -237,46 +232,6 @@ class LocalApproxUpdater : public TreeUpdater {
 
   char const *Name() const override { return "grow_local_approx_histmaker"; }
 
-  void InitData(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
-                std::vector<GradientPair> *sampled) {
-    auto const &info = m->Info();
-    if (columns_size_.empty() || cached_ != m) {
-      cached_ = m;
-      columns_size_.resize(info.num_col_, 0);
-      const auto threads = omp_get_max_threads();
-      std::vector<std::vector<bst_row_t>> column_sizes(threads);
-      for (auto &column : column_sizes) {
-        column.resize(info.num_col_, 0);
-      }
-      for (auto const &page : m->GetBatches<SparsePage>()) {
-        auto const &entries_per_column =
-            common::HostSketchContainer::CalcColumnSize(page, info.num_col_,
-                                                        threads);
-        for (size_t i = 0; i < entries_per_column.size(); ++i) {
-          columns_size_[i] += entries_per_column[i];
-        }
-      }
-    }
-
-    auto const &h_gpair = gpair->HostVector();
-    sampled->resize(h_gpair.size());
-    std::copy(h_gpair.cbegin(), h_gpair.cend(), sampled->begin());
-    auto &rnd = common::GlobalRandom();
-    if (param_.subsample != 1.0) {
-      CHECK(param_.sampling_method != TrainParam::kGradientBased)
-          << "Gradient based sampling is not supported for approx tree method.";
-      std::bernoulli_distribution coin_flip(param_.subsample);
-      std::transform(sampled->begin(), sampled->end(), sampled->begin(),
-                     [&](GradientPair &g) {
-                       if (coin_flip(rnd)) {
-                         return g;
-                       } else {
-                         return GradientPair{};
-                       }
-                     });
-    }
-  }
-
   void Update(HostDeviceVector<GradientPair> *gpair, DMatrix *m,
               const std::vector<RegTree *> &trees) override {
     float lr = param_.learning_rate;
@@ -297,7 +252,8 @@ class LocalApproxUpdater : public TreeUpdater {
         << "Feature grouping is not implemented for approx.";
 
     std::vector<GradientPair> h_gpair;
-    this->InitData(gpair, m, &h_gpair);
+    ApproxLazyInitData(param_, gpair, m, cached_, &h_gpair, &columns_size_);
+    cached_ = m;
 
     for (auto p_tree : trees) {
       if (hist_param_.single_precision_histogram) {
