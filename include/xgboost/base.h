@@ -187,14 +187,6 @@ class GradientPairInternal {
     return *this;
   }
 
-  template <typename Y>
-  XGBOOST_DEVICE GradientPairInternal<T> &operator+=(
-      const GradientPairInternal<Y> &rhs) {
-    grad_ += rhs.GetGrad();
-    hess_ += rhs.GetHess();
-    return *this;
-  }
-
   XGBOOST_DEVICE GradientPairInternal<T> operator+(
       const GradientPairInternal<T> &rhs) const {
     GradientPairInternal<T> g;
@@ -210,28 +202,11 @@ class GradientPairInternal {
     return *this;
   }
 
-  template <typename Y>
-  XGBOOST_DEVICE GradientPairInternal<T> &operator-=(
-      const GradientPairInternal<Y> &rhs) {
-    grad_ -= rhs.GetGrad();
-    hess_ -= rhs.GetHess();
-    return *this;
-  }
-
   XGBOOST_DEVICE GradientPairInternal<T> operator-(
       const GradientPairInternal<T> &rhs) const {
     GradientPairInternal<T> g;
     g.grad_ = grad_ - rhs.grad_;
     g.hess_ = hess_ - rhs.hess_;
-    return g;
-  }
-
-  template <typename Y>
-  XGBOOST_DEVICE GradientPairInternal<T> operator-(
-      const GradientPairInternal<Y> &rhs) const {
-    GradientPairInternal<T> g;
-    g.grad_ = grad_ - rhs.GetGrad();
-    g.hess_ = hess_ - rhs.GetHess();
     return g;
   }
 
