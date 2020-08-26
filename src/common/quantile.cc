@@ -90,7 +90,7 @@ std::vector<bst_feature_t> HostSketchContainer::LoadBalance(
 }
 
 void HostSketchContainer::PushRowPage(
-    SparsePage const &page, MetaInfo const &info) {
+    SparsePage const &page, MetaInfo const &info, std::vector<float> const &weights) {
   monitor_.Start(__func__);
   int nthread = omp_get_max_threads();
   bst_feature_t n_columns = info.num_col_;
@@ -123,7 +123,7 @@ void HostSketchContainer::PushRowPage(
             group_ind = this->SearchGroupIndFromRow(group_ptr, i + page.base_rowid);
           }
           size_t w_idx = use_group_ind_ ? group_ind : ridx;
-          auto w = info.GetWeight(w_idx);
+          auto w = weights.empty() ? 1.0f : weights[w_idx];
           auto p_inst = inst.data();
           if (is_dense) {
             for (size_t ii = begin; ii < end; ii++) {
@@ -149,7 +149,6 @@ void HostSketchContainer::PushSortedCSC(
     SortedCSCPage const &batch, MetaInfo const &info,
     std::vector<float> const &weights) {
   auto page = batch.GetView();
-  monitor_.Start(__func__);
   std::vector<size_t> entries_per_column(info.num_col_);
   for (size_t column_id = 0; column_id < page.Size(); ++column_id) {
     auto column = page[column_id];
@@ -195,7 +194,6 @@ void HostSketchContainer::PushSortedCSC(
     });
   }
   exec.Rethrow();
-  monitor_.Stop(__func__);
 }
 
 void HostSketchContainer::GatherSketchInfo(

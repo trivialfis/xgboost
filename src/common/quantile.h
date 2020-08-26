@@ -781,7 +781,13 @@ class HostSketchContainer {
   void PushSortedCSC(SortedCSCPage const &page, MetaInfo const &info,
                      std::vector<float> const &weights);
   /* \brief Push a CSR matrix. */
-  void PushRowPage(SparsePage const &page, MetaInfo const &info);
+  void PushRowPage(SparsePage const &page, MetaInfo const &info,
+                   std::vector<float> const &weights);
+
+  /* \brief Push a CSR matrix. */
+  void PushRowPage(SparsePage const &page, MetaInfo const &info) {
+    this->PushRowPage(page, info, info.weights_.ConstHostVector());
+  }
 
   void MakeCuts(HistogramCuts* cuts);
 };

@@ -627,18 +627,27 @@ class GlobalApproxUpdater : public TreeUpdater {
     }
 
     auto const& h_gpair = gpair->ConstHostVector();
-    m->GetBatches<SortedCSCPage>();
-    monitor_.Start("Sketch");
     common::HistogramCuts cuts;
     std::vector<float> hessians(h_gpair.size());
     std::transform(h_gpair.cbegin(), h_gpair.cend(), hessians.begin(),
                    [](auto const &g) { return g.GetHess(); });
     common::HostSketchContainer container(columns_size_, param_.max_bin, false);
-    for (auto const& page : m->GetBatches<SortedCSCPage>()) {
-      container.PushSortedCSC(page, info, hessians);
+    if (m->IsDense()) {
+      // This is actually twice slower, but removes a copy of data.
+      monitor_.Start("Dense Sketch");
+      for (auto const& page : m->GetBatches<SparsePage>()) {
+        container.PushRowPage(page, info);
+      }
+      monitor_.Stop("Dense Sketch");
+    } else {
+      monitor_.Start("Sparse Sketch");
+      m->GetBatches<SortedCSCPage>();
+      for (auto const &page : m->GetBatches<SortedCSCPage>()) {
+        container.PushSortedCSC(page, info, hessians);
+      }
+      monitor_.Stop("Sparse Sketch");
     }
     container.MakeCuts(&cuts);
-    monitor_.Stop("Sketch");
 
     monitor_.Start("GHistIndexMatrix");
     common::GHistIndexMatrix gidx;
