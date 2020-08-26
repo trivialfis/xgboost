@@ -12,6 +12,7 @@
 #include "driver.h"
 #include "param.h"
 #include "../common/random.h"
+#include "updater_approx.h"
 
 namespace xgboost {
 namespace tree {
@@ -40,12 +41,6 @@ template <typename GradientSumT> class GloablApproxBuilder {
   rabit::Reducer<GradientPairT, GradientPairT::Reduce> histogram_reducer_;
   common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
 
-  struct NodeEntry {
-    /*! \brief statics for node entry */
-    GradStats stats;
-    /*! \brief loss of this node, without split */
-    bst_float root_gain;
-  };
   std::vector<NodeEntry> snode_;
   RegTree* p_last_tree_ {nullptr};
   common::Monitor* monitor_;
@@ -179,50 +174,8 @@ template <typename GradientSumT> class GloablApproxBuilder {
 
   void ApplySplit(LocalExpandEntry candidate, RegTree *p_tree) {
     monitor_->Start(__func__);
-    RegTree &tree = *p_tree;
-
-    GradStats parent_sum = candidate.split.left_sum;
-    parent_sum.Add(candidate.split.right_sum);
-    auto tree_evalator = evaluator_.GetEvaluator();
-    auto base_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_, GradStats{parent_sum});
-
-    auto left_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_,
-                                 GradStats{candidate.split.left_sum}) *
-        param_.learning_rate;
-    auto right_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_,
-                                 GradStats{candidate.split.right_sum}) *
-        param_.learning_rate;
-
-    tree.ExpandNode(candidate.nid, candidate.split.SplitIndex(),
-                    candidate.split.split_value, candidate.split.DefaultLeft(),
-                    base_weight, left_weight, right_weight,
-                    candidate.split.loss_chg, parent_sum.GetHess(),
-                    candidate.split.left_sum.GetHess(),
-                    candidate.split.right_sum.GetHess());
-
-    // Set up child constraints
-    auto left_child = tree[candidate.nid].LeftChild();
-    auto right_child = tree[candidate.nid].RightChild();
-    evaluator_.AddSplit(candidate.nid, left_child, right_child,
-                        tree[candidate.nid].SplitIndex(), left_weight,
-                        right_weight);
-
-    auto max_node = std::max(left_child, tree[candidate.nid].RightChild());
-    max_node = std::max(candidate.nid, max_node);
-    snode_.resize(tree.GetNodes().size());
-    snode_.at(left_child).stats = candidate.split.left_sum;
-    snode_.at(left_child).root_gain = tree_evalator.CalcGain(
-        candidate.nid, param_, GradStats{candidate.split.left_sum});
-    snode_.at(right_child).stats = candidate.split.right_sum;
-    snode_.at(right_child).root_gain = tree_evalator.CalcGain(
-        candidate.nid, param_, GradStats{candidate.split.right_sum});
-
-    interaction_constraints_.Split(candidate.nid,
-                                   tree[candidate.nid].SplitIndex(), left_child,
-                                   right_child);
+    ApplyTreeSplit(candidate, param_, p_tree, &snode_, &evaluator_,
+                   &interaction_constraints_);
     monitor_->Stop(__func__);
   }
 

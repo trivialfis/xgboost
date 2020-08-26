@@ -30,10 +30,6 @@ template <typename GradientSumT> class LocalApproxBuilder {
   std::vector<int> monotonic_constraint_;
 
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
-  // common::HistCollection<GradientSumT> histograms_;
-  // common::GHistBuilder<GradientSumT> histogram_builder_;
-  // rabit::Reducer<GradientPairT, GradientPairT::Reduce> histogram_reducer_;
-  // common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
 
   common::HostSketchContainer sketches_;
   common::GHistIndexMatrix index_;
@@ -45,12 +41,6 @@ template <typename GradientSumT> class LocalApproxBuilder {
   RegTree* p_last_tree_ {nullptr};
   common::Monitor* monitor_;
 
-  struct NodeEntry {
-    /*! \brief statics for node entry */
-    GradStats stats;
-    /*! \brief loss of this node, without split */
-    bst_float root_gain;
-  };
   std::vector<NodeEntry> snode_;
 
   void InitData(DMatrix *m, std::vector<GradientPair> const &gpair,
@@ -210,6 +200,16 @@ template <typename GradientSumT> class LocalApproxBuilder {
   }
 
  public:
+  LocalApproxBuilder(TrainParam param, CPUHistMakerTrainParam hparam,
+                     bst_feature_t n_features,
+                     std::vector<bst_row_t> const &columns_size,
+                     bool is_ranking, common::Monitor *monitor)
+      : param_{param}, hist_param_{hparam}, sketches_{columns_size,
+                                                      param_.max_bin,
+                                                      is_ranking},
+        evaluator_(param, n_features, GenericParameter::kCpuId), monitor_{
+                                                                     monitor} {}
+
   void UpdateTree(RegTree *p_tree, DMatrix *m,
                   std::vector<GradientPair> const &gpair) {
     p_last_tree_ = p_tree;
@@ -360,50 +360,8 @@ template <typename GradientSumT> class LocalApproxBuilder {
 
   void ApplySplit(LocalExpandEntry candidate, RegTree *p_tree) {
     monitor_->Start(__func__);
-    RegTree &tree = *p_tree;
-
-    GradStats parent_sum = candidate.split.left_sum;
-    parent_sum.Add(candidate.split.right_sum);
-    auto tree_evalator = evaluator_.GetEvaluator();
-    auto base_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_, GradStats{parent_sum});
-
-    auto left_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_,
-                                 GradStats{candidate.split.left_sum}) *
-        param_.learning_rate;
-    auto right_weight =
-        tree_evalator.CalcWeight(candidate.nid, param_,
-                                 GradStats{candidate.split.right_sum}) *
-        param_.learning_rate;
-
-    tree.ExpandNode(candidate.nid, candidate.split.SplitIndex(),
-                    candidate.split.split_value, candidate.split.DefaultLeft(),
-                    base_weight, left_weight, right_weight,
-                    candidate.split.loss_chg, parent_sum.GetHess(),
-                    candidate.split.left_sum.GetHess(),
-                    candidate.split.right_sum.GetHess());
-
-    // Set up child constraints
-    auto left_child = tree[candidate.nid].LeftChild();
-    auto right_child = tree[candidate.nid].RightChild();
-    evaluator_.AddSplit(candidate.nid, left_child, right_child,
-                        tree[candidate.nid].SplitIndex(), left_weight,
-                        right_weight);
-
-    auto max_node = std::max(left_child, tree[candidate.nid].RightChild());
-    max_node = std::max(candidate.nid, max_node);
-    snode_.resize(tree.GetNodes().size());
-    snode_.at(left_child).stats = candidate.split.left_sum;
-    snode_.at(left_child).root_gain = tree_evalator.CalcGain(
-        candidate.nid, param_, GradStats{candidate.split.left_sum});
-    snode_.at(right_child).stats = candidate.split.right_sum;
-    snode_.at(right_child).root_gain = tree_evalator.CalcGain(
-        candidate.nid, param_, GradStats{candidate.split.right_sum});
-
-    interaction_constraints_.Split(candidate.nid,
-                                   tree[candidate.nid].SplitIndex(), left_child,
-                                   right_child);
+    ApplyTreeSplit(candidate, param_, p_tree, &snode_, &evaluator_,
+                   &interaction_constraints_);
     monitor_->Stop(__func__);
   }
 };
@@ -480,13 +438,16 @@ class LocalApproxUpdater : public TreeUpdater {
               const std::vector<RegTree *> &trees) override {
     float lr = param_.learning_rate;
     param_.learning_rate = lr / trees.size();
+    auto const &info = m->Info();
 
     if (hist_param_.single_precision_histogram) {
       f32_impl_ = std::make_unique<LocalApproxBuilder<float>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
+          param_, hist_param_, m->Info().num_col_, columns_size_,
+          common::HostSketchContainer::UseGroup(info), &monitor_);
     } else {
       f64_impl_ = std::make_unique<LocalApproxBuilder<double>>(
-          param_, hist_param_, m->Info().num_col_, &monitor_);
+          param_, hist_param_, m->Info().num_col_, columns_size_,
+          common::HostSketchContainer::UseGroup(info), &monitor_);
     }
 
     CHECK(!param_.enable_feature_grouping)

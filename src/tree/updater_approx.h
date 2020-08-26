@@ -126,7 +126,7 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
     CHECK_EQ(nodes_to_build.size(), nodes_to_subtract.size());
     CHECK_EQ(nodes_to_build.size(), candidates.size());
 
-    this->BuildNodeHistogram(gpair, gidx, is_dense, nodes_to_build);
+    this->BuildNodeHistogram(gpair, row_indices, gidx, is_dense, nodes_to_build);
 
     for (auto nidx : nodes_to_subtract) {
       histograms_.AddHistRow(nidx);
@@ -155,6 +155,8 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
 
   auto const& Histograms() const { return histograms_; }
 
+  ApproxHistogramBuilder() = default;
+
   explicit ApproxHistogramBuilder(size_t total_bins) {
     histograms_.Init(total_bins);
     histogram_mapper_.Init(total_bins);
@@ -162,6 +164,62 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
         common::GHistBuilder<GradientSumT>(omp_get_max_threads(), total_bins);
   }
 };
-}      // namespace tree
+
+struct NodeEntry {
+  /*! \brief statics for node entry */
+  GradStats stats;
+  /*! \brief loss of this node, without split */
+  bst_float root_gain;
+};
+
+inline void ApplyTreeSplit(
+    LocalExpandEntry candidate, TrainParam param, RegTree *p_tree,
+    std::vector<NodeEntry> *p_snode, TreeEvaluator *tree_evaluator,
+    FeatureInteractionConstraintHost *p_interaction_constraints) {
+  auto &snode = *p_snode;
+  auto &interaction_constraints = *p_interaction_constraints;
+  auto evaluator = tree_evaluator->GetEvaluator();
+  RegTree &tree = *p_tree;
+
+  GradStats parent_sum = candidate.split.left_sum;
+  parent_sum.Add(candidate.split.right_sum);
+  auto base_weight =
+      evaluator.CalcWeight(candidate.nid, param, GradStats{parent_sum});
+
+  auto left_weight = evaluator.CalcWeight(candidate.nid, param,
+                                          GradStats{candidate.split.left_sum}) *
+                     param.learning_rate;
+  auto right_weight =
+      evaluator.CalcWeight(candidate.nid, param,
+                           GradStats{candidate.split.right_sum}) *
+      param.learning_rate;
+
+  tree.ExpandNode(
+      candidate.nid, candidate.split.SplitIndex(), candidate.split.split_value,
+      candidate.split.DefaultLeft(), base_weight, left_weight, right_weight,
+      candidate.split.loss_chg, parent_sum.GetHess(),
+      candidate.split.left_sum.GetHess(), candidate.split.right_sum.GetHess());
+
+  // Set up child constraints
+  auto left_child = tree[candidate.nid].LeftChild();
+  auto right_child = tree[candidate.nid].RightChild();
+  tree_evaluator->AddSplit(candidate.nid, left_child, right_child,
+                           tree[candidate.nid].SplitIndex(), left_weight,
+                           right_weight);
+
+  auto max_node = std::max(left_child, tree[candidate.nid].RightChild());
+  max_node = std::max(candidate.nid, max_node);
+  snode.resize(tree.GetNodes().size());
+  snode.at(left_child).stats = candidate.split.left_sum;
+  snode.at(left_child).root_gain = evaluator.CalcGain(
+      candidate.nid, param, GradStats{candidate.split.left_sum});
+  snode.at(right_child).stats = candidate.split.right_sum;
+  snode.at(right_child).root_gain = evaluator.CalcGain(
+      candidate.nid, param, GradStats{candidate.split.right_sum});
+
+  interaction_constraints.Split(candidate.nid, tree[candidate.nid].SplitIndex(),
+                                left_child, right_child);
+}
+} // namespace tree
 }      // namespace xgboost
 #endif  // XGBOOST_TREE_APPROX_H_
