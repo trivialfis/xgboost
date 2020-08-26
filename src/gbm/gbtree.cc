@@ -177,7 +177,7 @@ void GBTree::ConfigureUpdaters() {
       tparam_.updater_seq = "grow_colmaker,prune";
       break;
     case TreeMethod::kHist:
-      tparam_.updater_seq = "grow_quantile_histmaker";
+      tparam_.updater_seq = "grow_fast_histmaker";
       break;
     case TreeMethod::kGPUHist: {
       common::AssertGPUSupport();

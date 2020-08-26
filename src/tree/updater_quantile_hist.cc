@@ -1170,16 +1170,6 @@ GradStats QuantileHistMaker::Builder<GradientSumT>::EnumerateSplit(
   return e;
 }
 
-XGBOOST_REGISTER_TREE_UPDATER(FastHistMaker, "grow_fast_histmaker")
-.describe("(Deprecated, use grow_quantile_histmaker instead.)"
-          " Grow tree using quantized histogram.")
-.set_body(
-    []() {
-      LOG(WARNING) << "grow_fast_histmaker is deprecated, "
-                   << "use grow_quantile_histmaker instead.";
-      return new QuantileHistMaker();
-    });
-
 XGBOOST_REGISTER_TREE_UPDATER(QuantileHistMaker, "grow_quantile_histmaker")
 .describe("Grow tree using quantized histogram.")
 .set_body(
