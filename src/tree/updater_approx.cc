@@ -19,12 +19,7 @@ namespace tree {
 
 template <typename GradientSumT> class GloablApproxBuilder {
  protected:
-  using GradientPairT =
-      std::conditional_t<std::is_same<GradientSumT, float>::value, GradientPair,
-                         GradientPairPrecise>;
-
   TrainParam param_;
-
   ApproxEvaluator<GradientSumT> evaluator_;
   ApproxHistogramBuilder<GradientSumT> histogram_builder_;
 
@@ -33,10 +28,8 @@ template <typename GradientSumT> class GloablApproxBuilder {
   common::Monitor* monitor_;
 
  public:
-  void InitData(DMatrix *m, std::vector<GradientPair> const &gpair,
-                common::GHistIndexMatrix const &index) {
+  void InitData(MetaInfo const& info, common::GHistIndexMatrix const &index) {
     monitor_->Start(__func__);
-    auto const &info = m->Info();
     partitioner_ = ApproxRowPartitioner(info.num_row_);
     histogram_builder_ = ApproxHistogramBuilder<GradientSumT>(index.cut.TotalBins());
     monitor_->Stop(__func__);
@@ -54,41 +47,18 @@ template <typename GradientSumT> class GloablApproxBuilder {
       root_sum.Add(g);
     }
     rabit::Allreduce<rabit::op::Sum, double>(reinterpret_cast<double *>(&root_sum), 2);
-
-    this->BuildNodeHistogram(gpair, m, m.IsDense(), {RegTree::kRoot});
-
+    histogram_builder_.BuildNodeHistogram(gpair, partitioner_.Partitions(), m,
+                                          m.IsDense(), {RegTree::kRoot});
     auto weight = evaluator_.InitRoot(root_sum);
     p_tree->Stat(RegTree::kRoot).sum_hess = root_sum.GetHess();
     p_tree->Stat(RegTree::kRoot).base_weight = weight;
     (*p_tree)[RegTree::kRoot].SetLeaf(param_.learning_rate * weight);
 
     auto const& histograms = histogram_builder_.Histograms();
-    this->EvaluateSplits(histograms, m, *p_tree, {&best});
+    evaluator_.EvaluateSplits(histograms, m, *p_tree, {&best});
     monitor_->Stop(__func__);
 
     return best;
-  }
-
-  void EvaluateSplits(const common::HistCollection<GradientSumT> &hist,
-                      common::GHistIndexMatrix const &gidx, const RegTree &tree,
-                      std::vector<LocalExpandEntry *> entries) {
-    monitor_->Start(__func__);
-    evaluator_.EvaluateSplits(hist, gidx, tree, entries);
-    monitor_->Stop(__func__);
-  }
-
-  void ApplySplit(LocalExpandEntry candidate, RegTree *p_tree) {
-    monitor_->Start(__func__);
-    evaluator_.ApplyTreeSplit(candidate, param_, p_tree);
-    monitor_->Stop(__func__);
-  }
-
-  void UpdatePosition(common::GHistIndexMatrix const &index,
-                      std::vector<LocalExpandEntry> const &candidates,
-                      RegTree const *p_tree) {
-    monitor_->Start(__func__);
-    partitioner_.UpdatePosition(index, candidates, p_tree);
-    monitor_->Stop(__func__);
   }
 
   void UpdatePredictionCache(const DMatrix *data,
@@ -126,99 +96,34 @@ template <typename GradientSumT> class GloablApproxBuilder {
     monitor_->Stop(__func__);
   }
 
-  void BuildNodeHistogram(const std::vector<GradientPair> &gpair,
-                          common::GHistIndexMatrix const &gidx,
-                          bool is_dense,
-                          std::vector<bst_node_t> const &nodes_to_build) {
-    monitor_->Start(__func__);
-    histogram_builder_.BuildNodeHistogram(gpair, partitioner_.Partitions(), gidx,
-                                          is_dense, nodes_to_build);
-    monitor_->Stop(__func__);
-  }
-
-  void BuildHistogram(const std::vector<GradientPair> &gpair,
-                      std::vector<LocalExpandEntry> candidates,
-                      common::RowSetCollection const &row_indices,
-                      bool is_dense, common::GHistIndexMatrix const &gidx,
-                      RegTree const* p_tree) {
-    monitor_->Start(__func__);
-    histogram_builder_.BuildHistogram(gpair, candidates, row_indices, is_dense,
-                                      gidx, p_tree);
-    monitor_->Stop(__func__);
-  }
-
-public:
+ public:
   explicit GloablApproxBuilder(TrainParam param, MetaInfo const &info,
                                common::Monitor *monitor)
       : param_{std::move(param)}, evaluator_{param_, info}, monitor_{monitor} {}
 
-  void UpdateTree(RegTree *p_tree, DMatrix *m,
+  void UpdateTree(RegTree *p_tree, MetaInfo const& info,
                   std::vector<GradientPair> const &gpair,
                   common::GHistIndexMatrix const &index) {
     p_last_tree_ = p_tree;
-    this->InitData(m, gpair, index);
-
-    auto &tree = *p_tree;
-
-    DriverContainer<LocalExpandEntry> driver(
-        static_cast<TrainParam::TreeGrowPolicy>(param_.grow_policy));
-
-    driver.Push({this->InitRoot(index, gpair, p_tree)});
-    auto num_leaves = 1;
-    auto expand_set = driver.Pop();
-
-    while (!expand_set.empty()) {
-      std::vector<LocalExpandEntry> new_candidates(expand_set.size() * 2);
-      // candidates that can further splited.
-      std::vector<LocalExpandEntry> valid_candidates;
-      // candidaates that can be applied.
-      std::vector<LocalExpandEntry> applid;
-      std::vector<size_t> nidx_set;
-      for (size_t i = 0; i < expand_set.size(); ++i) {
-        auto candidate = expand_set[i];
-        if (!candidate.IsValid(param_, num_leaves)) {
-          continue;
-        }
-        this->ApplySplit(candidate, p_tree);
-        applid.push_back(candidate);
-        num_leaves++;
-        int left_child_nidx = tree[candidate.nid].LeftChild();
-        if (LocalExpandEntry::ChildIsValid(param_, p_tree->GetDepth(left_child_nidx),
-                                           num_leaves)) {
-          valid_candidates.emplace_back(candidate);
-          nidx_set.emplace_back(i);
-        } else {
-          new_candidates[i * 2] = LocalExpandEntry();
-          new_candidates[i * 2 + 1] = LocalExpandEntry();
-        }
-      }
-      this->UpdatePosition(index, applid, p_tree);
-
-      if (!valid_candidates.empty()) {
-        this->BuildHistogram(gpair, valid_candidates, partitioner_.Partitions(),
-                             m->IsDense(), index, p_tree);
-        std::vector<LocalExpandEntry*> best_splits;
-        std::vector<size_t> new_candidates_pos;
-        for (size_t c = 0; c < valid_candidates.size(); ++c) {
-          auto i = nidx_set[c];
-          auto candidate = valid_candidates[c];
-          int left_child_nidx = tree[candidate.nid].LeftChild();
-          int right_child_nidx = tree[candidate.nid].RightChild();
-          LocalExpandEntry l_best{
-              left_child_nidx, tree.GetDepth(left_child_nidx), {}};
-          LocalExpandEntry r_best{
-              right_child_nidx, tree.GetDepth(right_child_nidx), {}};
-          new_candidates[i * 2] = l_best;
-          new_candidates[i * 2 + 1] = r_best;
-          best_splits.push_back(&new_candidates[i * 2]);
-          best_splits.push_back(&new_candidates[i * 2 + 1]);
-        }
-        auto const& histograms = histogram_builder_.Histograms();
-        this->EvaluateSplits(histograms, index, tree, best_splits);
-      }
-      driver.Push(new_candidates.begin(), new_candidates.end());
-      expand_set = driver.Pop();
-    }
+    this->InitData(info, index);
+    UpdateTreeWithDriver(
+        param_, p_tree, gpair,
+        [&]() { return this->InitRoot(index, gpair, p_tree); },
+        [&](LocalExpandEntry const &candidate) {
+          evaluator_.ApplyTreeSplit(candidate, param_, p_tree);
+        },
+        [&](std::vector<LocalExpandEntry> const &applied) {
+          partitioner_.UpdatePosition(index, applied, p_tree);
+        },
+        [&](std::vector<LocalExpandEntry> const &valid_candidates) {
+          histogram_builder_.BuildHistogram(gpair, valid_candidates,
+                                            partitioner_.Partitions(),
+                                            index.IsDense(), index, p_tree);
+        },
+        [&](std::vector<LocalExpandEntry *> &best_splits) {
+          auto const &histograms = histogram_builder_.Histograms();
+          evaluator_.EvaluateSplits(histograms, index, *p_tree, best_splits);
+        });
   }
 };
 
@@ -304,9 +209,9 @@ class GlobalApproxUpdater : public TreeUpdater {
 
     for (auto p_tree : trees) {
       if (hist_param_.single_precision_histogram) {
-        this->f32_impl_->UpdateTree(p_tree, m, h_gpair, gidx);
+        this->f32_impl_->UpdateTree(p_tree, info, h_gpair, gidx);
       } else {
-        this->f64_impl_->UpdateTree(p_tree, m, h_gpair, gidx);
+        this->f64_impl_->UpdateTree(p_tree, info, h_gpair, gidx);
       }
     }
     param_.learning_rate = lr;

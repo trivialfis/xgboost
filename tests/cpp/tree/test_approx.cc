@@ -64,7 +64,7 @@ class ApproxForTest : public GloablApproxBuilder<double> {
                               common::GHistIndexMatrix const &gidx,
                               bool is_dense,
                               std::vector<bst_node_t> const &nodes_to_build) {
-    SuperT::BuildNodeHistogram(gpair, gidx, is_dense, nodes_to_build);
+    // SuperT::BuildNodeHistogram(gpair, gidx, is_dense, nodes_to_build);
     auto root_hist = histogram_builder_.Histograms()[RegTree::kRoot];
     ASSERT_EQ(root_hist.size(), rows_ * cols_);
 
@@ -144,7 +144,7 @@ TEST(Approx, ApplySplit) {
   GradStats left_sum {0.1f, 0.3f}, right_sum {0.2f, 0.4f};
   SplitEntry split{0.3, 2, 0.5, left_sum, right_sum};
   LocalExpandEntry entry{0, tree.GetDepth(0), split};
-  updater.ApplySplit(entry, &tree);
+  // updater.ApplySplit(entry, &tree);
   ASSERT_EQ(tree.GetNodes().size(), 3ul);
   ASSERT_EQ(tree.Stat(tree[0].LeftChild()).sum_hess, left_sum.GetHess());
   ASSERT_EQ(tree.Stat(tree[0].RightChild()).sum_hess, right_sum.GetHess());

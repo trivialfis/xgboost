@@ -339,8 +339,8 @@ template <typename GradientSumT> class ApproxEvaluator {
     }
   }
 
-  void
-  ApplyTreeSplit(LocalExpandEntry candidate, TrainParam param, RegTree *p_tree) {
+  void ApplyTreeSplit(LocalExpandEntry candidate, TrainParam param,
+                      RegTree *p_tree) {
     auto evaluator = tree_evaluator_.GetEvaluator();
     RegTree &tree = *p_tree;
 
@@ -454,6 +454,73 @@ inline void ApproxLazyInitData(TrainParam const &param,
                        return GradientPair{};
                      }
                    });
+  }
+}
+
+template <typename InitRoot, typename ApplySplit, typename UpdatePosition,
+          typename BuildHistogram, typename EvaluateSpltis>
+void UpdateTreeWithDriver(TrainParam param_, RegTree *p_tree,
+                          std::vector<GradientPair> const &gpair,
+                          InitRoot init_root, ApplySplit apply_split,
+                          UpdatePosition update_position,
+                          BuildHistogram build_histogram,
+                          EvaluateSpltis evaluate_splits) {
+  DriverContainer<LocalExpandEntry> driver(
+      static_cast<TrainParam::TreeGrowPolicy>(param_.grow_policy));
+  auto &tree = *p_tree;
+  driver.Push({init_root()});
+  auto num_leaves = 1;
+  auto expand_set = driver.Pop();
+
+  while (!expand_set.empty()) {
+    std::vector<LocalExpandEntry> new_candidates(expand_set.size() * 2);
+    // candidates that can further splited.
+    std::vector<LocalExpandEntry> valid_candidates;
+    // candidaates that can be applied.
+    std::vector<LocalExpandEntry> applid;
+    std::vector<size_t> nidx_set;
+    for (size_t i = 0; i < expand_set.size(); ++i) {
+      auto candidate = expand_set[i];
+      if (!candidate.IsValid(param_, num_leaves)) {
+        continue;
+      }
+      apply_split(candidate);
+      applid.push_back(candidate);
+      num_leaves++;
+      int left_child_nidx = tree[candidate.nid].LeftChild();
+      if (LocalExpandEntry::ChildIsValid(
+              param_, p_tree->GetDepth(left_child_nidx), num_leaves)) {
+        valid_candidates.emplace_back(candidate);
+        nidx_set.emplace_back(i);
+      } else {
+        new_candidates[i * 2] = LocalExpandEntry();
+        new_candidates[i * 2 + 1] = LocalExpandEntry();
+      }
+    }
+    update_position(applid);
+
+    if (!valid_candidates.empty()) {
+      build_histogram(valid_candidates);
+      std::vector<LocalExpandEntry *> best_splits;
+      std::vector<size_t> new_candidates_pos;
+      for (size_t c = 0; c < valid_candidates.size(); ++c) {
+        auto i = nidx_set[c];
+        auto candidate = valid_candidates[c];
+        int left_child_nidx = tree[candidate.nid].LeftChild();
+        int right_child_nidx = tree[candidate.nid].RightChild();
+        LocalExpandEntry l_best{
+            left_child_nidx, tree.GetDepth(left_child_nidx), {}};
+        LocalExpandEntry r_best{
+            right_child_nidx, tree.GetDepth(right_child_nidx), {}};
+        new_candidates[i * 2] = l_best;
+        new_candidates[i * 2 + 1] = r_best;
+        best_splits.push_back(&new_candidates[i * 2]);
+        best_splits.push_back(&new_candidates[i * 2 + 1]);
+      }
+      evaluate_splits(best_splits);
+    }
+    driver.Push(new_candidates.begin(), new_candidates.end());
+    expand_set = driver.Pop();
   }
 }
 }      // namespace tree
