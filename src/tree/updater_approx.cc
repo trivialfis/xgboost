@@ -178,9 +178,8 @@ template <typename GradientSumT> class GloablApproxBuilder {
               evaluator);
           if (SplitContainsMissingValues(grad_stats, snode_[nidx])) {
             EnumerateSplit<common::GHistRow<GradientSumT>, NodeEntry,
-                           SplitEntry, -1>(gidx, histogram,
-                                                snode_[nidx], best, nidx,
-                                                fidx, param_, evaluator);
+                           SplitEntry, -1>(gidx, histogram, snode_[nidx], best,
+                                           nidx, fidx, param_, evaluator);
           }
         }
       }
