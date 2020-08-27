@@ -109,6 +109,7 @@ class DeviceHistogram {
                 [=] __device__(size_t idx) { d_data[idx] = 0.0f; });
     availabe_nodes_.clear();
     used_nodes_ = Queue(policy_ == TrainParam::kDepthWise ? DepthWise : LossGuide);
+    pool_size_ = 0;
     nodes_set_.clear();
   }
   bool HistogramExists(int nidx) const {
