@@ -75,24 +75,52 @@ class DeviceHistogram {
  private:
   /*! \brief Map nidx to starting index of its histogram. */
   std::map<int, size_t> nidx_map_;
-  dh::device_vector<typename GradientSumT::ValueT> data_;
+  dh::device_vector<typename GradientSumT::ValueT> data_a_;
+  dh::device_vector<typename GradientSumT::ValueT> data_b_;
+  bool current_buffer_ {true};
+  int32_t last_recycled_depth_ {0};
+  TrainParam::TreeGrowPolicy policy_;
+
   int n_bins_;
   int device_id_;
   static constexpr size_t kNumItemsInGradientSum =
       sizeof(GradientSumT) / sizeof(typename GradientSumT::ValueT);
   static_assert(kNumItemsInGradientSum == 2,
                 "Number of items in gradient type should be 2.");
+  auto& Current() {
+    if (current_buffer_) {
+      return data_a_;
+    } else {
+      return data_b_;
+    }
+  }
+
+  static bst_node_t NodesAtDepth(int32_t depth) {
+    return 1 << depth;
+  }
+
+  bool NeedRecycle(int32_t depth) const {
+    if (policy_== TrainParam::kDepthWise) {
+      return depth > last_recycled_depth_ + 2;
+    } else {
+      return data_a_.size() > kStopGrowingSize;
+    }
+  }
 
  public:
-  void Init(int device_id, int n_bins) {
+  void Init(int device_id, int n_bins, TrainParam::TreeGrowPolicy policy) {
     this->n_bins_ = n_bins;
     this->device_id_ = device_id;
+    this->policy_ = policy;
   }
 
   void Reset() {
-    auto d_data = data_.data().get();
-      dh::LaunchN(device_id_, data_.size(),
-                  [=] __device__(size_t idx) { d_data[idx] = 0.0f; });
+    auto d_data = data_a_.data().get();
+    dh::LaunchN(device_id_, data_a_.size(),
+                [=] __device__(size_t idx) { d_data[idx] = 0.0f; });
+    d_data = data_b_.data().get();
+    dh::LaunchN(device_id_, data_b_.size(),
+                [=] __device__(size_t idx) { d_data[idx] = 0.0f; });
     nidx_map_.clear();
   }
   bool HistogramExists(int nidx) const {
@@ -106,17 +134,18 @@ class DeviceHistogram {
   }
 
   dh::device_vector<typename GradientSumT::ValueT>& Data() {
-    return data_;
+    return Current();
   }
 
-  void AllocateHistogram(int nidx) {
+  void AllocateHistogram(int nidx, int32_t depth) {
     if (HistogramExists(nidx)) return;
     // Number of items currently used in data
     const size_t used_size = nidx_map_.size() * HistogramSize();
     const size_t new_used_size = used_size + HistogramSize();
-    if (data_.size() >= kStopGrowingSize) {
+    if (NeedRecycle(depth)) {
+      last_recycled_depth_ = depth;
       // Recycle histogram memory
-      if (new_used_size <= data_.size()) {
+      if (new_used_size <= Current().size()) {
         // no need to remove old node, just insert the new one.
         nidx_map_[nidx] = used_size;
         // memset histogram size in bytes
@@ -126,21 +155,21 @@ class DeviceHistogram {
         nidx_map_[nidx] = old_entry.second;
       }
       // Zero recycled memory
-      auto d_data = data_.data().get() + nidx_map_[nidx];
+      auto d_data = Current().data().get() + nidx_map_[nidx];
       dh::LaunchN(device_id_, n_bins_ * 2,
                   [=] __device__(size_t idx) { d_data[idx] = 0.0f; });
     } else {
       // Append new node histogram
       nidx_map_[nidx] = used_size;
       // Check there is enough memory for another histogram node
-      if (data_.size() < new_used_size + HistogramSize()) {
+      if (Current().size() < new_used_size + HistogramSize()) {
         size_t new_required_memory =
-            std::max(data_.size() * 2, HistogramSize());
-        data_.resize(new_required_memory);
+            std::max(Current().size() * 2, HistogramSize());
+        Current().resize(new_required_memory);
       }
     }
 
-    CHECK_GE(data_.size(), nidx_map_.size() * HistogramSize());
+    CHECK_GE(Current().size(), nidx_map_.size() * HistogramSize());
   }
 
   /**
@@ -150,7 +179,7 @@ class DeviceHistogram {
    */
   common::Span<GradientSumT> GetNodeHistogram(int nidx) {
     CHECK(this->HistogramExists(nidx));
-    auto ptr = data_.data().get() + nidx_map_[nidx];
+    auto ptr = Current().data().get() + nidx_map_[nidx];
     return common::Span<GradientSumT>(
         reinterpret_cast<GradientSumT*>(ptr), n_bins_);
   }
@@ -217,7 +246,8 @@ struct GPUHistMakerDevice {
     node_sum_gradients.resize(param.MaxNodes());
 
     // Init histogram
-    hist.Init(device_id, page->Cuts().TotalBins());
+    hist.Init(device_id, page->Cuts().TotalBins(),
+              static_cast<TrainParam::TreeGrowPolicy>(param.grow_policy));
     monitor.Init(std::string("GPUHistMakerDevice") + std::to_string(device_id));
     feature_groups.reset(new FeatureGroups(
         page->Cuts(), page->is_dense, dh::MaxSharedMemoryOptin(device_id),
@@ -370,8 +400,8 @@ struct GPUHistMakerDevice {
         sizeof(ExpandEntry) * entries.size(), cudaMemcpyDeviceToHost));
   }
 
-  void BuildHist(int nidx) {
-    hist.AllocateHistogram(nidx);
+  void BuildHist(bst_node_t nidx, int32_t depth) {
+    hist.AllocateHistogram(nidx, depth);
     auto d_node_hist = hist.GetNodeHistogram(nidx);
     auto d_ridx = row_partitioner->GetRows(nidx);
     BuildGradientHistogram(page->GetDeviceAccessor(device_id),
@@ -392,9 +422,9 @@ struct GPUHistMakerDevice {
   }
 
   bool CanDoSubtractionTrick(int nidx_parent, int nidx_histogram,
-                             int nidx_subtraction) {
+                             int nidx_subtraction, int32_t subtraction_node_depth) {
     // Make sure histograms are already allocated
-    hist.AllocateHistogram(nidx_subtraction);
+    hist.AllocateHistogram(nidx_subtraction, subtraction_node_depth);
     return hist.HistogramExists(nidx_histogram) &&
            hist.HistogramExists(nidx_parent);
   }
@@ -524,7 +554,7 @@ struct GPUHistMakerDevice {
    * \brief Build GPU local histograms for the left and right child of some parent node
    */
   void BuildHistLeftRight(const ExpandEntry &candidate, int nidx_left,
-        int nidx_right, dh::AllReducer* reducer) {
+                          int nidx_right, dh::AllReducer* reducer) {
     auto build_hist_nidx = nidx_left;
     auto subtraction_trick_nidx = nidx_right;
 
@@ -535,12 +565,15 @@ struct GPUHistMakerDevice {
       std::swap(build_hist_nidx, subtraction_trick_nidx);
     }
 
-    this->BuildHist(build_hist_nidx);
+    this->BuildHist(build_hist_nidx, candidate.depth + 1);
     this->AllReduceHist(build_hist_nidx, reducer);
 
     // Check whether we can use the subtraction trick to calculate the other
     bool do_subtraction_trick = this->CanDoSubtractionTrick(
-        candidate.nid, build_hist_nidx, subtraction_trick_nidx);
+        candidate.nid, build_hist_nidx, subtraction_trick_nidx, candidate.depth + 1);
+    if (param.grow_policy == TrainParam::kDepthWise) {
+      CHECK(do_subtraction_trick);
+    }
 
     if (do_subtraction_trick) {
       // Calculate other histogram using subtraction trick
@@ -548,8 +581,41 @@ struct GPUHistMakerDevice {
                              subtraction_trick_nidx);
     } else {
       // Calculate other histogram manually
-      this->BuildHist(subtraction_trick_nidx);
+      this->BuildHist(subtraction_trick_nidx, candidate.depth);
       this->AllReduceHist(subtraction_trick_nidx, reducer);
+    }
+  }
+
+  void BuildHistogram(std::vector<ExpandEntry> const& candidates,
+                      RegTree const& tree, dh::AllReducer* reducer) {
+    std::vector<bst_node_t> nodes_to_build;
+    std::vector<bst_node_t> nodes_to_subtract;
+    for (auto const& candidate : candidates) {
+      int left_child_nidx = tree[candidate.nid].LeftChild();
+      int right_child_nidx = tree[candidate.nid].RightChild();
+      auto build_hist_nidx = left_child_nidx;
+      auto subtraction_trick_nidx = right_child_nidx;
+      bool fewer_right = candidate.split.right_sum.GetHess() < candidate.split.left_sum.GetHess();
+      if (fewer_right) {
+        std::swap(build_hist_nidx, subtraction_trick_nidx);
+      }
+      nodes_to_build.push_back(build_hist_nidx);
+      nodes_to_subtract.push_back(subtraction_trick_nidx);
+    }
+
+    for (size_t i = 0; i < candidates.size();  ++i) {
+      auto nidx = nodes_to_build[i];
+      auto candidate = candidates[i];
+      this->BuildHist(nidx, candidate.depth + 1);
+    }
+
+    dh::safe_nccl(ncclGroupStart());
+    std::for_each(nodes_to_build.cbegin(), nodes_to_build.cend(),
+                  [&](auto nidx) { this->AllReduceHist(nidx, reducer); });
+    dh::safe_nccl(ncclGroupEnd());
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      this->SubtractionTrick(candidates[i].nid, nodes_to_build[i], nodes_to_subtract[i]);
     }
   }
 
@@ -595,7 +661,7 @@ struct GPUHistMakerDevice {
     rabit::Allreduce<rabit::op::Sum, float>(reinterpret_cast<float*>(&root_sum),
                                             2);
 
-    this->BuildHist(kRootNIdx);
+    this->BuildHist(kRootNIdx, 0);
     this->AllReduceHist(kRootNIdx, reducer);
 
     // Remember root stats
@@ -670,12 +736,7 @@ struct GPUHistMakerDevice {
       }
 
       if (!valid_candidates.empty()) {
-        for (size_t c = 0; c < valid_candidates.size(); ++c) {
-          auto candidate = valid_candidates[c];
-          int left_child_nidx = tree[candidate.nid].LeftChild();
-          int right_child_nidx = tree[candidate.nid].RightChild();
-          this->BuildHistLeftRight(candidate, left_child_nidx, right_child_nidx, reducer);
-        }
+        this->BuildHistogram(valid_candidates, tree, reducer);
         for (size_t c = 0; c < valid_candidates.size(); ++c) {
           auto i = nidx_set[c];
           auto candidate = valid_candidates[c];

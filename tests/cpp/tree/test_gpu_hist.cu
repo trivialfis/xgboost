@@ -29,16 +29,16 @@ TEST(GpuHist, DeviceHistogram) {
   constexpr size_t kNNodes = 4;
   constexpr size_t kStopGrowing = kNNodes * kNBins * 2u;
   DeviceHistogram<GradientPairPrecise, kStopGrowing> histogram;
-  histogram.Init(0, kNBins);
+  histogram.Init(0, kNBins, TrainParam::kLossGuide);
   for (size_t i = 0; i < kNNodes; ++i) {
-    histogram.AllocateHistogram(i);
+    histogram.AllocateHistogram(i, 0);
   }
   histogram.Reset();
   ASSERT_EQ(histogram.Data().size(), kStopGrowing);
 
   // Use allocated memory but do not erase nidx_map.
   for (size_t i = 0; i < kNNodes; ++i) {
-    histogram.AllocateHistogram(i);
+    histogram.AllocateHistogram(i, 0);  // depth doesn't matter for loss guide.
   }
   for (size_t i = 0; i < kNNodes; ++i) {
     ASSERT_TRUE(histogram.HistogramExists(i));
@@ -46,7 +46,7 @@ TEST(GpuHist, DeviceHistogram) {
 
   // Erase existing nidx_map.
   for (size_t i = kNNodes; i < kNNodes * 2; ++i) {
-    histogram.AllocateHistogram(i);
+    histogram.AllocateHistogram(i, 0);
   }
   for (size_t i = 0; i < kNNodes; ++i) {
     ASSERT_FALSE(histogram.HistogramExists(i));
@@ -96,10 +96,10 @@ void TestBuildHist(bool use_shared_memory_histograms) {
 
 
   maker.row_partitioner.reset(new RowPartitioner(0, kNRows));
-  maker.hist.AllocateHistogram(0);
+  maker.hist.AllocateHistogram(0, 0);
   maker.gpair = gpair.DeviceSpan();
 
-  maker.BuildHist(0);
+  maker.BuildHist(0, 0);
   DeviceHistogram<GradientSumT> d_hist = maker.hist;
 
   auto node_histogram = d_hist.GetNodeHistogram(0);
@@ -190,8 +190,8 @@ TEST(GpuHist, EvaluateRootSplit) {
   maker.monotone_constraints = param.monotone_constraints;
 
   // Initialize GPUHistMakerDevice::hist
-  maker.hist.Init(0, (max_bins - 1) * kNCols);
-  maker.hist.AllocateHistogram(0);
+  maker.hist.Init(0, (max_bins - 1) * kNCols, TrainParam::kLossGuide);
+  maker.hist.AllocateHistogram(0, 0);
   // Each row of hist_gpair represents gpairs for one feature.
   // Each entry represents a bin.
   std::vector<GradientPairPrecise> hist_gpair = GetHostHistGpair();
