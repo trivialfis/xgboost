@@ -627,59 +627,73 @@ struct GPUHistMakerDevice {
         sizeof(ExpandEntry) * entries.size(), cudaMemcpyDeviceToHost));
     return root_entry;
   }
-
   void UpdateTree(HostDeviceVector<GradientPair>* gpair_all, DMatrix* p_fmat,
                   RegTree* p_tree, dh::AllReducer* reducer) {
     auto& tree = *p_tree;
-    Driver driver(static_cast<TrainParam::TreeGrowPolicy>(param.grow_policy));
 
-    monitor.Start("Reset");
+    Driver driver(
+        static_cast<TrainParam::TreeGrowPolicy>(param.grow_policy));
     this->Reset(gpair_all, p_fmat, p_fmat->Info().num_col_);
-    monitor.Stop("Reset");
 
-    monitor.Start("InitRoot");
-    driver.Push({ this->InitRoot(p_tree, reducer) });
-    monitor.Stop("InitRoot");
-
+    driver.Push({this->InitRoot(p_tree, reducer)});
     auto num_leaves = 1;
-
-    // The set of leaves that can be expanded asynchronously
     auto expand_set = driver.Pop();
+
     while (!expand_set.empty()) {
       auto new_candidates =
           pinned.GetSpan<ExpandEntry>(expand_set.size() * 2, ExpandEntry());
-
-      for (auto i = 0ull; i < expand_set.size(); i++) {
-        auto candidate = expand_set.at(i);
+      // candidates that can further splited.
+      std::vector<ExpandEntry> valid_candidates;
+      // candidates that can be applied.
+      std::vector<ExpandEntry> applid;
+      std::vector<size_t> nidx_set;
+      for (size_t i = 0; i < expand_set.size(); ++i) {
+        auto candidate = expand_set[i];
         if (!candidate.IsValid(param, num_leaves)) {
           continue;
         }
         this->ApplySplit(candidate, p_tree);
-
+        applid.push_back(candidate);
         num_leaves++;
-
         int left_child_nidx = tree[candidate.nid].LeftChild();
-        int right_child_nidx = tree[candidate.nid].RightChild();
-        // Only create child entries if needed
-        if (ExpandEntry::ChildIsValid(param, tree.GetDepth(left_child_nidx),
+        if (ExpandEntry::ChildIsValid(param, p_tree->GetDepth(left_child_nidx),
                                       num_leaves)) {
-          monitor.Start("UpdatePosition");
-          this->UpdatePosition(candidate.nid, (*p_tree)[candidate.nid]);
-          monitor.Stop("UpdatePosition");
-
-          monitor.Start("BuildHist");
-          this->BuildHistLeftRight(candidate, left_child_nidx, right_child_nidx, reducer);
-          monitor.Stop("BuildHist");
-
-          monitor.Start("EvaluateSplits");
-          this->EvaluateLeftRightSplits(candidate, left_child_nidx,
-                                        right_child_nidx, *p_tree,
-                                        new_candidates.subspan(i * 2, 2));
-          monitor.Stop("EvaluateSplits");
+          valid_candidates.emplace_back(candidate);
+          nidx_set.emplace_back(i);
         } else {
-          // Set default
           new_candidates[i * 2] = ExpandEntry();
           new_candidates[i * 2 + 1] = ExpandEntry();
+        }
+      }
+      for (auto candidate : applid) {
+        this->UpdatePosition(candidate.nid, tree[candidate.nid]);
+      }
+
+      if (!valid_candidates.empty()) {
+        for (size_t c = 0; c < valid_candidates.size(); ++c) {
+          auto candidate = valid_candidates[c];
+          int left_child_nidx = tree[candidate.nid].LeftChild();
+          int right_child_nidx = tree[candidate.nid].RightChild();
+          this->BuildHistLeftRight(candidate, left_child_nidx, right_child_nidx, reducer);
+        }
+        for (size_t c = 0; c < valid_candidates.size(); ++c) {
+          auto i = nidx_set[c];
+          auto candidate = valid_candidates[c];
+          int left_child_nidx = tree[candidate.nid].LeftChild();
+          int right_child_nidx = tree[candidate.nid].RightChild();
+          ExpandEntry l_best{
+            left_child_nidx, tree.GetDepth(left_child_nidx), {}, .0, .0, .0};
+          ExpandEntry r_best{
+              right_child_nidx, tree.GetDepth(right_child_nidx), {}, .0, .0, .0};
+          new_candidates[i * 2] = l_best;
+          new_candidates[i * 2 + 1] = r_best;
+        }
+        for (size_t i = 0; i < valid_candidates.size(); ++i) {
+          auto candidate = valid_candidates[i];
+          int left_child_nidx = tree[candidate.nid].LeftChild();
+          int right_child_nidx = tree[candidate.nid].RightChild();
+          this->EvaluateLeftRightSplits(candidate, left_child_nidx, right_child_nidx,
+                                        tree, new_candidates.subspan(i * 2, 2));
         }
       }
       dh::safe_cuda(cudaDeviceSynchronize());
