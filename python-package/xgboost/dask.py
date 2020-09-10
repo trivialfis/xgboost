@@ -36,11 +36,14 @@ from .training import train as worker_train
 from .tracker import RabitTracker
 from .sklearn import XGBModel, XGBRegressorBase, XGBClassifierBase
 from .sklearn import xgboost_model_doc
+import sys
 
 try:
     from distributed import Client
+    from distributed import worker_client
 except ImportError:
     Client = None
+    worker_client = None
 
 # Current status is considered as initial support, many features are
 # not properly supported yet.
@@ -71,12 +74,23 @@ def _start_tracker(host, n_workers):
     env = {'DMLC_NUM_WORKER': n_workers}
     rabit_context = RabitTracker(hostIP=host, nslave=n_workers)
     env.update(rabit_context.slave_envs())
-
     rabit_context.start(n_workers)
     thread = Thread(target=rabit_context.join)
     thread.daemon = True
     thread.start()
     return env
+
+
+def _start_rabit_tracker(host, n_workers):
+    print('rabit_tracker')
+    rabit_context = RabitTracker(hostIP=host, nslave=n_workers)
+    rabit_context.start(n_workers)
+    print('started')
+    thread = Thread(target=rabit_context.join, daemon=True)
+    thread.daemon = True
+    thread.start()
+    print('ran')
+    return rabit_context.slave_envs()
 
 
 def _assert_dask_support():
@@ -555,8 +569,12 @@ def _dmatrix_from_worker_map(is_quantile, **kwargs):
 async def _get_rabit_args(worker_map, client: Client):
     '''Get rabit context arguments from data distribution in DaskDMatrix.'''
     host = distributed_comm.get_address_host(client.scheduler.address)
-    env = await client.run_on_scheduler(
-        _start_tracker, host.strip('/:'), len(worker_map))
+    workers = [worker_map[0]]
+    n_workers = len(worker_map)
+    envs = await client.submit(_start_rabit_tracker, host.strip('/:'),
+                               n_workers, workers=workers)
+    env = {'DMLC_NUM_WORKER': n_workers}
+    env.update(envs)
     rabit_args = [('%s=%s' % item).encode() for item in env.items()]
     return rabit_args
 
