@@ -36,7 +36,6 @@ from .training import train as worker_train
 from .tracker import RabitTracker
 from .sklearn import XGBModel, XGBRegressorBase, XGBClassifierBase
 from .sklearn import xgboost_model_doc
-import sys
 
 try:
     from distributed import Client
@@ -69,27 +68,11 @@ except ImportError:
 LOGGER = logging.getLogger('[xgboost.dask]')
 
 
-def _start_tracker(host, n_workers):
-    """Start Rabit tracker """
-    env = {'DMLC_NUM_WORKER': n_workers}
-    rabit_context = RabitTracker(hostIP=host, nslave=n_workers)
-    env.update(rabit_context.slave_envs())
-    rabit_context.start(n_workers)
-    thread = Thread(target=rabit_context.join)
-    thread.daemon = True
-    thread.start()
-    return env
-
-
 def _start_rabit_tracker(host, n_workers):
-    print('rabit_tracker')
     rabit_context = RabitTracker(hostIP=host, nslave=n_workers)
     rabit_context.start(n_workers)
-    print('started')
     thread = Thread(target=rabit_context.join, daemon=True)
-    thread.daemon = True
     thread.start()
-    print('ran')
     return rabit_context.slave_envs()
 
 
