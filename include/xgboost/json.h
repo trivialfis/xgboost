@@ -336,11 +336,6 @@ struct StringView {
   char const* c_str() const { return str_; }  // NOLINT
 };
 
-template <typename T, typename... Args>
-dmlc::IntrusivePtr<Value> MakeValue(Args... args) {
-  return dmlc::make_intrusive_base<Value, T>(std::forward<Args>(args)...);
-}
-
 /*!
  * \brief Data structure representing JSON format.
  *
@@ -369,11 +364,11 @@ class Json {
   static void Dump(Json json, std::string* out);
 
   Json()
-      : ptr_{MakeValue<JsonNull>()} {}
+      : ptr_{new JsonNull()} {}
 
   // number
   explicit Json(JsonNumber number)
-      : ptr_{MakeValue<JsonNumber>(std::move(number))} {}
+      : ptr_{new JsonNumber(std::move(number))} {}
   Json& operator=(JsonNumber number) {
     ptr_.reset(new JsonNumber(std::move(number)));
     return *this;
@@ -381,7 +376,7 @@ class Json {
 
   // integer
   explicit Json(JsonInteger integer)
-      : ptr_{MakeValue<JsonInteger>(std::move(integer))} {}
+      : ptr_{new JsonInteger(std::move(integer))} {}
   Json& operator=(JsonInteger integer) {
     ptr_.reset(new JsonInteger(std::move(integer)));
     return *this;
@@ -389,7 +384,7 @@ class Json {
 
   // array
   explicit Json(JsonArray list)
-      : ptr_{MakeValue<JsonArray>(std::move(list))} {}
+      : ptr_{new JsonArray(std::move(list))} {}
   Json& operator=(JsonArray array) {
     ptr_.reset(new JsonArray(std::move(array)));
     return *this;
@@ -397,28 +392,28 @@ class Json {
 
   // object
   explicit Json(JsonObject object)
-      : ptr_{MakeValue<JsonObject>(std::move(object))} {}
+      : ptr_{new JsonObject(std::move(object))} {}
   Json& operator=(JsonObject object) {
     ptr_.reset(new JsonObject(std::move(object)));
     return *this;
   }
   // string
   explicit Json(JsonString str) :
-      ptr_{MakeValue<JsonString>(std::move(str))} {}
+      ptr_{new JsonString(std::move(str))} {}
   Json& operator=(JsonString str) {
     ptr_.reset(new JsonString(std::move(str)));
     return *this;
   }
   // bool
   explicit Json(JsonBoolean boolean)
-      : ptr_{MakeValue<JsonBoolean>(std::move(boolean))} {}
+      : ptr_{new JsonBoolean(std::move(boolean))} {}
   Json& operator=(JsonBoolean boolean) {
     ptr_.reset(new JsonBoolean(std::move(boolean)));
     return *this;
   }
   // null
   explicit Json(JsonNull null)
-      : ptr_{MakeValue<JsonNull>(std::move(null))} {}
+      : ptr_{new JsonNull(std::move(null))} {}
   Json& operator=(JsonNull null) {
     ptr_.reset(new JsonNull(std::move(null)));
     return *this;
