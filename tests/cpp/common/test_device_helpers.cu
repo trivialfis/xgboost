@@ -101,10 +101,9 @@ struct IsSorted {
 };
 }  // namespace
 
-namespace xgboost {
-namespace common {
-
+namespace dh {
 void TestSegmentedUniqueRegression(std::vector<SketchEntry> values, size_t n_duplicated) {
+  using xgboost::bst_feature_t;  // NOLINT
   std::vector<bst_feature_t> segments{0, static_cast<bst_feature_t>(values.size())};
 
   thrust::device_vector<SketchEntry> d_values(values);
@@ -156,5 +155,47 @@ TEST(SegmentedUnique, Regression) {
     TestSegmentedUniqueRegression(values, 0);
   }
 }
-}  // namespace common
-}  // namespace xgboost
+
+struct PredicateForCopyIfTest {
+  __device__ bool operator()(size_t v) const { return v % 2 == 0; }
+};
+
+void TestCopyIf() {
+  {
+    // Test empty output
+    size_t constexpr kElems = 1;
+    dh::device_vector<size_t> values(kElems, 1);
+    dh::device_vector<size_t> outs;
+
+    CopyIf(values.begin(), values.end(), outs.begin(),
+           PredicateForCopyIfTest{});
+  }
+  {
+    size_t constexpr kElems = 1;
+    dh::device_vector<size_t> values(kElems, 2);
+    dh::device_vector<size_t> outs(kElems);
+
+    CopyIf(values.begin(), values.end(), outs.begin(),
+           PredicateForCopyIfTest{});
+    CHECK_EQ(outs[0], 2);
+  }
+  {
+    size_t constexpr kElems = 1000;
+    dh::device_vector<size_t> values(kElems);
+    thrust::sequence(values.begin(), values.end(), 0);
+    dh::device_vector<size_t> outs(kElems / 2);
+
+    CopyIf(values.begin(), values.end(), outs.begin(),
+           PredicateForCopyIfTest{});
+    size_t ret = 0;
+    for (size_t i = 0; i < kElems / 2; ++i) {
+      CHECK_EQ(outs[i], ret);
+      ret += 2;
+    }
+  }
+}
+
+TEST(DeviceHelpers, CopyIf) {
+  TestCopyIf();
+}
+}  // namespace dh

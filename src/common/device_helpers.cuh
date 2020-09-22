@@ -1093,4 +1093,52 @@ SegmentedUnique(KeyInIt key_segments_first, KeyInIt key_segments_last, ValInIt v
                          key_segments_out + segments_len, key_segments_out, 0);
   return n_uniques;
 }
+
+namespace detail {
+template <typename T>
+struct CopyIfScanOp {
+  XGBOOST_DEVICE T operator()(T const &l, T const &r) const {
+    auto idx = thrust::get<0>(r);
+    auto lhs = static_cast<size_t>(thrust::get<1>(l));
+    auto rhs = static_cast<size_t>(thrust::get<1>(r));
+    auto ret = thrust::make_tuple(idx, thrust::get<1>(l) + thrust::get<1>(r));
+    return ret;
+  }
+};
+template <typename T, typename InputIt, typename OutputIt, typename Pred>
+struct CopyIfTransOut {
+  InputIt first;
+  OutputIt result;
+  Pred pred;
+  XGBOOST_DEVICE T operator()(T const &v) const {
+    auto in_idx = thrust::get<0>(v);
+    auto out_idx = thrust::get<1>(v) - 1;
+    auto e = *(first + in_idx);
+    if (pred(e)) {
+      result[out_idx] = e;
+    }
+    return v;
+  }
+};
+}  // namespace detail
+
+template <typename InputIterator1, typename OutputIterator, typename Predicate>
+void CopyIf(InputIterator1 first, InputIterator1 last, OutputIterator result,
+            Predicate pred) {
+  auto n = thrust::distance(first, last);
+  using IndexType = decltype(n);
+  dh::XGBCachingDeviceAllocator<char> alloc;
+  dh::caching_device_vector<IndexType> scatter_indices(n);
+  auto it = thrust::make_zip_iterator(thrust::make_tuple(
+      thrust::make_counting_iterator(0ul),
+      dh::MakeTransformIterator<IndexType>(
+          first, [=] __device__(auto const& v) -> int32_t { return pred(v); })));
+  using Tuple = thrust::tuple<size_t, int32_t>;
+  auto out_it = thrust::make_transform_output_iterator(
+      thrust::make_discard_iterator(),
+      detail::CopyIfTransOut<Tuple, decltype(first), decltype(result), Predicate>{
+          first, result, pred});
+  thrust::inclusive_scan(thrust::cuda::par(alloc), it, it + n, out_it,
+                         detail::CopyIfScanOp<Tuple>{});
+}
 }  // namespace dh

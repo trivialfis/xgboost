@@ -35,29 +35,6 @@ void CountRowOffsets(const AdapterBatchT& batch, common::Span<bst_row_t> offset,
       thrust::device_pointer_cast(offset.data()));
 }
 
-template <typename InputIterator1, typename OutputIterator, typename Predicate>
-XGBOOST_DEVICE void CopyIf(InputIterator1 first, InputIterator1 last, OutputIterator result,
-                           Predicate pred) {
-  auto n = thrust::distance(first, last);
-  using IndexType = decltype(n);
-  // scan {0,1} predicates
-  dh::XGBCachingDeviceAllocator<char> alloc;
-  dh::caching_device_vector<IndexType> scatter_indices(n);
-  auto it = dh::MakeTransformIterator<IndexType>(
-      first, [=] __device__(auto v) -> int32_t { return pred(v); });
-  thrust::exclusive_scan(thrust::cuda::par(alloc), it, it + n,
-                         scatter_indices.begin(), static_cast<IndexType>(0),
-                         thrust::plus<IndexType>());
-  // scatter the true elements
-  thrust::scatter_if(thrust::cuda::par(alloc),
-                     first,
-                     last,
-                     scatter_indices.begin(),
-                     it,
-                     result,
-                     thrust::identity<IndexType>());
-}
-
 // Here the data is already correctly ordered and simply needs to be compacted
 // to remove missing data
 template <typename AdapterT>
@@ -67,17 +44,6 @@ void CopyDataToDMatrix(AdapterT* adapter, common::Span<Entry> data,
   dh::device_vector<size_t> column_sizes(adapter->NumColumns());
   auto d_column_sizes = column_sizes.data().get();
   auto& batch = adapter->Value();
-  // Populate column sizes
-  dh::LaunchN(device_idx, batch.Size(), [=] __device__(size_t idx) {
-    const auto& e = batch.GetElement(idx);
-    atomicAdd(reinterpret_cast<unsigned long long*>(  // NOLINT
-                  &d_column_sizes[e.column_idx]),
-              static_cast<unsigned long long>(1));  // NOLINT
-  });
-  thrust::inclusive_scan(thrust::device, column_sizes.begin(),
-                         column_sizes.end(), column_sizes.begin());
-
-  // auto& batch = adapter->Value();
   auto transform_f = [=] __device__(size_t idx) {
     const auto& e = batch.GetElement(idx);
     return Entry(e.column_idx, e.value);
@@ -85,9 +51,8 @@ void CopyDataToDMatrix(AdapterT* adapter, common::Span<Entry> data,
   auto counting = thrust::make_counting_iterator(0llu);
   thrust::transform_iterator<decltype(transform_f), decltype(counting), Entry>
       transform_iter(counting, transform_f);
-  CopyIf(transform_iter,
-          transform_iter + batch.Size(),
-          thrust::device_pointer_cast(data.data()), IsValidFunctor(missing));
+  dh::CopyIf(transform_iter, transform_iter + batch.Size(),
+             thrust::device_pointer_cast(data.data()), IsValidFunctor(missing));
 }
 
 // Does not currently support metainfo as no on-device data source contains this
