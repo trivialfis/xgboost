@@ -1128,7 +1128,6 @@ void CopyIf(InputIterator1 first, InputIterator1 last, OutputIterator result,
   auto n = thrust::distance(first, last);
   using IndexType = decltype(n);
   dh::XGBCachingDeviceAllocator<char> alloc;
-  dh::caching_device_vector<IndexType> scatter_indices(n);
   auto it = thrust::make_zip_iterator(thrust::make_tuple(
       thrust::make_counting_iterator(0ul),
       dh::MakeTransformIterator<IndexType>(

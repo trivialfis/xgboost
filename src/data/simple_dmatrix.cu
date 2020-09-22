@@ -41,8 +41,6 @@ template <typename AdapterT>
 void CopyDataToDMatrix(AdapterT* adapter, common::Span<Entry> data,
                        int device_idx, float missing,
                        common::Span<size_t> row_ptr) {
-  dh::device_vector<size_t> column_sizes(adapter->NumColumns());
-  auto d_column_sizes = column_sizes.data().get();
   auto& batch = adapter->Value();
   auto transform_f = [=] __device__(size_t idx) {
     const auto& e = batch.GetElement(idx);
