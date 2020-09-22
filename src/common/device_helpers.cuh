@@ -350,9 +350,9 @@ public:
     int current_device;
     safe_cuda(cudaGetDevice(&current_device));
     LOG(CONSOLE) << "======== Device " << current_device << " Memory Allocations: "
-      << " ========";
+                 << " ========";
     LOG(CONSOLE) << "Peak memory usage: "
-      << stats_.peak_allocated_bytes / 1048576 << "MiB";
+                 << static_cast<double>(stats_.peak_allocated_bytes) / 1048576.0 << "MiB";
     LOG(CONSOLE) << "Number of allocations: " << stats_.num_allocations;
   }
 };
