@@ -213,7 +213,6 @@ else (BUILD_STATIC_LIB)
   add_library(xgboost SHARED)
 endif (BUILD_STATIC_LIB)
 target_link_libraries(xgboost PRIVATE objxgboost)
-
 if (USE_CUDA)
   xgboost_set_cuda_flags(xgboost)
 endif (USE_CUDA)
@@ -239,20 +238,11 @@ endif (JVM_BINDINGS)
 #-- CLI for xgboost
 add_executable(runxgboost ${xgboost_SOURCE_DIR}/src/cli_main.cc)
 target_link_libraries(runxgboost PRIVATE objxgboost)
-if (USE_NVTX)
-  enable_nvtx(runxgboost)
-endif (USE_NVTX)
-
-target_include_directories(runxgboost
-  PRIVATE
-  ${xgboost_SOURCE_DIR}/include
-  ${xgboost_SOURCE_DIR}/dmlc-core/include
-  ${xgboost_SOURCE_DIR}/rabit/include)
-set_target_properties(
-  runxgboost PROPERTIES
-  OUTPUT_NAME xgboost
-  CXX_STANDARD 14
-  CXX_STANDARD_REQUIRED ON)
+set_target_properties(runxgboost PROPERTIES OUTPUT_NAME xgboost)
+xgboost_set_target_flags(runxgboost)
+if (USE_CUDA)
+  xgboost_set_cuda_flags(runxgboost)
+endif(USE_CUDA)
 #-- End CLI for xgboost
 
 set_output_directory(runxgboost ${xgboost_SOURCE_DIR})

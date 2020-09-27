@@ -177,10 +177,73 @@ function(xgboost_set_cuda_flags target)
       $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fvisibility=hidden>)
   endif (HIDE_CXX_SYMBOLS)
 
+  if (ENABLE_ALL_WARNINGS)
+    target_compile_options(${target} PUBLIC
+      $<IF:$<COMPILE_LANGUAGE:CUDA>,-Xcompiler=-Wall -Xcompiler=-Wextra,-Wall -Wextra>)
+  endif (ENABLE_ALL_WARNINGS)
+
   if (USE_NCCL)
     find_package(Nccl REQUIRED)
     target_include_directories(${target} PRIVATE ${NCCL_INCLUDE_DIR})
     target_compile_definitions(${target} PRIVATE -DXGBOOST_USE_NCCL=1)
     target_link_libraries(${target} PUBLIC ${NCCL_LIBRARY})
   endif (USE_NCCL)
+
+  find_package(CUDA)
+  target_include_directories(${target} PRIVATE ${CUDA_INCLUDE_DIRS})
 endfunction(xgboost_set_cuda_flags)
+
+function(xgboost_set_target_flags target)
+  target_include_directories(${target}
+    PRIVATE
+    ${xgboost_SOURCE_DIR}/include
+    ${xgboost_SOURCE_DIR}/dmlc-core/include
+    ${xgboost_SOURCE_DIR}/rabit/include)
+  target_compile_options(${target}
+    PRIVATE
+    $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<COMPILE_LANGUAGE:CXX>>:/MP>
+    $<$<AND:$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<COMPILE_LANGUAGE:CXX>>:-funroll-loops>)
+  if (HIDE_CXX_SYMBOLS)
+    set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  endif (HIDE_CXX_SYMBOLS)
+
+  if (MSVC)
+    target_compile_options(${target} PRIVATE
+      $<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:/utf-8>
+      -D_CRT_SECURE_NO_WARNINGS
+      -D_CRT_SECURE_NO_DEPRECATE
+      )
+  endif (MSVC)
+  if (WIN32 AND MINGW)
+    target_compile_options(${target} PUBLIC -static-libstdc++)
+  endif (WIN32 AND MINGW)
+  if (LOG_CAPI_INVOCATION)
+    target_compile_definitions(${target} PUBLIC -DLOG_CAPI_INVOCATION=1)
+  endif (LOG_CAPI_INVOCATION)
+
+  set_target_properties(${target} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED ON)
+  target_compile_definitions(${target}
+    PRIVATE
+    -DDMLC_LOG_CUSTOMIZE=1  # enable custom logging
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:_MWAITXINTRIN_H_INCLUDED>)
+  if (XGBOOST_MM_PREFETCH_PRESENT)
+    target_compile_definitions(${target}
+      PRIVATE
+      -DXGBOOST_MM_PREFETCH_PRESENT=1)
+  endif(XGBOOST_MM_PREFETCH_PRESENT)
+  if (XGBOOST_BUILTIN_PREFETCH_PRESENT)
+    target_compile_definitions(${target}
+      PRIVATE
+      -DXGBOOST_BUILTIN_PREFETCH_PRESENT=1)
+  endif (XGBOOST_BUILTIN_PREFETCH_PRESENT)
+  if (USE_OPENMP OR USE_CUDA)  # CUDA requires OpenMP
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
+  endif (USE_OPENMP OR USE_CUDA)
+  if (USE_DEBUG_OUTPUT)
+    target_compile_definitions(${target} PRIVATE -DXGBOOST_USE_DEBUG_OUTPUT=1)
+  endif (USE_DEBUG_OUTPUT)
+endfunction(xgboost_set_target_flags)
