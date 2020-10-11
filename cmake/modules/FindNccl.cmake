@@ -54,6 +54,7 @@ find_library(NCCL_LIBRARY
   PATHS $ENV{NCCL_ROOT}/lib/ ${NCCL_ROOT}/lib)
 
 message(STATUS "Using nccl library: ${NCCL_LIBRARY}")
+set(Nccl_Found ON PARENT_SCOPE)
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Nccl DEFAULT_MSG

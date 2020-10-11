@@ -129,8 +129,10 @@ macro(enable_nvtx target)
 endmacro()
 
 # Set CUDA related flags to target.  Must be used after code `format_gencode_flags`.
-function(xgboost_set_cuda_flags target)
-  find_package(OpenMP REQUIRED)
+function(xgboost_target_set_cuda_flags target)
+  if (NOT OpenMP_CXX_FOUND)
+    find_package(OpenMP REQUIRED)
+  endif (NOT OpenMP_CXX_FOUND)
   target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
 
   target_compile_options(${target} PRIVATE
@@ -183,7 +185,9 @@ function(xgboost_set_cuda_flags target)
   endif (ENABLE_ALL_WARNINGS)
 
   if (USE_NCCL)
-    find_package(Nccl REQUIRED)
+    if (NOT Nccl_FOUND)
+      find_package(Nccl REQUIRED)
+    endif (NOT Nccl_FOUND)
     target_include_directories(${target} PRIVATE ${NCCL_INCLUDE_DIR})
     target_compile_definitions(${target} PRIVATE -DXGBOOST_USE_NCCL=1)
     target_link_libraries(${target} PUBLIC ${NCCL_LIBRARY})
@@ -191,9 +195,9 @@ function(xgboost_set_cuda_flags target)
 
   find_package(CUDA)
   target_include_directories(${target} PRIVATE ${CUDA_INCLUDE_DIRS})
-endfunction(xgboost_set_cuda_flags)
+endfunction(xgboost_target_set_cuda_flags)
 
-function(xgboost_set_target_flags target)
+function(xgboost_target_set_flags target)
   target_include_directories(${target}
     PRIVATE
     ${xgboost_SOURCE_DIR}/include
@@ -246,4 +250,8 @@ function(xgboost_set_target_flags target)
   if (USE_DEBUG_OUTPUT)
     target_compile_definitions(${target} PRIVATE -DXGBOOST_USE_DEBUG_OUTPUT=1)
   endif (USE_DEBUG_OUTPUT)
-endfunction(xgboost_set_target_flags)
+
+  if (USE_CUDA)
+    xgboost_target_set_cuda_flags(${target})
+  endif (USE_CUDA)
+endfunction(xgboost_target_set_flags)

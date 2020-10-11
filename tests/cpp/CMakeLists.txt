@@ -22,17 +22,9 @@ add_executable(testxgboost ${TEST_SOURCES}
   ${xgboost_SOURCE_DIR}/plugin/example/custom_obj.cc)
 target_link_libraries(testxgboost PRIVATE objxgboost)
 
-xgboost_set_target_flags(testxgboost)
-target_include_directories(testxgboost
-  PRIVATE
-  ${GTEST_INCLUDE_DIRS})
-target_link_libraries(testxgboost
-  PRIVATE
-  ${GTEST_LIBRARIES})
-if (USE_CUDA)
-  xgboost_set_cuda_flags(testxgboost)
-endif (USE_CUDA)
-
+xgboost_target_set_flags(testxgboost)
+target_link_libraries(testxgboost PRIVATE GTest::GTest)
 set_output_directory(testxgboost ${xgboost_BINARY_DIR})
+
 # This grouping organises source files nicely in visual studio
 auto_source_group("${TEST_SOURCES}")

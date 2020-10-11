@@ -213,16 +213,7 @@ else (BUILD_STATIC_LIB)
   add_library(xgboost SHARED)
 endif (BUILD_STATIC_LIB)
 target_link_libraries(xgboost PRIVATE objxgboost)
-if (USE_CUDA)
-  xgboost_set_cuda_flags(xgboost)
-endif (USE_CUDA)
-
-#-- Hide all C++ symbols
-if (HIDE_CXX_SYMBOLS)
-  foreach(target objxgboost xgboost dmlc rabit rabit_mock_static)
-    set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET hidden)
-  endforeach()
-endif (HIDE_CXX_SYMBOLS)
+xgboost_target_set_flags(xgboost)
 
 target_include_directories(xgboost
   INTERFACE
@@ -239,10 +230,7 @@ endif (JVM_BINDINGS)
 add_executable(runxgboost ${xgboost_SOURCE_DIR}/src/cli_main.cc)
 target_link_libraries(runxgboost PRIVATE objxgboost)
 set_target_properties(runxgboost PROPERTIES OUTPUT_NAME xgboost)
-xgboost_set_target_flags(runxgboost)
-if (USE_CUDA)
-  xgboost_set_cuda_flags(runxgboost)
-endif(USE_CUDA)
+xgboost_target_set_flags(runxgboost)
 #-- End CLI for xgboost
 
 set_output_directory(runxgboost ${xgboost_SOURCE_DIR})
