@@ -53,9 +53,6 @@ find_library(NCCL_LIBRARY
   NAMES ${NCCL_LIB_NAME}
   PATHS $ENV{NCCL_ROOT}/lib/ ${NCCL_ROOT}/lib)
 
-message(STATUS "Using nccl library: ${NCCL_LIBRARY}")
-set(Nccl_Found ON PARENT_SCOPE)
-
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Nccl DEFAULT_MSG
                                   NCCL_INCLUDE_DIR NCCL_LIBRARY)
@@ -64,3 +61,14 @@ mark_as_advanced(
   NCCL_INCLUDE_DIR
   NCCL_LIBRARY
 )
+
+if (Nccl_FOUND)
+  if(NOT TARGET Nccl::Nccl)
+    add_library(Nccl::Nccl UNKNOWN IMPORTED)
+    set_target_properties(Nccl::Nccl PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${NCCL_INCLUDE_DIR}")
+    set_target_properties(Nccl::Nccl PROPERTIES
+      IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+      IMPORTED_LOCATION "${NCCL_LIBRARY}")
+  endif()
+endif (Nccl_FOUND)
