@@ -117,7 +117,6 @@ if (USE_SANITIZER)
 endif (USE_SANITIZER)
 
 if (USE_CUDA)
-  SET(USE_OPENMP ON CACHE BOOL "CUDA requires OpenMP" FORCE)
   # `export CXX=' is ignored by CMake CUDA.
   set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
   message(STATUS "Configured CUDA host compiler: ${CMAKE_CUDA_HOST_COMPILER}")

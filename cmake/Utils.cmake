@@ -130,14 +130,17 @@ endmacro()
 
 # Set CUDA related flags to target.  Must be used after code `format_gencode_flags`.
 function(xgboost_set_cuda_flags target)
-  find_package(OpenMP REQUIRED)
-  target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
-
   target_compile_options(${target} PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
-    $<$<COMPILE_LANGUAGE:CUDA>:${GEN_CODE}>
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
+    $<$<COMPILE_LANGUAGE:CUDA>:${GEN_CODE}>)
+
+  if (USE_OPENMP)
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_options(${target} PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
+  endif (USE_OPENMP)
 
   if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.18")
     set_property(TARGET ${target} PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
