@@ -301,7 +301,6 @@ class QuantileHistMock : public QuantileHistMaker {
       RealImpl::InitData(gmat, gpair, fmat, tree);
       GHistIndexBlockMatrix dummy;
       this->hist_.AddHistRow(nid);
-      this->hist_.AllocateAllData();
       this->BuildHist(gpair, this->row_set_collection_[nid],
                 gmat, dummy, this->hist_[nid]);
 
@@ -343,7 +342,7 @@ class QuantileHistMock : public QuantileHistMaker {
 
       RealImpl::InitData(gmat, row_gpairs, *dmat, tree);
       this->hist_.AddHistRow(0);
-      this->hist_.AllocateAllData();
+
       this->BuildHist(row_gpairs, this->row_set_collection_[0],
                       gmat, quantile_index_block, this->hist_[0]);
 
@@ -439,7 +438,7 @@ class QuantileHistMock : public QuantileHistMaker {
         cm.Init(gmat, 0.0);
         RealImpl::InitData(gmat, row_gpairs, *dmat, tree);
         this->hist_.AddHistRow(0);
-        this->hist_.AllocateAllData();
+
         RealImpl::InitNewNode(0, gmat, row_gpairs, *dmat, tree);
 
         const size_t num_row = dmat->Info().num_row_;
@@ -477,8 +476,6 @@ class QuantileHistMock : public QuantileHistMaker {
           RealImpl::partition_builder_.Init(1, 1, [&](size_t node_in_set) {
             return 1;
           });
-          const size_t task_id = RealImpl::partition_builder_.GetTaskIdx(0, 0);
-          RealImpl::partition_builder_.AllocateForTask(task_id);
           this->template PartitionKernel<uint8_t>(0, 0, common::Range1d(0, kNRows),
                                                   split, cm, tree);
           RealImpl::partition_builder_.CalculateRowOffsets();

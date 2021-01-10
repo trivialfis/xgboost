@@ -11,6 +11,7 @@
 #include <xgboost/logging.h>
 #include <xgboost/data.h>
 #include <cmath>
+#include <functional>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -97,8 +98,7 @@ struct WQSummary {
         queue[qtail - 1].weight += w;
       }
     }
-    inline void MakeSummary(WQSummary *out) {
-      std::sort(queue.begin(), queue.begin() + qtail);
+    void MakeSummaryFromSorted(WQSummary *out) {
       out->size = 0;
       // start update sketch
       RType wsum = 0;
@@ -112,6 +112,10 @@ struct WQSummary {
         out->data[out->size++] = Entry(wsum, wsum + w, w, queue[i].value);
         wsum += w; i = j;
       }
+    }
+    void MakeSummary(WQSummary *out) {
+      XGBOOST_PARALLEL_SORT(queue.begin(), queue.begin() + qtail, std::less<>{});
+      this->MakeSummaryFromSorted(out);
     }
   };
   /*! \brief data field */
@@ -167,13 +171,13 @@ struct WQSummary {
    */
   inline void CopyFrom(const WQSummary &src) {
     if (!src.data) {
-      CHECK_EQ(src.size, 0);
+      SPAN_CHECK(src.size == 0);
       size = 0;
       return;
     }
     if (!data) {
-      CHECK_EQ(this->size, 0);
-      CHECK_EQ(src.size, 0);
+      SPAN_CHECK(this->size == 0);
+      SPAN_CHECK(src.size == 0);
       return;
     }
     size = src.size;
@@ -590,6 +594,23 @@ class QuantileSketchTemplate {
     inqueue.Push(x, w);
   }
 
+  void PushSorted(DType x, RType w) {
+    if (w == static_cast<RType>(0)) return;
+    if (inqueue.qtail == inqueue.queue.size()) {
+      // jump from lazy one value to limit_size * 2
+      if (inqueue.queue.size() == 1) {
+        inqueue.queue.resize(limit_size * 2);
+      } else {
+        temp.Reserve(limit_size * 2);
+        inqueue.MakeSummaryFromSorted(&temp);
+        // cleanup queue
+        inqueue.qtail = 0;
+        this->PushTemp();
+      }
+    }
+    inqueue.Push(x, w);
+  }
+
   inline void PushSummary(const Summary& summary) {
     temp.Reserve(limit_size * 2);
     temp.SetPrune(summary, limit_size * 2);
@@ -756,9 +777,18 @@ class HostSketchContainer {
   // Merge sketches from all workers.
   void AllReduce(std::vector<WQSketch::SummaryContainer> *p_reduced,
                  std::vector<int32_t>* p_num_cuts);
-
+  /*\brief Push a CSC matrix with sorted columns. */
+  void PushSortedCSC(SortedCSCPage const &page, MetaInfo const &info,
+                     std::vector<float> const &weights);
   /* \brief Push a CSR matrix. */
-  void PushRowPage(SparsePage const& page, MetaInfo const& info);
+  void PushRowPage(SparsePage const &page, MetaInfo const &info,
+                   std::vector<float> const &weights);
+  /* \brief Push a CSR matrix. */
+  void PushRowPage(SparsePage const &page, MetaInfo const &info) {
+    this->PushRowPage(page, info, info.weights_.ConstHostVector());
+  }
+  /* \brief Push a sigle row. */
+  void PushInstance(SparsePage::Inst const& inst, float w);
 
   void MakeCuts(HistogramCuts* cuts);
 };

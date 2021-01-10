@@ -645,12 +645,16 @@ class GlobalProposalHistMaker: public CQHistMaker {
   char const* Name() const override {
     return "grow_histmaker";
   }
+  GlobalProposalHistMaker() {
+    timer_.Init(__func__);
+  }
 
  protected:
   void ResetPosAndPropose(const std::vector<GradientPair> &gpair,
                           DMatrix *p_fmat,
                           const std::vector<bst_feature_t> &fset,
                           const RegTree &tree) override {
+    timer_.Start(__func__);
     if (this->qexpand_.size() == 1) {
       cached_rptr_.clear();
       cached_cut_.clear();
@@ -675,6 +679,7 @@ class GlobalProposalHistMaker: public CQHistMaker {
                (fset.size() + 1) * this->qexpand_.size() + 1);
       CHECK_EQ(this->wspace_.rptr.back(), this->wspace_.cut.size());
     }
+    timer_.Stop(__func__);
   }
 
   // code to create histogram
@@ -682,6 +687,7 @@ class GlobalProposalHistMaker: public CQHistMaker {
                   DMatrix *p_fmat,
                   const std::vector<bst_feature_t> &fset,
                   const RegTree &tree) override {
+    timer_.Start(__func__);
     const MetaInfo &info = p_fmat->Info();
     // fill in reverse map
     this->feat2workindex_.resize(tree.param.num_feature);
@@ -740,12 +746,14 @@ class GlobalProposalHistMaker: public CQHistMaker {
     }
     this->histred_.Allreduce(dmlc::BeginPtr(this->wspace_.hset[0].data),
                             this->wspace_.hset[0].data.size());
+    timer_.Stop(__func__);
   }
 
   // cached unit pointer
   std::vector<unsigned> cached_rptr_;
   // cached cut value.
   std::vector<bst_float> cached_cut_;
+  common::Monitor timer_;
 };
 
 XGBOOST_REGISTER_TREE_UPDATER(LocalHistMaker, "grow_local_histmaker")

@@ -148,6 +148,16 @@ void ParallelFor(Index size, Func fn) {
   ParallelFor(size, omp_get_max_threads(), fn);
 }
 
+template <typename Func>
+void DynamicParallelFor(size_t size, size_t nthreads, Func fn) {
+  dmlc::OMPException omp_exc;
+#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 1)
+  for (omp_ulong i = 0; i < size; ++i) {
+    omp_exc.Run(fn, i);
+  }
+  omp_exc.Rethrow();
+}
+
 /* \brief Configure parallel threads.
  *
  * \param p_threads Number of threads, when it's less than or equal to 0, this function

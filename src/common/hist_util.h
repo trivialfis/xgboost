@@ -246,6 +246,7 @@ struct GHistIndexMatrix {
   size_t max_num_bins;
   // Create a global histogram matrix, given cut
   void Init(DMatrix* p_fmat, int max_num_bins);
+  void Init(DMatrix* p_fmat, HistogramCuts const& cuts, int32_t max_num_bins);
 
   // specific method for sparse data as no possibility to reduce allocated memory
   template <typename BinIdxType, typename GetOffset>
@@ -272,8 +273,11 @@ struct GHistIndexMatrix {
     });
   }
 
-  void ResizeIndex(const size_t n_index,
-                   const bool isDense);
+  void SetIndexForRowSet(SparsePage const &page,
+                         common::Span<bst_row_t const> row_set,
+                         HistogramCuts const &cuts);
+
+  void ResizeIndex(const size_t n_index, const bool isDense);
 
   inline void GetFeatureCounts(size_t* counts) const {
     auto nfeature = cut.Ptrs().size() - 1;
@@ -406,14 +410,9 @@ class HistCollection {
   // access histogram for i-th node
   GHistRowT operator[](bst_uint nid) const {
     constexpr uint32_t kMax = std::numeric_limits<uint32_t>::max();
-    const size_t id = row_ptr_[nid];
-    CHECK_NE(id, kMax);
-    GradientPairT* ptr = nullptr;
-    if (contiguous_allocation_) {
-      ptr = const_cast<GradientPairT*>(data_[0].data() + nbins_*id);
-    } else {
-      ptr = const_cast<GradientPairT*>(data_[id].data());
-    }
+    CHECK_NE(row_ptr_[nid], kMax);
+    GradientPairT* ptr =
+        const_cast<GradientPairT*>(dmlc::BeginPtr(data_) + row_ptr_[nid]);
     return {ptr, nbins_};
   }
 
@@ -442,26 +441,12 @@ class HistCollection {
     }
     CHECK_EQ(row_ptr_[nid], kMax);
 
-    if (data_.size() < (nid + 1)) {
-      data_.resize((nid + 1));
+    if (data_.size() < nbins_ * (nid + 1)) {
+      data_.resize(nbins_ * (nid + 1));
     }
 
-    row_ptr_[nid] = n_nodes_added_;
+    row_ptr_[nid] = nbins_ * n_nodes_added_;
     n_nodes_added_++;
-  }
-  // allocate thread local memory i-th node
-  void AllocateData(bst_uint nid) {
-    if (data_[row_ptr_[nid]].size() == 0) {
-      data_[row_ptr_[nid]].resize(nbins_, {0, 0});
-    }
-  }
-  // allocate common buffer contiguously for all nodes, need for single Allreduce call
-  void AllocateAllData() {
-    const size_t new_size = nbins_*data_.size();
-    contiguous_allocation_ = true;
-    if (data_[0].size() != new_size) {
-      data_[0].resize(new_size);
-    }
   }
 
  private:
@@ -469,10 +454,8 @@ class HistCollection {
   uint32_t nbins_ = 0;
   /*! \brief amount of active nodes in hist collection */
   uint32_t n_nodes_added_ = 0;
-  /*! \brief flag to identify contiguous memory allocation */
-  bool contiguous_allocation_ = false;
 
-  std::vector<std::vector<GradientPairT>> data_;
+  std::vector<GradientPairT> data_;
 
   /*! \brief row_ptr_[nid] locates bin for histogram of node nid */
   std::vector<size_t> row_ptr_;
@@ -501,6 +484,7 @@ class ParallelGHistBuilder {
              const std::vector<GHistRowT>& targeted_hists) {
     hist_buffer_.Init(nbins_);
     tid_nid_to_hist_.clear();
+    hist_memory_.clear();
     threads_to_nids_map_.clear();
 
     targeted_hists_ = targeted_hists;
@@ -523,11 +507,8 @@ class ParallelGHistBuilder {
     CHECK_LT(nid, nodes_);
     CHECK_LT(tid, nthreads_);
 
-    int idx = tid_nid_to_hist_.at({tid, nid});
-    if (idx >= 0) {
-      hist_buffer_.AllocateData(idx);
-    }
-    GHistRowT hist = idx == -1 ? targeted_hists_[nid] : hist_buffer_[idx];
+    size_t idx = tid_nid_to_hist_.at({tid, nid});
+    GHistRowT hist = hist_memory_[idx];
 
     if (!hist_was_used_[tid * nodes_ + nid]) {
       InitilizeHistByZeroes(hist, 0, hist.size());
@@ -548,9 +529,8 @@ class ParallelGHistBuilder {
     for (size_t tid = 0; tid < nthreads_; ++tid) {
       if (hist_was_used_[tid * nodes_ + nid]) {
         is_updated = true;
-
-        int idx = tid_nid_to_hist_.at({tid, nid});
-        GHistRowT src = idx == -1 ? targeted_hists_[nid] : hist_buffer_[idx];
+        const size_t idx = tid_nid_to_hist_.at({tid, nid});
+        GHistRowT src = hist_memory_[idx];
 
         if (dst.data() != src.data()) {
           IncrementHist(dst, src, begin, end);
@@ -612,6 +592,7 @@ class ParallelGHistBuilder {
   }
 
   void MatchNodeNidPairToHist() {
+    size_t hist_total = 0;
     size_t hist_allocated_additionally = 0;
 
     for (size_t nid = 0; nid < nodes_; ++nid) {
@@ -619,11 +600,15 @@ class ParallelGHistBuilder {
       for (size_t tid = 0; tid < nthreads_; ++tid) {
         if (threads_to_nids_map_[tid * nodes_ + nid]) {
           if (first_hist) {
-            tid_nid_to_hist_[{tid, nid}] = -1;
+            hist_memory_.push_back(targeted_hists_[nid]);
             first_hist = false;
           } else {
-            tid_nid_to_hist_[{tid, nid}] = hist_allocated_additionally++;
+            hist_memory_.push_back(hist_buffer_[hist_allocated_additionally]);
+            hist_allocated_additionally++;
           }
+          // map pair {tid, nid} to index of allocated histogram from hist_memory_
+          tid_nid_to_hist_[{tid, nid}] = hist_total++;
+          CHECK_EQ(hist_total, hist_memory_.size());
         }
       }
     }
@@ -648,11 +633,10 @@ class ParallelGHistBuilder {
   std::vector<bool> threads_to_nids_map_;
   /*! \brief Contains histograms for final results  */
   std::vector<GHistRowT> targeted_hists_;
-  /*!
-   * \brief map pair {tid, nid} to index of allocated histogram from hist_buffer_ and targeted_hists_,
-   * -1 is reserved for targeted_hists_
-   */
-  std::map<std::pair<size_t, size_t>, int> tid_nid_to_hist_;
+  /*! \brief Allocated memory for histograms used for construction  */
+  std::vector<GHistRowT> hist_memory_;
+  /*! \brief map pair {tid, nid} to index of allocated histogram from hist_memory_  */
+  std::map<std::pair<size_t, size_t>, size_t> tid_nid_to_hist_;
 };
 
 /*!

@@ -177,7 +177,7 @@ void GBTree::ConfigureUpdaters() {
       LOG(INFO) <<
           "Tree method is selected to be 'hist', which uses a "
           "single updater grow_quantile_histmaker.";
-      tparam_.updater_seq = "grow_quantile_histmaker";
+      tparam_.updater_seq = "grow_fast_histmaker";
       break;
     case TreeMethod::kGPUHist: {
       common::AssertGPUSupport();

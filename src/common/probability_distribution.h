@@ -9,6 +9,7 @@
 #define XGBOOST_COMMON_PROBABILITY_DISTRIBUTION_H_
 
 #include <cmath>
+#include "xgboost/base.h"
 
 namespace xgboost {
 namespace common {
