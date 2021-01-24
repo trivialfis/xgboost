@@ -133,6 +133,13 @@ inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
   return out;
 }
 
+template <typename Adapter>
+inline void SketchOnAdapter(Adapter const& adapter, MetaInfo const& info, size_t max_bins) {
+  std::vector<bst_row_t> reduced(info.num_col_, 0);
+  HostSketchContainer container(reduced, max_bins,
+                                HostSketchContainer::UseGroup(info));
+}
+
 enum BinTypeSize {
   kUint8BinsTypeSize  = 1,
   kUint16BinsTypeSize = 2,

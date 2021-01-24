@@ -201,6 +201,9 @@ class DenseAdapterBatch : public detail::NoMetaInfo {
 
  public:
   size_t Size() const { return num_rows_; }
+  size_t NumRows() const { return num_rows_; }
+  size_t NumCols() const { return num_features_; }
+
   const Line GetLine(size_t idx) const {
     return Line(values_ + idx * num_features_, num_features_, idx);
   }

@@ -17,6 +17,7 @@
 #include <iostream>
 
 #include "timer.h"
+#include "../data/adapter.h"
 
 namespace xgboost {
 namespace common {
@@ -759,6 +760,27 @@ class HostSketchContainer {
 
   /* \brief Push a CSR matrix. */
   void PushRowPage(SparsePage const& page, MetaInfo const& info);
+  template <typename Batch>
+  void PushAdapterBatch(Batch const& batch, MetaInfo const& info) {
+    monitor_.Start(__func__);
+    CHECK_EQ(sketches_.size(), info.num_col_);
+    std::vector<bst_uint> const &group_ptr = info.group_ptr_;
+
+    for (size_t i = 0; i < batch.NumRows(); ++i) {
+      auto line = batch.GetLine(i);
+      bst_group_t group_ind = 0;
+      if (use_group_ind_) {
+        group_ind = this->SearchGroupIndFromRow(group_ptr, i);
+      }
+      size_t w_idx = use_group_ind_ ? group_ind : i;
+      auto w = info.GetWeight(w_idx);
+      for (size_t j = 0; j < line.Size(); ++j) {
+        data::COOTuple elem = line.GetElement(j);
+        sketches_.at(elem.column_idx).Push(elem.value, w);
+      }
+    }
+    monitor_.Stop(__func__);
+  }
 
   void MakeCuts(HistogramCuts* cuts);
 };

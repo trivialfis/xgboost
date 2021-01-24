@@ -29,6 +29,7 @@ class IterativeDeviceDMatrix : public DMatrix {
 
  public:
   void Initialize(DataIterHandle iter, float missing, int nthread);
+  void InitializeHostData(DataIterHandle iter, float missing, int nthread);
 
  public:
   explicit IterativeDeviceDMatrix(DataIterHandle iter, DMatrixHandle proxy,
@@ -43,19 +44,19 @@ class IterativeDeviceDMatrix : public DMatrix {
   bool EllpackExists() const override { return true; }
   bool SparsePageExists() const override { return false; }
   DMatrix *Slice(common::Span<int32_t const> ridxs) override {
-    LOG(FATAL) << "Slicing DMatrix is not supported for Device DMatrix.";
+    LOG(FATAL) << "Slicing DMatrix is not supported for Quantile DMatrix.";
     return nullptr;
   }
   BatchSet<SparsePage> GetRowBatches() override {
-    LOG(FATAL) << "Not implemented.";
+    LOG(FATAL) << "Not implemented for Quantile DMatrix.";
     return BatchSet<SparsePage>(BatchIterator<SparsePage>(nullptr));
   }
   BatchSet<CSCPage> GetColumnBatches() override {
-    LOG(FATAL) << "Not implemented.";
+    LOG(FATAL) << "Not implemented for Quantile DMatrix.";
     return BatchSet<CSCPage>(BatchIterator<CSCPage>(nullptr));
   }
   BatchSet<SortedCSCPage> GetSortedColumnBatches() override {
-    LOG(FATAL) << "Not implemented.";
+    LOG(FATAL) << "Not implemented for Quantile DMatrix.";
     return BatchSet<SortedCSCPage>(BatchIterator<SortedCSCPage>(nullptr));
   }
 
