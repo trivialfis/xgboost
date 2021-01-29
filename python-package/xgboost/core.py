@@ -318,11 +318,17 @@ class DataIter:
         if self.exception is not None:
             return 0
 
-        def data_handle(data, feature_names=None, feature_types=None, **kwargs):
+        def data_handle(
+            data,
+            feature_names=None,
+            feature_types=None,
+            enable_categorical=False,
+            **kwargs,
+        ):
             from .data import dispatch_device_quantile_dmatrix_set_data
             from .data import _device_quantile_transform
             data, feature_names, feature_types = _device_quantile_transform(
-                data, feature_names, feature_types
+                data, feature_names, feature_types, enable_categorical=enable_categorical
             )
             dispatch_device_quantile_dmatrix_set_data(self.proxy, data)
             self.proxy.set_info(

@@ -375,7 +375,7 @@ def _cudf_array_interfaces(data):
     return interfaces_str
 
 
-def _transform_cudf_df(data, feature_names, feature_types):
+def _transform_cudf_df(data, feature_names, feature_types, enable_categorical):
     if feature_names is None:
         if _is_cudf_ser(data):
             feature_names = [data.name]
@@ -394,12 +394,21 @@ def _transform_cudf_df(data, feature_names, feature_types):
             dtypes = data.dtypes
         feature_types = [_pandas_dtype_mapper[d.name]
                          for d in dtypes]
+    if enable_categorical:
+        import cudf
+        for i in range(len(feature_types)):
+            dtype = feature_types[i]
+            if cudf.is_categorical_dtype(dtype):
+                feature_types[i] = "categorical"
     return data, feature_names, feature_types
 
 
-def _from_cudf_df(data, missing, nthread, feature_names, feature_types):
+def _from_cudf_df(
+    data, missing, nthread, feature_names, feature_types, enable_categorical
+):
     data, feature_names, feature_types = _transform_cudf_df(
-        data, feature_names, feature_types)
+        data, feature_names, feature_types, enable_categorical
+    )
     interfaces_str = _cudf_array_interfaces(data)
     handle = ctypes.c_void_p()
     _check_call(
@@ -791,9 +800,9 @@ class SingleBatchInternalIter(DataIter):  # pylint: disable=R0902
         self.it = 0
 
 
-def _device_quantile_transform(data, feature_names, feature_types):
+def _device_quantile_transform(data, feature_names, feature_types, enable_categorical):
     if _is_cudf_df(data):
-        return _transform_cudf_df(data, feature_names, feature_types)
+        return _transform_cudf_df(data, feature_names, feature_types, enable_categorical)
     if _is_cudf_ser(data):
         return _transform_cudf_df(data, feature_names, feature_types)
     if _is_cupy_array(data):
