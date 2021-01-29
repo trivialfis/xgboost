@@ -775,7 +775,7 @@ class SingleBatchInternalIter(DataIter):  # pylint: disable=R0902
         self.it = 0
 
 
-def _device_quantile_transform(data, feature_names, feature_types, enable_categorical):
+def _proxy_transform(data, feature_names, feature_types, enable_categorical):
     if _is_cudf_df(data) or _is_cudf_ser(data):
         return _transform_cudf_df(
             data, feature_names, feature_types, enable_categorical
@@ -785,11 +785,13 @@ def _device_quantile_transform(data, feature_names, feature_types, enable_catego
         return data, feature_names, feature_types
     if _is_dlpack(data):
         return _transform_dlpack(data), feature_names, feature_types
+    if _is_numpy_array(data):
+        return data, feature_names, feature_types
     raise TypeError("Value type is not supported for data iterator:" + str(type(data)))
 
 
-def dispatch_device_quantile_dmatrix_set_data(proxy: _ProxyDMatrix, data: Any) -> None:
-    '''Dispatch for DeviceQuantileDMatrix.'''
+def dispatch_proxy_set_data(proxy: _ProxyDMatrix, data: Any, allow_host: bool) -> None:
+    """Dispatch for DeviceQuantileDMatrix."""
     if _is_cudf_df(data):
         proxy._set_data_from_cuda_columnar(data)  # pylint: disable=W0212
         return
@@ -803,5 +805,16 @@ def dispatch_device_quantile_dmatrix_set_data(proxy: _ProxyDMatrix, data: Any) -
         data = _transform_dlpack(data)
         proxy._set_data_from_cuda_interface(data)  # pylint: disable=W0212
         return
-    raise TypeError('Value type is not supported for data iterator:' +
-                    str(type(data)))
+
+    err = TypeError("Value type is not supported for data iterator:" + str(type(data)))
+
+    if not allow_host:
+        raise err
+
+    if _is_numpy_array(data):
+        proxy._set_data_from_array(data)  # pylint: disable=W0212
+        return
+    if _is_scipy_csr(data):
+        proxy._set_data_from_csr(data)  # pylint: disable=W0212
+
+    raise err

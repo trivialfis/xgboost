@@ -102,8 +102,7 @@ jobs:
         cd build
         cmake .. -GNinja -DCMAKE_PREFIX_PATH=$CONDA_PREFIX
         ninja -v
-        cd ..
-        ./build/api-demo
+        ctest
 
   lint:
     runs-on: ubuntu-latest

@@ -318,21 +318,35 @@ class DataIter:
     DMatrix.
 
     '''
-    def __init__(self):
+    def __init__(self, cache_prefix: Optional[str] = None) -> None:
         self._handle = _ProxyDMatrix()
         self.exception = None
         self.enable_categorical = False
+        self.cache_prefix = cache_prefix
+        self._allow_host = True
+
+    def _get_callbacks(self, allow_host: bool, enable_categorical: bool):
+        self._reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(
+            self._reset_wrapper
+        )
+        self._next_callback = ctypes.CFUNCTYPE(
+            ctypes.c_int,
+            ctypes.c_void_p,
+        )(self._next_wrapper)
+        self._allow_host = allow_host
+        self.enable_categorical = enable_categorical
+        return self._reset_callback, self._next_callback
 
     @property
     def proxy(self):
         '''Handler of DMatrix proxy.'''
         return self._handle
 
-    def reset_wrapper(self, this):  # pylint: disable=unused-argument
+    def _reset_wrapper(self, this):  # pylint: disable=unused-argument
         '''A wrapper for user defined `reset` function.'''
         self.reset()
 
-    def next_wrapper(self, this):  # pylint: disable=unused-argument
+    def _next_wrapper(self, this):  # pylint: disable=unused-argument
         '''A wrapper for user defined `next` function.
 
         `this` is not used in Python.  ctypes can handle `self` of a Python
@@ -349,12 +363,12 @@ class DataIter:
             feature_types=None,
             **kwargs
         ):
-            from .data import dispatch_device_quantile_dmatrix_set_data
-            from .data import _device_quantile_transform
-            data, feature_names, feature_types = _device_quantile_transform(
+            from .data import dispatch_proxy_set_data
+            from .data import _proxy_transform
+            data, feature_names, feature_types = _proxy_transform(
                 data, feature_names, feature_types, self.enable_categorical,
             )
-            dispatch_device_quantile_dmatrix_set_data(self.proxy, data)
+            dispatch_proxy_set_data(self.proxy, data, self._allow_host)
             self.proxy.set_info(
                 feature_names=feature_names,
                 feature_types=feature_types,
@@ -545,7 +559,12 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
             self.handle = None
             return
 
-        from .data import dispatch_data_backend
+        from .data import dispatch_data_backend, _is_iter
+
+        if _is_iter(data):
+            self._init_from_iter(data, enable_categorical)
+            assert self.handle is not None
+            return
 
         handle, feature_names, feature_types = dispatch_data_backend(
             data,
@@ -573,6 +592,33 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
             self.feature_names = feature_names
         if feature_types is not None:
             self.feature_types = feature_types
+
+    def _init_from_iter(self, iterator: DataIter, enable_categorical: bool):
+        self._it = iterator
+        args = {
+            "missing": self.missing,
+            "nthread": self.nthread,
+            "cache_prefix": self._it.cache_prefix
+        }
+        args = from_pystr_to_cstr(json.dumps(args))
+        handle = ctypes.c_void_p()
+        # pylint: disable=protected-access
+        reset_callback, next_callback = self._it._get_callbacks(True, enable_categorical)
+        ret = _LIB.XGDMatrixCreateFromCallback(
+            None,
+            self._it.proxy.handle,
+            reset_callback,
+            next_callback,
+            args,
+            ctypes.byref(handle),
+        )
+        if self._it.exception:
+            #  pylint 2.7.0 believes `it.exception` can be None even with `assert
+            #  isinstace`
+            raise self._it.exception  # pylint: disable=raising-bad-type
+        # delay check_call to throw intermediate exception first
+        _check_call(ret)
+        self.handle = handle
 
     def __del__(self):
         if hasattr(self, "handle") and self.handle:
@@ -1009,21 +1055,41 @@ class _ProxyDMatrix(DMatrix):
         interface = data.__cuda_array_interface__
         interface_str = bytes(json.dumps(interface, indent=2), 'utf-8')
         _check_call(
-            _LIB.XGDeviceQuantileDMatrixSetDataCudaArrayInterface(
+            _LIB.XGProxyDMatrixSetDataCudaArrayInterface(
                 self.handle,
                 interface_str
             )
         )
 
     def _set_data_from_cuda_columnar(self, data):
-        '''Set data from CUDA columnar format.1'''
+        '''Set data from CUDA columnar format.'''
         from .data import _cudf_array_interfaces
         _, interfaces_str = _cudf_array_interfaces(data)
         _check_call(
-            _LIB.XGDeviceQuantileDMatrixSetDataCudaColumnar(
+            _LIB.XGProxyDMatrixSetDataCudaColumnar(
                 self.handle,
                 interfaces_str
             )
+        )
+
+    def _set_data_from_array(self, data: np.ndarray):
+        """Set data from numpy array."""
+        from .data import _array_interface
+        _check_call(
+            _LIB.XGProxyDMatrixSetDataDense(
+                self.handle, _array_interface(data)
+            )
+        )
+
+    def _set_data_from_csr(self, csr):
+        """Set data from scipy csr"""
+        from .data import _array_interface
+        _LIB.XGProxyDMatrixSetDataCSR(
+            self.handle,
+            _array_interface(csr.indptr),
+            _array_interface(csr.indices),
+            _array_interface(csr.data),
+            ctypes.c_size_t(csr.shape[1]),
         )
 
 
@@ -1109,13 +1175,9 @@ class DeviceQuantileDMatrix(DMatrix):
         else:
             it = SingleBatchInternalIter(data=data, **meta)
 
-        it.enable_categorical = enable_categorical
-        reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(it.reset_wrapper)
-        next_callback = ctypes.CFUNCTYPE(
-            ctypes.c_int,
-            ctypes.c_void_p,
-        )(it.next_wrapper)
         handle = ctypes.c_void_p()
+        # pylint: disable=protected-access
+        reset_callback, next_callback = it._get_callbacks(False, enable_categorical)
         ret = _LIB.XGDeviceQuantileDMatrixCreateFromCallback(
             None,
             it.proxy.handle,
