@@ -1026,6 +1026,14 @@ class _ProxyDMatrix(DMatrix):
             )
         )
 
+    def _set_data_from_array(self, data: np.ndarray):
+        """Set data from numpy array."""
+        interface_str = bytes(json.dumps(data.__array_interface__), "utf-8")
+        assert data.flags.c_contiguous
+        _check_call(
+            _LIB.XGBDeviceQuantileDMatrixSetDataArray(self.handle, interface_str)
+        )
+
 
 class DeviceQuantileDMatrix(DMatrix):
     """Device memory Data Matrix used in XGBoost for training with tree_method='gpu_hist'. Do
@@ -1073,8 +1081,8 @@ class DeviceQuantileDMatrix(DMatrix):
 
         if qid is not None and group is not None:
             raise ValueError(
-                'Only one of the eval_qid or eval_group for each evaluation '
-                'dataset should be provided.'
+                "Only one of the eval_qid or eval_group for each evaluation "
+                "dataset should be provided."
             )
 
         self._init(
@@ -1105,31 +1113,32 @@ class DeviceQuantileDMatrix(DMatrix):
             # it can't be transformed twice.
             data = _transform_dlpack(data)
         if _is_iter(data):
-            it = data
+            self._it = data
+            assert False
         else:
-            it = SingleBatchInternalIter(data=data, **meta)
+            self._it = SingleBatchInternalIter(data=data, **meta)
 
-        it.enable_categorical = enable_categorical
-        reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(it.reset_wrapper)
-        next_callback = ctypes.CFUNCTYPE(
+        self._it.enable_categorical = enable_categorical
+        self._reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(it.reset_wrapper)
+        self._next_callback = ctypes.CFUNCTYPE(
             ctypes.c_int,
             ctypes.c_void_p,
-        )(it.next_wrapper)
+        )(self._it.next_wrapper)
         handle = ctypes.c_void_p()
         ret = _LIB.XGDeviceQuantileDMatrixCreateFromCallback(
             None,
-            it.proxy.handle,
-            reset_callback,
-            next_callback,
+            self._it.proxy.handle,
+            self._reset_callback,
+            self._next_callback,
             ctypes.c_float(self.missing),
             ctypes.c_int(self.nthread),
             ctypes.c_int(self.max_bin),
             ctypes.byref(handle),
         )
-        if it.exception is not None:
+        if self._it.exception:
             #  pylint 2.7.0 believes `it.exception` can be None even with `assert
             #  isinstace`
-            raise it.exception  # pylint: disable=raising-bad-type
+            raise self._it.exception  # pylint: disable=raising-bad-type
         # delay check_call to throw intermediate exception first
         _check_call(ret)
         self.handle = handle

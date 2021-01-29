@@ -769,12 +769,7 @@ DMatrix *DMatrix::Create(DataIterHandle iter, DMatrixHandle proxy,
                          XGDMatrixCallbackNext *next, float missing,
                          int nthread,
                          int max_bin) {
-#if defined(XGBOOST_USE_CUDA)
   return new data::IterativeDeviceDMatrix(iter, proxy, reset, next, missing, nthread, max_bin);
-#else
-  common::AssertGPUSupport();
-  return nullptr;
-#endif
 }
 
 template DMatrix *DMatrix::Create<DataIterHandle, DMatrixHandle,
@@ -1043,6 +1038,8 @@ template uint64_t
 SparsePage::Push(const data::ArrayAdapterBatch& batch, float missing, int nthread);
 template uint64_t
 SparsePage::Push(const data::CSRAdapterBatch& batch, float missing, int nthread);
+template uint64_t
+SparsePage::Push(const data::CSRArrayAdapterBatch& batch, float missing, int nthread);
 template uint64_t
 SparsePage::Push(const data::CSCAdapterBatch& batch, float missing, int nthread);
 template uint64_t

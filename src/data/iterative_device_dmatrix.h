@@ -21,23 +21,30 @@ namespace data {
 class IterativeDeviceDMatrix : public DMatrix {
   MetaInfo info_;
   BatchParam batch_param_;
-  std::shared_ptr<EllpackPage> page_;
+  std::shared_ptr<EllpackPage> ellpack_page_;
+  std::shared_ptr<SparsePage> sparse_page_;
 
   DMatrixHandle proxy_;
+  DataIterHandle iter_;
   DataIterResetCallback *reset_;
   XGDMatrixCallbackNext *next_;
+  float missing_;
+  int nthreads_;
+  size_t n_batches_ {0};
 
  public:
-  void Initialize(DataIterHandle iter, float missing, int nthread);
+  void InitializeEllpack(DataIterHandle iter, float missing, int nthread);
+  void InitializeExternalMemory(DataIterHandle iter, float missing, int nthread);
 
  public:
   explicit IterativeDeviceDMatrix(DataIterHandle iter, DMatrixHandle proxy,
                                   DataIterResetCallback *reset,
                                   XGDMatrixCallbackNext *next, float missing,
                                   int nthread, int max_bin)
-      : proxy_{proxy}, reset_{reset}, next_{next} {
+      : proxy_{proxy}, iter_{iter}, reset_{reset}, next_{next},
+        missing_{missing}, nthreads_{nthread} {
     batch_param_ = BatchParam{0, max_bin, 0};
-    this->Initialize(iter, missing, nthread);
+    this->InitializeExternalMemory(iter_, missing_, nthreads_);
   }
 
   bool EllpackExists() const override { return true; }
@@ -46,19 +53,10 @@ class IterativeDeviceDMatrix : public DMatrix {
     LOG(FATAL) << "Slicing DMatrix is not supported for Device DMatrix.";
     return nullptr;
   }
-  BatchSet<SparsePage> GetRowBatches() override {
-    LOG(FATAL) << "Not implemented.";
-    return BatchSet<SparsePage>(BatchIterator<SparsePage>(nullptr));
-  }
-  BatchSet<CSCPage> GetColumnBatches() override {
-    LOG(FATAL) << "Not implemented.";
-    return BatchSet<CSCPage>(BatchIterator<CSCPage>(nullptr));
-  }
-  BatchSet<SortedCSCPage> GetSortedColumnBatches() override {
-    LOG(FATAL) << "Not implemented.";
-    return BatchSet<SortedCSCPage>(BatchIterator<SortedCSCPage>(nullptr));
-  }
 
+  BatchSet<SparsePage> GetRowBatches() override;
+  BatchSet<CSCPage> GetColumnBatches() override;
+  BatchSet<SortedCSCPage> GetSortedColumnBatches() override;
   BatchSet<EllpackPage> GetEllpackBatches(const BatchParam& param) override;
 
   bool SingleColBlock() const override { return false; }

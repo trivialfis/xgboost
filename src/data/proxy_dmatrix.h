@@ -72,6 +72,10 @@ class DMatrixProxy : public DMatrix {
 #endif  // defined(XGBOOST_USE_CUDA)
   }
 
+  void SetArrayData(char const* c_interface);
+  void SetCSRData(char const *c_indptr, char const *c_indices,
+                  char const *c_values, bst_feature_t n_features);
+
   MetaInfo& Info() override { return info_; }
   MetaInfo const& Info() const override { return info_; }
   bool SingleColBlock() const override { return true; }

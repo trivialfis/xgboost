@@ -231,6 +231,18 @@ XGB_DLL int XGDeviceQuantileDMatrixCreateFromCallback(
     xgboost::DMatrix::Create(iter, proxy, reset, next, missing, nthread, max_bin)};
   API_END();
 }
+
+XGB_DLL int XGBDeviceQuantileDMatrixSetDataArray(DMatrixHandle handle,
+                                                 char const *c_interface_str) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto p_m = static_cast<std::shared_ptr<xgboost::DMatrix> *>(handle);
+  CHECK(p_m);
+  auto m =   static_cast<xgboost::data::DMatrixProxy*>(p_m->get());
+  CHECK(m) << "Current DMatrix type does not support set data.";
+  m->SetArrayData(c_interface_str);
+  API_END();
+}
 // End Create from data iterator
 
 XGB_DLL int XGDMatrixCreateFromCSREx(const size_t* indptr,

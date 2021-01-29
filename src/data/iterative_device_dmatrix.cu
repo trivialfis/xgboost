@@ -34,7 +34,7 @@ decltype(auto) Dispatch(DMatrixProxy const* proxy, Fn fn) {
   }
 }
 
-void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missing, int nthread) {
+void IterativeDeviceDMatrix::InitializeEllpack(DataIterHandle iter_handle, float missing, int nthread) {
   // A handle passed to external iterator.
   auto handle = static_cast<std::shared_ptr<DMatrix>*>(proxy_);
   CHECK(handle);
@@ -124,11 +124,11 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
 
   auto init_page = [this, &proxy, &cuts, row_stride, accumulated_rows,
                     get_device]() {
-    if (!page_) {
+    if (!ellpack_page_) {
       // Should be put inside the while loop to protect against empty batch.  In
       // that case device id is invalid.
-      page_.reset(new EllpackPage);
-      *(page_->Impl()) = EllpackPageImpl(get_device(), cuts, this->IsDense(),
+      ellpack_page_.reset(new EllpackPage);
+      *(ellpack_page_->Impl()) = EllpackPageImpl(get_device(), cuts, this->IsDense(),
                                          row_stride, accumulated_rows);
     }
   };
@@ -156,7 +156,7 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
                              row_counts_span, d_feature_types, row_stride, rows,
                              cols, cuts);
     });
-    size_t num_elements = page_->Impl()->Copy(get_device(), &new_impl, offset);
+    size_t num_elements = ellpack_page_->Impl()->Copy(get_device(), &new_impl, offset);
     offset += num_elements;
 
     proxy->Info().num_row_ = num_rows();
@@ -177,13 +177,6 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
   iter.Reset();
   // Synchronise worker columns
   rabit::Allreduce<rabit::op::Max>(&info_.num_col_, 1);
-}
-
-BatchSet<EllpackPage> IterativeDeviceDMatrix::GetEllpackBatches(const BatchParam& param) {
-  CHECK(page_);
-  auto begin_iter =
-      BatchIterator<EllpackPage>(new SimpleBatchIteratorImpl<EllpackPage>(page_.get()));
-  return BatchSet<EllpackPage>(begin_iter);
 }
 }  // namespace data
 }  // namespace xgboost
