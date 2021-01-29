@@ -93,6 +93,8 @@ mypy:
 	cd python-package; \
 	mypy ./xgboost/dask.py && \
 	mypy ../tests/python-gpu/test_gpu_with_dask.py && \
+	mypy ../tests/python/test_data_iterator.py && \
+	mypy ../tests/python-gpu/test_gpu_data_iterator.py && \
 	mypy ./xgboost/sklearn.py || exit 1; \
 	mypy . || true ;
 

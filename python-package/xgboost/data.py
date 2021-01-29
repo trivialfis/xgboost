@@ -785,6 +785,8 @@ def _proxy_transform(data, feature_names, feature_types, enable_categorical):
         return data, feature_names, feature_types
     if _is_dlpack(data):
         return _transform_dlpack(data), feature_names, feature_types
+    if _is_numpy_array(data):
+        return data, feature_names, feature_types
     raise TypeError("Value type is not supported for data iterator:" + str(type(data)))
 
 
@@ -803,7 +805,16 @@ def dispatch_proxy_set_data(proxy: _ProxyDMatrix, data: Any, allow_host: bool) -
         data = _transform_dlpack(data)
         proxy._set_data_from_cuda_interface(data)  # pylint: disable=W0212
         return
-    # Part of https://github.com/dmlc/xgboost/pull/7070
-    assert allow_host is False, "host data is not yet supported."
-    raise TypeError('Value type is not supported for data iterator:' +
-                    str(type(data)))
+
+    err = TypeError("Value type is not supported for data iterator:" + str(type(data)))
+
+    if not allow_host:
+        raise err
+
+    if _is_numpy_array(data):
+        proxy._set_data_from_array(data)  # pylint: disable=W0212
+        return
+    if _is_scipy_csr(data):
+        proxy._set_data_from_csr(data)  # pylint: disable=W0212
+
+    raise err

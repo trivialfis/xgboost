@@ -121,9 +121,9 @@ jobs:
         cmake .. -GNinja -DCMAKE_PREFIX_PATH=$CONDA_PREFIX
         ninja -v
         cd ..
-        ./build/api-demo
         cd ../../
         ./tests/ci_build/verify_link.sh ./demo/c-api/build/api-demo
+        ctest
 
   lint:
     runs-on: ubuntu-latest
