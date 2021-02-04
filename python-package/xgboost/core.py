@@ -1925,12 +1925,61 @@ class Booster(object):
         else:
             raise TypeError('Unknown file type: ', fname)
 
-        if self.attr("best_iteration") is not None:
-            self.best_iteration = int(self.attr("best_iteration"))
         if self.attr("best_score") is not None:
             self.best_score = float(self.attr("best_score"))
         if self.attr("best_ntree_limit") is not None:
             self.best_ntree_limit = int(self.attr("best_ntree_limit"))
+
+    @property
+    def best_score(self) -> float:
+        """The best training score in early stopping."""
+        if self.attr("best_score") is not None:
+            return float(self.attr("best_score"))
+        raise AttributeError("`best_score` is only set when early stopping is used.")
+
+    @best_score.setter
+    def best_score(self, score: float) -> None:
+        self.set_attr(best_score=str(score))
+
+    @property
+    def best_iteration(self) -> int:
+        """The iteration with best training score, starts from 0.  For example, if the model is
+        trained for 1 round, the best iteration will be 0.  The attribute can be used for
+        model slicing and prediction.
+
+        .. code-block:: python
+
+            from sklearn.datasets import load_breast_cancer
+            X, y = load_breast_cancer(return_X_y=True)
+            Xy = xgboost.DMatrix(X, y)
+            booster = xgboost.train({}, Xy, early_stopping_rounds=2)
+            sliced = booster[: booster.best_iteration + 1]  # Get the best model.
+            # or
+            booster.inplace_predict(X, iteration_range=(0, booster.best_iteration + 1))
+
+        """
+        attr = self.attr("best_iteration")
+        if attr is not None:
+            return int(attr)
+        return self.num_boosted_rounds()
+
+    @best_iteration.setter
+    def best_iteration(self, iteraton: int) -> None:
+        self.set_attr(best_iteration=str(iteraton))
+
+    @property
+    def best_ntree_limit(self):
+        attr = self.attr("best_ntree_limit")
+        warnings.warn(
+            "`best_ntree_limit` is deprecated, use `best_iteration` instead.", UserWarning
+        )
+        if attr is not None:
+            return int(attr)
+        return (self.best_iteration + 1) * num_parallel_tree
+
+    @best_ntree_limit.setter
+    def best_ntree_limit(self, ntree_limit):
+        self.set_attr(best_ntree_limit=str(ntree_limit))
 
     def num_boosted_rounds(self) -> int:
         '''Get number of boosted rounds.  For gblinear this is reset to 0 after

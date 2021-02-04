@@ -491,76 +491,77 @@ class EarlyStopping(TrainingCallback):
                  data_name: Optional[str] = None,
                  maximize: Optional[bool] = None,
                  save_best: Optional[bool] = False) -> None:
-        self.data = data_name
-        self.metric_name = metric_name
-        self.rounds = rounds
-        self.save_best = save_best
-        self.maximize = maximize
-        self.stopping_history: CallbackContainer.EvalsLog = {}
+        self._data_name = data_name
+        self._metric_name = metric_name
+        self._rounds = rounds
+        self._save_best = save_best
+        self._maximize = maximize
+        self._stopping_history: CallbackContainer.EvalsLog = {}
 
-        if self.maximize is not None:
-            if self.maximize:
-                self.improve_op = lambda x, y: x > y
+        if self._maximize is not None:
+            if self._maximize:
+                self._improve_op = lambda x, y: x > y
             else:
-                self.improve_op = lambda x, y: x < y
+                self._improve_op = lambda x, y: x < y
 
-        self.current_rounds: int = 0
-        self.best_scores: dict = {}
-        self.starting_round: int = 0
+        self._current_rounds: int = 0
+        self._best_scores: dict = {}
+        self._starting_round: int = 0
         super().__init__()
 
     def before_training(self, model):
-        self.starting_round = model.num_boosted_rounds()
+        self._starting_round = model.num_boosted_rounds()
         return model
 
     def _update_rounds(self, score, name, metric, model, epoch) -> bool:
         # Just to be compatibility with old behavior before 1.3.  We should let
         # user to decide.
-        if self.maximize is None:
+        if self._maximize is None:
             maximize_metrics = ('auc', 'aucpr', 'map', 'ndcg', 'auc@',
                                 'aucpr@', 'map@', 'ndcg@')
             if any(metric.startswith(x) for x in maximize_metrics):
-                self.improve_op = lambda x, y: x > y
-                self.maximize = True
+                self._improve_op = lambda x, y: x > y
+                self._maximize = True
             else:
-                self.improve_op = lambda x, y: x < y
-                self.maximize = False
+                self._improve_op = lambda x, y: x < y
+                self._maximize = False
 
-        if not self.stopping_history:  # First round
-            self.current_rounds = 0
-            self.stopping_history[name] = {}
-            self.stopping_history[name][metric] = [score]
-            self.best_scores[name] = {}
-            self.best_scores[name][metric] = [score]
-            model.set_attr(best_score=str(score), best_iteration=str(epoch))
-        elif not self.improve_op(score, self.best_scores[name][metric][-1]):
+        if not self._stopping_history:  # First round
+            self._current_rounds = 0
+            self._stopping_history[name] = {}
+            self._stopping_history[name][metric] = [score]
+            self._best_scores[name] = {}
+            self._best_scores[name][metric] = [score]
+            model.best_score = score
+            model.best_iteration = epoch
+        elif not self._improve_op(score, self._best_scores[name][metric][-1]):
             # Not improved
-            self.stopping_history[name][metric].append(score)
-            self.current_rounds += 1
+            self._stopping_history[name][metric].append(score)
+            self._current_rounds += 1
         else:  # Improved
-            self.stopping_history[name][metric].append(score)
-            self.best_scores[name][metric].append(score)
-            record = self.stopping_history[name][metric][-1]
+            self._stopping_history[name][metric].append(score)
+            self._best_scores[name][metric].append(score)
+            record = self._stopping_history[name][metric][-1]
             model.set_attr(best_score=str(record), best_iteration=str(epoch))
-            self.current_rounds = 0  # reset
+            self._current_rounds = 0  # reset
 
-        if self.current_rounds >= self.rounds:
+        if self._current_rounds >= self._rounds:
             # Should stop
             return True
         return False
 
     def after_iteration(self, model, epoch: int,
                         evals_log: CallbackContainer.EvalsLog) -> bool:
-        epoch += self.starting_round  # training continuation
+        epoch += self._starting_round   # training continuation
         msg = 'Must have at least 1 validation dataset for early stopping.'
         assert len(evals_log.keys()) >= 1, msg
         data_name = ''
-        if self.data:
+        if self._data_name:
             for d, _ in evals_log.items():
-                if d == self.data:
+                if d == self._data_name:
                     data_name = d
             if not data_name:
-                raise ValueError('No dataset named:', self.data)
+                raise ValueError('No dataset named:', self._data_name)
         else:
             # Use the last one as default.
             data_name = list(evals_log.keys())[-1]
@@ -568,8 +569,8 @@ class EarlyStopping(TrainingCallback):
         data_log = evals_log[data_name]
 
         # Filter out scores that can not be used for early stopping.
-        if self.metric_name:
-            metric_name = self.metric_name
+        if self._metric_name:
+            metric_name = self._metric_name
         else:
             # Use last metric by default.
             assert isinstance(data_log, collections.OrderedDict)
@@ -579,8 +580,8 @@ class EarlyStopping(TrainingCallback):
 
     def after_training(self, model):
         try:
-            if self.save_best:
-                model = model[: int(model.attr("best_iteration")) + 1]
+            if self._save_best:
+                model = model[: int(model.best_iteration) + 1]
         except XGBoostError as e:
             raise XGBoostError(
                 "`save_best` is not applicable to current booster"

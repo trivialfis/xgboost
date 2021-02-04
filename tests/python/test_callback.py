@@ -179,6 +179,13 @@ class TestCallbacks:
             eval_metric=tm.eval_error_metric,
             callbacks=[early_stop])
 
+    def test_best_iteration(self):
+        from sklearn.datasets import load_breast_cancer
+        X, y = load_breast_cancer(return_X_y=True)
+        booster = xgb.train({}, xgb.DMatrix(X, y), num_boost_round=1)
+        assert booster.num_boosted_rounds() == 1
+        assert booster.best_iteration == 0
+
     def test_early_stopping_continuation(self):
         from sklearn.datasets import load_breast_cancer
         X, y = load_breast_cancer(return_X_y=True)
