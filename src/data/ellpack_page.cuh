@@ -10,6 +10,7 @@
 #include "../common/compressed_iterator.h"
 #include "../common/device_helpers.cuh"
 #include "../common/hist_util.h"
+#include "../common/categorical.h"
 #include <thrust/binary_search.h>
 
 namespace xgboost {
@@ -76,6 +77,20 @@ struct EllpackDeviceAccessor {
     return idx;
   }
 
+  __device__ uint32_t SearchCatBin(float value, size_t column_id) const {
+    auto beg = feature_segments[column_id];
+    auto end = feature_segments[column_id + 1];
+    auto it = dh::MakeTransformIterator<int>(
+        gidx_fvalue_map.data() + beg, [](float v) { return common::AsCat(v); });
+    auto bin = thrust::lower_bound(thrust::seq, it, it + end - beg,
+                                   common::AsCat(value)) -
+               it;
+    if (bin == end) {
+      bin -= 1;
+    }
+    return bin;
+  }
+
   __device__ bst_float GetFvalue(size_t ridx, size_t fidx) const {
     auto gidx = GetBinIndex(ridx, fidx);
     if (gidx == -1) {
@@ -137,6 +152,7 @@ class EllpackPageImpl {
   explicit EllpackPageImpl(AdapterBatch batch, float missing, int device, bool is_dense, int nthread,
                            common::Span<size_t> row_counts_span,
                            size_t row_stride, size_t n_rows, size_t n_cols,
+                           common::Span<FeatureType const> d_feature_types,
                            common::HistogramCuts const& cuts);
 
   /*! \brief Copy the elements of the given ELLPACK page into this page.

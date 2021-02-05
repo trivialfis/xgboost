@@ -31,8 +31,7 @@ __global__ void CompressBinEllpackKernel(
     common::CompressedByteT* __restrict__ buffer,  // gidx_buffer
     const size_t* __restrict__ row_ptrs,           // row offset of input data
     const Entry* __restrict__ entries,      // One batch of input data
-    const float* __restrict__ cuts,         // HistogramCuts::cut_values_
-    const uint32_t* __restrict__ cut_rows,  // HistogramCuts::cut_ptrs_
+    EllpackDeviceAccessor accessor,
     common::Span<FeatureType const> feature_types,
     size_t base_row,                        // batch_row_begin
     size_t n_rows,
@@ -45,20 +44,21 @@ __global__ void CompressBinEllpackKernel(
   }
   int row_length = static_cast<int>(row_ptrs[irow + 1] - row_ptrs[irow]);
   unsigned int bin = null_gidx_value;
+  auto cuts = accessor.gidx_fvalue_map;
+  auto cuts_row_ptr = accessor.feature_segments;
+
   if (ifeature < row_length) {
     Entry entry = entries[row_ptrs[irow] - row_ptrs[0] + ifeature];
     int feature = entry.index;
     float fvalue = entry.fvalue;
     // {feature_cuts, ncuts} forms the array of cuts of `feature'.
-    const float* feature_cuts = &cuts[cut_rows[feature]];
-    int ncuts = cut_rows[feature + 1] - cut_rows[feature];
-    bool is_cat = common::IsCat(feature_types, ifeature);
+    const float* feature_cuts = &cuts[cuts_row_ptr[feature]];
+    int ncuts = cuts_row_ptr[feature + 1] - cuts_row_ptr[feature];
+    bool is_cat = common::IsCat(feature_types, feature);
     // Assigning the bin in current entry.
     // S.t.: fvalue < feature_cuts[bin]
     if (is_cat) {
-      auto it = dh::MakeTransformIterator<int>(
-          feature_cuts, [](float v) { return common::AsCat(v); });
-      bin = thrust::lower_bound(thrust::seq, it, it + ncuts, common::AsCat(fvalue)) - it;
+      bin = accessor.SearchCatBin(fvalue, ifeature);
     } else {
       bin = thrust::upper_bound(thrust::seq, feature_cuts, feature_cuts + ncuts,
                                 fvalue) -
@@ -69,7 +69,7 @@ __global__ void CompressBinEllpackKernel(
       bin = ncuts - 1;
     }
     // Add the number of bins in previous features.
-    bin += cut_rows[feature];
+    bin += cuts_row_ptr[feature];
   }
   // Write to gidx buffer.
   wr.AtomicWriteSymbol(buffer, bin, (irow + base_row) * row_stride + ifeature);
@@ -134,17 +134,20 @@ struct WriteCompressedEllpackFunctor {
                                 const common::CompressedBufferWriter& writer,
                                 AdapterBatchT batch,
                                 EllpackDeviceAccessor accessor,
+                                common::Span<FeatureType const> feature_types,
                                 const data::IsValidFunctor& is_valid)
       : d_buffer(buffer),
       writer(writer),
       batch(std::move(batch)),
       accessor(std::move(accessor)),
+      feature_types{feature_types},
       is_valid(is_valid) {}
 
   common::CompressedByteT* d_buffer;
   common::CompressedBufferWriter writer;
   AdapterBatchT batch;
   EllpackDeviceAccessor accessor;
+  common::Span<FeatureType const> feature_types;
   data::IsValidFunctor is_valid;
 
   using Tuple = thrust::tuple<size_t, size_t, size_t>;
@@ -154,7 +157,12 @@ struct WriteCompressedEllpackFunctor {
       // -1 because the scan is inclusive
       size_t output_position =
           accessor.row_stride * e.row_idx + out.get<1>() - 1;
-      auto bin_idx = accessor.SearchBin(e.value, e.column_idx);
+      uint32_t bin_idx = 0;
+      if (common::IsCat(feature_types, e.column_idx)) {
+        bin_idx = accessor.SearchCatBin(e.value, e.column_idx);
+      } else {
+        bin_idx = accessor.SearchBin(e.value, e.column_idx);
+      }
       writer.AtomicWriteSymbol(d_buffer, bin_idx, output_position);
     }
     return 0;
@@ -184,8 +192,9 @@ class TypedDiscard : public thrust::discard_iterator<T> {
 // Here the data is already correctly ordered and simply needs to be compacted
 // to remove missing data
 template <typename AdapterBatchT>
-void CopyDataToEllpack(const AdapterBatchT& batch, EllpackPageImpl* dst,
-                       int device_idx, float missing) {
+void CopyDataToEllpack(const AdapterBatchT &batch,
+                       common::Span<FeatureType const> d_feature_types,
+                       EllpackPageImpl *dst, int device_idx, float missing) {
   // Some witchcraft happens here
   // The goal is to copy valid elements out of the input to an ellpack matrix
   // with a given row stride, using no extra working memory Standard stream
@@ -220,7 +229,7 @@ void CopyDataToEllpack(const AdapterBatchT& batch, EllpackPageImpl* dst,
 
   // We redirect the scan output into this functor to do the actual writing
   WriteCompressedEllpackFunctor<AdapterBatchT> functor(
-      d_compressed_buffer, writer, batch, device_accessor, is_valid);
+      d_compressed_buffer, writer, batch, device_accessor, d_feature_types, is_valid);
   TypedDiscard<Tuple> discard;
   thrust::transform_output_iterator<
     WriteCompressedEllpackFunctor<AdapterBatchT>, decltype(discard)>
@@ -264,11 +273,12 @@ EllpackPageImpl::EllpackPageImpl(AdapterBatch batch, float missing, int device,
                                  bool is_dense, int nthread,
                                  common::Span<size_t> row_counts_span,
                                  size_t row_stride, size_t n_rows, size_t n_cols,
+                                 common::Span<FeatureType const> d_feature_types,
                                  common::HistogramCuts const& cuts) {
   dh::safe_cuda(cudaSetDevice(device));
 
   *this = EllpackPageImpl(device, cuts, is_dense, row_stride, n_rows);
-  CopyDataToEllpack(batch, this, device, missing);
+  CopyDataToEllpack(batch, d_feature_types, this, device, missing);
   WriteNullValues(this, device, row_counts_span);
 }
 
@@ -278,6 +288,7 @@ EllpackPageImpl::EllpackPageImpl(AdapterBatch batch, float missing, int device,
       bool is_dense, int nthread,                                       \
       common::Span<size_t> row_counts_span,                             \
       size_t row_stride, size_t n_rows, size_t n_cols,                  \
+      common::Span<FeatureType const> d_feature_types,                  \
       common::HistogramCuts const& cuts);
 
 ELLPACK_BATCH_SPECIALIZE(data::CudfAdapterBatch)
@@ -439,8 +450,7 @@ void EllpackPageImpl::CreateHistIndices(int device,
     dh::LaunchKernel {grid3, block3}(
         CompressBinEllpackKernel, common::CompressedBufferWriter(NumSymbols()),
         gidx_buffer.DevicePointer(), row_ptrs.data().get(),
-        entries_d.data().get(), device_accessor.gidx_fvalue_map.data(),
-        device_accessor.feature_segments.data(), feature_types,
+        entries_d.data().get(), device_accessor, feature_types,
         row_batch.base_rowid + batch_row_begin, batch_nrows, row_stride,
         null_gidx_value);
   }

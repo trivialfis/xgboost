@@ -149,8 +149,10 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
       });
     auto is_dense = this->IsDense();
     auto new_impl = Dispatch(proxy, [&](auto const &value) {
-        return EllpackPageImpl(value, missing, get_device(), is_dense, nthread,
-                               row_counts_span, row_stride, rows, cols, cuts);
+      return EllpackPageImpl(value, missing, get_device(), is_dense, nthread,
+                             row_counts_span, row_stride, rows, cols,
+                             proxy->Info().feature_types.ConstDeviceSpan(),
+                             cuts);
     });
     size_t num_elements = page_->Impl()->Copy(get_device(), &new_impl, offset);
     offset += num_elements;
