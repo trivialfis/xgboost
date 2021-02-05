@@ -87,6 +87,7 @@ EllpackPageImpl::EllpackPageImpl(int device, common::HistogramCuts cuts,
   dh::safe_cuda(cudaSetDevice(device));
 
   monitor_.Start("InitCompressedData");
+  // FIXME: is this the init running correctly without setting cuts?
   InitCompressedData(device);
   monitor_.Stop("InitCompressedData");
 }
