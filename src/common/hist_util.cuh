@@ -232,7 +232,7 @@ void ProcessWeightedSlidingWindow(Batch batch, MetaInfo const& info,
                                   SketchContainer *sketch_container) {
   dh::XGBCachingDeviceAllocator<char> alloc;
   dh::safe_cuda(cudaSetDevice(device));
-  info.weights_.SetDevice(device);
+  info.feature_types.SetDevice(device);
   auto weights = info.weights_.ConstDeviceSpan();
   dh::caching_device_vector<bst_group_t> group_ptr(info.group_ptr_);
   auto d_group_ptr = dh::ToSpan(group_ptr);
@@ -319,6 +319,7 @@ void AdapterDeviceSketch(Batch batch, int num_bins,
   size_t num_cuts_per_feature = detail::RequiredSampleCutsPerColumn(num_bins, num_rows);
   int32_t device = sketch_container->DeviceIdx();
   bool weighted = info.weights_.Size() != 0;
+  info.feature_types.SetDevice(device);
 
   if (weighted) {
     sketch_batch_num_elements = detail::SketchBatchNumElements(

@@ -1042,6 +1042,7 @@ class DeviceQuantileDMatrix(DMatrix):
         self.missing = missing if missing is not None else np.nan
         self.nthread = nthread if nthread is not None else 1
         self._silent = silent  # unused, kept for compatibility
+        self._enable_categorical = enable_categorical
 
         if isinstance(data, ctypes.c_void_p):
             self.handle = data
@@ -1083,7 +1084,11 @@ class DeviceQuantileDMatrix(DMatrix):
             it = data
         else:
             it = SingleBatchInternalIter(
-                data, **meta, feature_names=feature_names, feature_types=feature_types
+                data,
+                **meta,
+                feature_names=feature_names,
+                feature_types=feature_types,
+                enable_categorical=self._enable_categorical
             )
 
         reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(it.reset_wrapper)

@@ -376,30 +376,26 @@ def _cudf_array_interfaces(data):
 
 
 def _transform_cudf_df(data, feature_names, feature_types, enable_categorical):
+    from cudf.utils.dtypes import is_categorical_dtype
+
     if feature_names is None:
         if _is_cudf_ser(data):
             feature_names = [data.name]
-        elif lazy_isinstance(
-                data.columns, 'cudf.core.multiindex', 'MultiIndex'):
-            feature_names = [
-                ' '.join([str(x) for x in i])
-                for i in data.columns
-            ]
+        elif lazy_isinstance(data.columns, "cudf.core.multiindex", "MultiIndex"):
+            feature_names = [" ".join([str(x) for x in i]) for i in data.columns]
         else:
             feature_names = data.columns.format()
     if feature_types is None:
+        feature_types = []
         if _is_cudf_ser(data):
             dtypes = [data.dtype]
         else:
             dtypes = data.dtypes
-        feature_types = [_pandas_dtype_mapper[d.name]
-                         for d in dtypes]
-    if enable_categorical:
-        import cudf
-        for i in range(len(feature_types)):
-            dtype = feature_types[i]
-            if cudf.is_categorical_dtype(dtype):
-                feature_types[i] = "categorical"
+        for dtype in dtypes:
+            if is_categorical_dtype(dtype) and enable_categorical:
+                feature_types.append("categorical")
+            else:
+                feature_types.append(_pandas_dtype_mapper[dtype.name])
     return data, feature_names, feature_types
 
 
@@ -748,14 +744,16 @@ def dispatch_meta_backend(matrix: DMatrix, data, name: str, dtype: str = None):
 
 
 class SingleBatchInternalIter(DataIter):  # pylint: disable=R0902
-    '''An iterator for single batch data to help creating device DMatrix.
+    """An iterator for single batch data to help creating device DMatrix.
     Transforming input directly to histogram with normal single batch data API
     can not access weight for sketching.  So this iterator acts as a staging
     area for meta info.
 
-    '''
+    """
+
     def __init__(
-        self, data,
+        self,
+        data,
         label,
         weight,
         base_margin,
@@ -765,7 +763,8 @@ class SingleBatchInternalIter(DataIter):  # pylint: disable=R0902
         label_upper_bound,
         feature_weights,
         feature_names,
-        feature_types
+        feature_types,
+        enable_categorical,
     ):
         self.data = data
         self.label = label
@@ -778,22 +777,28 @@ class SingleBatchInternalIter(DataIter):  # pylint: disable=R0902
         self.feature_weights = feature_weights
         self.feature_names = feature_names
         self.feature_types = feature_types
-        self.it = 0             # pylint: disable=invalid-name
+        self.enable_categorical = enable_categorical
+        self.it = 0  # pylint: disable=invalid-name
         super().__init__()
 
     def next(self, input_data):
         if self.it == 1:
             return 0
         self.it += 1
-        input_data(data=self.data, label=self.label,
-                   weight=self.weight, base_margin=self.base_margin,
-                   group=self.group,
-                   qid=self.qid,
-                   label_lower_bound=self.label_lower_bound,
-                   label_upper_bound=self.label_upper_bound,
-                   feature_weights=self.feature_weights,
-                   feature_names=self.feature_names,
-                   feature_types=self.feature_types)
+        input_data(
+            data=self.data,
+            label=self.label,
+            weight=self.weight,
+            base_margin=self.base_margin,
+            group=self.group,
+            qid=self.qid,
+            label_lower_bound=self.label_lower_bound,
+            label_upper_bound=self.label_upper_bound,
+            feature_weights=self.feature_weights,
+            feature_names=self.feature_names,
+            feature_types=self.feature_types,
+            enable_categorical=self.enable_categorical,
+        )
         return 1
 
     def reset(self):
