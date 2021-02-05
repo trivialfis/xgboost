@@ -394,7 +394,7 @@ def _transform_cudf_df(data, feature_names, feature_types, enable_categorical):
         for i, dtype in enumerate(dtypes):
             if is_categorical_dtype(dtype) and enable_categorical:
                 feature_types.append("categorical")
-                data[data.columns[i]] = data.iloc[:, i].cat.codes
+                data[data.columns[i]] = data.iloc[:, i].astype(int)
             else:
                 feature_types.append(_pandas_dtype_mapper[dtype.name])
     return data, feature_names, feature_types

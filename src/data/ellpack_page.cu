@@ -52,24 +52,26 @@ __global__ void CompressBinEllpackKernel(
     int feature = entry.index;
     float fvalue = entry.fvalue;
     // {feature_cuts, ncuts} forms the array of cuts of `feature'.
-    const float* feature_cuts = &cuts[cuts_row_ptr[feature]];
-    int ncuts = cuts_row_ptr[feature + 1] - cuts_row_ptr[feature];
+    // const float* feature_cuts = &cuts[cuts_row_ptr[feature]];
+    // int ncuts = cuts_row_ptr[feature + 1] - cuts_row_ptr[feature];
     bool is_cat = common::IsCat(feature_types, feature);
     // Assigning the bin in current entry.
     // S.t.: fvalue < feature_cuts[bin]
     if (is_cat) {
       bin = accessor.SearchCatBin(fvalue, ifeature);
+      printf("%f, %d: %u\n", fvalue, ifeature, bin);
     } else {
-      bin = thrust::upper_bound(thrust::seq, feature_cuts, feature_cuts + ncuts,
-                                fvalue) -
-            feature_cuts;
+      bin = accessor.SearchBin(fvalue, ifeature);
+      // bin = thrust::upper_bound(thrust::seq, feature_cuts, feature_cuts + ncuts,
+      //                           fvalue) -
+      //       feature_cuts;
     }
 
-    if (bin >= ncuts) {
-      bin = ncuts - 1;
-    }
-    // Add the number of bins in previous features.
-    bin += cuts_row_ptr[feature];
+    // if (bin >= ncuts) {
+    //   bin = ncuts - 1;
+    // }
+    // // Add the number of bins in previous features.
+    // bin += cuts_row_ptr[feature];
   }
   // Write to gidx buffer.
   wr.AtomicWriteSymbol(buffer, bin, (irow + base_row) * row_stride + ifeature);
@@ -161,6 +163,7 @@ struct WriteCompressedEllpackFunctor {
       uint32_t bin_idx = 0;
       if (common::IsCat(feature_types, e.column_idx)) {
         bin_idx = accessor.SearchCatBin(e.value, e.column_idx);
+        printf("%f, %d: %u\n", e.value, int(e.column_idx), bin_idx);
       } else {
         bin_idx = accessor.SearchBin(e.value, e.column_idx);
       }

@@ -149,6 +149,12 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
       });
     auto is_dense = this->IsDense();
     auto new_impl = Dispatch(proxy, [&](auto const &value) {
+      auto h_ft = proxy->Info().feature_types.HostVector();
+      std::cout << "Ft:" << std::endl;
+      for (auto f : h_ft) {
+        std::cout << int(f) << ", ";
+      }
+      std::cout << std::endl;
       return EllpackPageImpl(value, missing, get_device(), is_dense, nthread,
                              row_counts_span, row_stride, rows, cols,
                              proxy->Info().feature_types.ConstDeviceSpan(),

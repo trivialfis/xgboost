@@ -271,6 +271,27 @@ struct GPUHistMakerDevice {
 
     auto sample = sampler->Sample(dh_gpair->DeviceSpan(), dmat);
     page = sample.page;
+    auto gidx = page->gidx_buffer.HostVector();
+    common::CompressedIterator<common::CompressedByteT> iter(gidx.data(), page->NumSymbols());
+    iter[0];
+    size_t i = 0;
+
+    auto cuts = page->Cuts().Values();
+    std::cout << "CUTS" << std::endl;
+    for (auto v : cuts) {
+      std::cout << v << ", ";
+    }
+    std::cout << std::endl << std::endl;
+
+    std::cout << "GIDX" << std::endl;
+    for (auto v : gidx) {
+      std::cout << int(v) << ", ";
+      i++;
+      if (i % 8 == 0) {
+        std::cout << std::endl;
+      }
+    }
+    std::cout << std::endl << std::endl;
     gpair = sample.gpair;
 
     if (deterministic_histogram) {
