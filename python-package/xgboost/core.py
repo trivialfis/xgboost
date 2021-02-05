@@ -1047,10 +1047,6 @@ class DeviceQuantileDMatrix(DMatrix):
             self.handle = data
             return
 
-        if enable_categorical:
-            raise NotImplementedError(
-                'categorical support is not enabled on DeviceQuantileDMatrix.'
-            )
         if qid is not None and group is not None:
             raise ValueError(
                 'Only one of the eval_qid or eval_group for each evaluation '

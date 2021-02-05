@@ -42,8 +42,11 @@ class TestGPUUpdaters:
         note(result)
         assert tm.non_increasing(result['train'][dataset.metric])
 
-    def run_categorical_basic(self, rows, cols, rounds, cats):
-        import pandas as pd
+    def run_categorical_basic(self, DMatrix, rows, cols, rounds, cats):
+        if DMatrix is xgb.DeviceQuantileDMatrix:
+            import cudf as pd
+        else:
+            import pandas as pd
         rng = np.random.RandomState(1994)
 
         pd_dict = {}
@@ -65,12 +68,12 @@ class TestGPUUpdaters:
 
         parameters = {'tree_method': 'gpu_hist', 'predictor': 'gpu_predictor'}
 
-        m = xgb.DMatrix(onehot, label, enable_categorical=True)
+        m = DMatrix(onehot, label, enable_categorical=True)
         xgb.train(parameters, m,
                   num_boost_round=rounds,
                   evals=[(m, 'Train')], evals_result=by_etl_results)
 
-        m = xgb.DMatrix(cat, label, enable_categorical=True)
+        m = DMatrix(cat, label, enable_categorical=True)
         xgb.train(parameters, m,
                   num_boost_round=rounds,
                   evals=[(m, 'Train')], evals_result=by_builtin_results)
@@ -85,8 +88,7 @@ class TestGPUUpdaters:
     @settings(deadline=None)
     @pytest.mark.skipif(**tm.no_pandas())
     def test_categorical(self, rows, cols, rounds, cats):
-        pytest.xfail(reason='TestGPUUpdaters::test_categorical is flaky')
-        self.run_categorical_basic(rows, cols, rounds, cats)
+        self.run_categorical_basic(xgb.DMatrix, rows, cols, rounds, cats)
 
     def test_categorical_32_cat(self):
         '''32 hits the bound of integer bitset, so special test'''
@@ -94,7 +96,8 @@ class TestGPUUpdaters:
         cols = 10
         cats = 32
         rounds = 4
-        self.run_categorical_basic(rows, cols, rounds, cats)
+        self.run_categorical_basic(xgb.DMatrix, rows, cols, rounds, cats)
+        self.run_categorical_basic(xgb.DeviceQuantileDMatrix, rows, cols, rounds, cats)
 
     @pytest.mark.skipif(**tm.no_cupy())
     @given(parameter_strategy, strategies.integers(1, 20),
