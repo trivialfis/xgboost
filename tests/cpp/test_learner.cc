@@ -281,32 +281,40 @@ TEST(Learner, GPUConfiguration) {
     labels[i] = i;
   }
   p_dmat->Info().labels_.HostVector() = labels;
+
+  auto get_gpu_id = [](std::unique_ptr<Learner> const &learner) {
+    Json config{Object()};
+    learner->SaveConfig(&config);
+    auto gpu_id = std::stoi(get<String>(config["learner"]["generic_param"]["gpu_id"]));
+    return gpu_id;
+  };
+
   {
-    std::unique_ptr<Learner> learner {Learner::Create(mat)};
-    learner->SetParams({Arg{"booster", "gblinear"},
-                        Arg{"updater", "gpu_coord_descent"}});
+    std::unique_ptr<Learner> learner{Learner::Create(mat)};
+    learner->SetParams(
+        {Arg{"booster", "gblinear"}, Arg{"updater", "gpu_coord_descent"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, 0);
+    ASSERT_EQ(get_gpu_id(learner), 0);
   }
   {
     std::unique_ptr<Learner> learner {Learner::Create(mat)};
     learner->SetParams({Arg{"tree_method", "gpu_hist"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, 0);
+    ASSERT_EQ(get_gpu_id(learner), 0);
   }
   {
     std::unique_ptr<Learner> learner {Learner::Create(mat)};
     learner->SetParams({Arg{"tree_method", "gpu_hist"},
                         Arg{"gpu_id", "-1"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, 0);
+    ASSERT_EQ(get_gpu_id(learner), 0);
   }
   {
     // with CPU algorithm
     std::unique_ptr<Learner> learner {Learner::Create(mat)};
     learner->SetParams({Arg{"tree_method", "hist"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, -1);
+    ASSERT_EQ(get_gpu_id(learner), -1);
   }
   {
     // with CPU algorithm, but `gpu_id` takes priority
@@ -314,7 +322,7 @@ TEST(Learner, GPUConfiguration) {
     learner->SetParams({Arg{"tree_method", "hist"},
                         Arg{"gpu_id", "0"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, 0);
+    ASSERT_EQ(get_gpu_id(learner), 0);
   }
   {
     // With CPU algorithm but GPU Predictor, this is to simulate when
@@ -324,7 +332,7 @@ TEST(Learner, GPUConfiguration) {
     learner->SetParams({Arg{"tree_method", "hist"},
                         Arg{"predictor", "gpu_predictor"}});
     learner->UpdateOneIter(0, p_dmat);
-    ASSERT_EQ(learner->GetGenericParameter().gpu_id, 0);
+    ASSERT_EQ(get_gpu_id(learner), 0);
   }
 }
 #endif  // defined(XGBOOST_USE_CUDA)
@@ -348,28 +356,6 @@ TEST(Learner, Seed) {
   learner->SaveConfig(&config);
   ASSERT_EQ(std::to_string(seed),
             get<String>(config["learner"]["generic_param"]["seed"]));
-}
-
-TEST(Learner, ConstantSeed) {
-  auto m = RandomDataGenerator{10, 10, 0}.GenerateDMatrix(true);
-  std::unique_ptr<Learner> learner{Learner::Create({m})};
-  learner->Configure();  // seed the global random
-
-  std::uniform_real_distribution<float> dist;
-  auto& rng = common::GlobalRandom();
-  float v_0 = dist(rng);
-
-  learner->SetParam("", "");
-  learner->Configure();  // check configure doesn't change the seed.
-  float v_1 = dist(rng);
-  CHECK_NE(v_0, v_1);
-
-  {
-    rng.seed(GenericParameter::kDefaultSeed);
-    std::uniform_real_distribution<float> dist;
-    float v_2 = dist(rng);
-    CHECK_EQ(v_0, v_2);
-  }
 }
 
 TEST(Learner, FeatureInfo) {
@@ -425,6 +411,54 @@ TEST(Learner, FeatureInfo) {
     learner->GetFeatureTypes(&out_types);
     ASSERT_TRUE(std::equal(out_names.begin(), out_names.end(), names.begin()));
     ASSERT_TRUE(std::equal(out_types.begin(), out_types.end(), types.begin()));
+  }
+}
+
+TEST(Learner, LocalRNG) {
+  // Test rng is not shared between boosters.
+  auto m = RandomDataGenerator{100, 10, 0}.GenerateDMatrix(true);
+  std::unique_ptr<Learner> learner {
+    Learner::Create({m})
+  };
+  auto seed = std::numeric_limits<int64_t>::max();
+  learner->SetParam("seed", std::to_string(seed));
+  learner->Configure();
+
+  Json config {Object()};
+  learner->SaveConfig(&config);
+  auto str = get<String const>(config["learner"]["generic_param"]["rng"]);
+  std::mt19937 rng;
+  std::stringstream ss;
+  ss << str;
+  ss >> rng;
+
+  Args args {{"colsample_bynote", "0.25"}, {"tree_method", "hist"}};
+
+  {
+    std::unique_ptr<Learner> learner_0{Learner::Create({m})};
+    learner_0->SetParams(args);
+    learner_0->Configure();
+    learner_0->UpdateOneIter(0, m);
+
+    std::string raw_str;
+    common::MemoryBufferStream fo(&raw_str);
+    learner_0->Save(&fo);
+
+    // Used as noise to change the seed.
+    std::unique_ptr<Learner> foo{Learner::Create({m})};
+    foo->UpdateOneIter(0, m);
+
+    // parameters are loaded along with model.
+    fo.Seek(0);
+    std::unique_ptr<Learner> learner_1{Learner::Create({m})};
+    learner_1->Load(&fo);
+    learner_0->UpdateOneIter(1, m);
+
+    // Train for 2 rounds
+    std::unique_ptr<Learner> learner_2{Learner::Create({m})};
+    learner_2->SetParams(args);
+    learner_2->UpdateOneIter(0, m);
+    learner_2->UpdateOneIter(1, m);
   }
 }
 }  // namespace xgboost

@@ -7,7 +7,7 @@ namespace xgboost {
 namespace common {
 TEST(ColumnSampler, Test) {
   int n = 128;
-  ColumnSampler cs;
+  ColumnSampler cs{0};
   std::vector<float> feature_weights;
 
   // No node sampling

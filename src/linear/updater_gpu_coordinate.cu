@@ -120,7 +120,7 @@ class GPUCoordinateUpdater : public LinearUpdater {  // NOLINT
     // prepare for updating the weights
     selector_->Setup(*model, in_gpair->ConstHostVector(), p_fmat,
                      tparam_.reg_alpha_denorm, tparam_.reg_lambda_denorm,
-                     coord_param_.top_k);
+                     coord_param_.top_k, learner_param_);
     monitor_.Start("UpdateFeature");
     for (auto group_idx = 0; group_idx < model->learner_model_param->num_output_group;
          ++group_idx) {

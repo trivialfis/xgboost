@@ -131,7 +131,7 @@ class PoissonSampling : public thrust::binary_function<GradientPair, size_t, Gra
       if (rnd_(i) <= p) {
         return gpair / p;
       } else {
-        return GradientPair();
+        return {};
       }
     }
   }
@@ -145,7 +145,8 @@ class PoissonSampling : public thrust::binary_function<GradientPair, size_t, Gra
 
 NoSampling::NoSampling(EllpackPageImpl* page) : page_(page) {}
 
-GradientBasedSample NoSampling::Sample(common::Span<GradientPair> gpair, DMatrix* dmat) {
+GradientBasedSample NoSampling::Sample(common::Span<GradientPair> gpair,
+                                       DMatrix *dmat, std::mt19937 *) {
   return {dmat->Info().num_row_, page_, gpair};
 }
 
@@ -157,7 +158,7 @@ ExternalMemoryNoSampling::ExternalMemoryNoSampling(EllpackPageImpl* page,
                                 page->row_stride, n_rows)) {}
 
 GradientBasedSample ExternalMemoryNoSampling::Sample(common::Span<GradientPair> gpair,
-                                                     DMatrix* dmat) {
+                                                     DMatrix* dmat, std::mt19937 *) {
   if (!page_concatenated_) {
     // Concatenate all the external memory ELLPACK pages into a single in-memory page.
     size_t offset = 0;
@@ -174,11 +175,12 @@ GradientBasedSample ExternalMemoryNoSampling::Sample(common::Span<GradientPair> 
 UniformSampling::UniformSampling(EllpackPageImpl* page, float subsample)
     : page_(page), subsample_(subsample) {}
 
-GradientBasedSample UniformSampling::Sample(common::Span<GradientPair> gpair, DMatrix* dmat) {
+GradientBasedSample UniformSampling::Sample(common::Span<GradientPair> gpair,
+                                            DMatrix *dmat, std::mt19937 *rng) {
   // Set gradient pair to 0 with p = 1 - subsample
   thrust::replace_if(dh::tbegin(gpair), dh::tend(gpair),
                      thrust::counting_iterator<size_t>(0),
-                     BernoulliTrial(common::GlobalRandom()(), subsample_),
+                     BernoulliTrial((*rng)(), subsample_),
                      GradientPair());
   return {dmat->Info().num_row_, page_, gpair};
 }
@@ -193,11 +195,11 @@ ExternalMemoryUniformSampling::ExternalMemoryUniformSampling(EllpackPageImpl* pa
       sample_row_index_(n_rows) {}
 
 GradientBasedSample ExternalMemoryUniformSampling::Sample(common::Span<GradientPair> gpair,
-                                                          DMatrix* dmat) {
+                                                          DMatrix* dmat, std::mt19937 *rng) {
   // Set gradient pair to 0 with p = 1 - subsample
   thrust::replace_if(dh::tbegin(gpair), dh::tend(gpair),
                      thrust::counting_iterator<size_t>(0),
-                     BernoulliTrial(common::GlobalRandom()(), subsample_),
+                     BernoulliTrial((*rng)(), subsample_),
                      GradientPair());
 
   // Count the sampled rows.
@@ -241,7 +243,7 @@ GradientBasedSampling::GradientBasedSampling(EllpackPageImpl* page,
       grad_sum_(n_rows, 0.0f) {}
 
 GradientBasedSample GradientBasedSampling::Sample(common::Span<GradientPair> gpair,
-                                                  DMatrix* dmat) {
+                                                  DMatrix* dmat, std::mt19937 *rng) {
   size_t n_rows = dmat->Info().num_row_;
   size_t threshold_index = GradientBasedSampler::CalculateThresholdIndex(
       gpair, dh::ToSpan(threshold_), dh::ToSpan(grad_sum_), n_rows * subsample_);
@@ -252,7 +254,7 @@ GradientBasedSample GradientBasedSampling::Sample(common::Span<GradientPair> gpa
                     dh::tbegin(gpair),
                     PoissonSampling(dh::ToSpan(threshold_),
                                     threshold_index,
-                                    RandomWeight(common::GlobalRandom()())));
+                                    RandomWeight((*rng)())));
   return {n_rows, page_, gpair};
 }
 
@@ -269,7 +271,7 @@ ExternalMemoryGradientBasedSampling::ExternalMemoryGradientBasedSampling(
       sample_row_index_(n_rows) {}
 
 GradientBasedSample ExternalMemoryGradientBasedSampling::Sample(common::Span<GradientPair> gpair,
-                                                                DMatrix* dmat) {
+                                                                DMatrix* dmat, std::mt19937 *rng) {
   size_t n_rows = dmat->Info().num_row_;
   size_t threshold_index = GradientBasedSampler::CalculateThresholdIndex(
       gpair, dh::ToSpan(threshold_), dh::ToSpan(grad_sum_), n_rows * subsample_);
@@ -280,7 +282,7 @@ GradientBasedSample ExternalMemoryGradientBasedSampling::Sample(common::Span<Gra
                     dh::tbegin(gpair),
                     PoissonSampling(dh::ToSpan(threshold_),
                                     threshold_index,
-                                    RandomWeight(common::GlobalRandom()())));
+                                    RandomWeight((*rng)())));
 
   // Count the sampled rows.
   size_t sample_rows = thrust::count_if(dh::tbegin(gpair), dh::tend(gpair), IsNonZero());
@@ -353,9 +355,9 @@ GradientBasedSampler::GradientBasedSampler(EllpackPageImpl* page,
 
 // Sample a DMatrix based on the given gradient pairs.
 GradientBasedSample GradientBasedSampler::Sample(common::Span<GradientPair> gpair,
-                                                 DMatrix* dmat) {
+                                                 DMatrix* dmat, std::mt19937 *rng) {
   monitor_.Start("Sample");
-  GradientBasedSample sample = strategy_->Sample(gpair, dmat);
+  GradientBasedSample sample = strategy_->Sample(gpair, dmat, rng);
   monitor_.Stop("Sample");
   return sample;
 }

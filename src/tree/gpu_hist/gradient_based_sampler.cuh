@@ -24,17 +24,19 @@ struct GradientBasedSample {
 class SamplingStrategy {
  public:
   /*! \brief Sample from a DMatrix based on the given gradient pairs. */
-  virtual GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) = 0;
-  virtual ~SamplingStrategy() = default;
+   virtual GradientBasedSample Sample(common::Span<GradientPair> gpair,
+                                      DMatrix *dmat, std::mt19937 *rng) = 0;
+   virtual ~SamplingStrategy() = default;
 };
 
 /*! \brief No sampling in in-memory mode. */
 class NoSampling : public SamplingStrategy {
  public:
   explicit NoSampling(EllpackPageImpl* page);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   EllpackPageImpl* page_;
 };
 
@@ -44,9 +46,10 @@ class ExternalMemoryNoSampling : public SamplingStrategy {
   ExternalMemoryNoSampling(EllpackPageImpl* page,
                            size_t n_rows,
                            const BatchParam& batch_param);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   BatchParam batch_param_;
   std::unique_ptr<EllpackPageImpl> page_;
   bool page_concatenated_{false};
@@ -56,9 +59,10 @@ class ExternalMemoryNoSampling : public SamplingStrategy {
 class UniformSampling : public SamplingStrategy {
  public:
   UniformSampling(EllpackPageImpl* page, float subsample);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   EllpackPageImpl* page_;
   float subsample_;
 };
@@ -70,9 +74,10 @@ class ExternalMemoryUniformSampling : public SamplingStrategy {
                                 size_t n_rows,
                                 const BatchParam& batch_param,
                                 float subsample);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   EllpackPageImpl* original_page_;
   BatchParam batch_param_;
   float subsample_;
@@ -88,9 +93,10 @@ class GradientBasedSampling : public SamplingStrategy {
                         size_t n_rows,
                         const BatchParam& batch_param,
                         float subsample);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   EllpackPageImpl* page_;
   float subsample_;
   dh::caching_device_vector<float> threshold_;
@@ -104,9 +110,10 @@ class ExternalMemoryGradientBasedSampling : public SamplingStrategy {
                                       size_t n_rows,
                                       const BatchParam& batch_param,
                                       float subsample);
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat) override;
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix *dmat,
+                             std::mt19937 *rng) override;
 
- private:
+private:
   EllpackPageImpl* original_page_;
   BatchParam batch_param_;
   float subsample_;
@@ -135,7 +142,7 @@ class GradientBasedSampler {
                        int sampling_method);
 
   /*! \brief Sample from a DMatrix based on the given gradient pairs. */
-  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat);
+  GradientBasedSample Sample(common::Span<GradientPair> gpair, DMatrix* dmat, std::mt19937 *rng);
 
   /*! \brief Calculate the threshold used to normalize sampling probabilities. */
   static size_t CalculateThresholdIndex(common::Span<GradientPair> gpair,

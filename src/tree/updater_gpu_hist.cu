@@ -260,7 +260,7 @@ struct GPUHistMakerDevice {
   // Reset values for each update iteration
   // Note that the column sampler must be passed by value because it is not
   // thread safe
-  void Reset(HostDeviceVector<GradientPair>* dh_gpair, DMatrix* dmat, int64_t num_columns) {
+  void Reset(HostDeviceVector<GradientPair>* dh_gpair, DMatrix* dmat, int64_t num_columns, GenericParameter const* ctx) {
     auto const& info = dmat->Info();
     this->column_sampler.Init(num_columns, info.feature_weigths.HostVector(),
                               param.colsample_bynode, param.colsample_bylevel,
@@ -277,7 +277,7 @@ struct GPUHistMakerDevice {
     dh::safe_cuda(cudaMemcpyAsync(
         d_gpair.data().get(), dh_gpair->ConstDevicePointer(),
         dh_gpair->Size() * sizeof(GradientPair), cudaMemcpyDeviceToDevice));
-    auto sample = sampler->Sample(dh::ToSpan(d_gpair), dmat);
+    auto sample = sampler->Sample(dh::ToSpan(d_gpair), dmat, &ctx->rng);
     page = sample.page;
     gpair = sample.gpair;
 
@@ -693,12 +693,12 @@ struct GPUHistMakerDevice {
   }
 
   void UpdateTree(HostDeviceVector<GradientPair>* gpair_all, DMatrix* p_fmat,
-                  RegTree* p_tree, dh::AllReducer* reducer) {
+                  RegTree* p_tree, dh::AllReducer* reducer, GenericParameter const* ctx) {
     auto& tree = *p_tree;
     Driver<GPUExpandEntry> driver(static_cast<TrainParam::TreeGrowPolicy>(param.grow_policy));
 
     monitor.Start("Reset");
-    this->Reset(gpair_all, p_fmat, p_fmat->Info().num_col_);
+    this->Reset(gpair_all, p_fmat, p_fmat->Info().num_col_, ctx);
     monitor.Stop("Reset");
 
     monitor.Start("InitRoot");
@@ -806,7 +806,7 @@ class GPUHistMakerSpecialised {
     reducer_.Init({device_});  // NOLINT
 
     // Synchronise the column sampling seed
-    uint32_t column_sampling_seed = common::GlobalRandom()();
+    uint32_t column_sampling_seed = generic_param_->rng();
     rabit::Broadcast(&column_sampling_seed, sizeof(column_sampling_seed), 0);
 
     BatchParam batch_param{
@@ -861,7 +861,7 @@ class GPUHistMakerSpecialised {
     monitor_.Stop("InitData");
 
     gpair->SetDevice(device_);
-    maker->UpdateTree(gpair, p_fmat, p_tree, &reducer_);
+    maker->UpdateTree(gpair, p_fmat, p_tree, &reducer_, generic_param_);
   }
 
   bool UpdatePredictionCache(const DMatrix* data, VectorView<bst_float> p_out_preds) {

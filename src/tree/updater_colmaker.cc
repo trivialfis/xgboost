@@ -108,7 +108,7 @@ class ColMaker: public TreeUpdater {
       Builder builder(
         param_,
         colmaker_param_,
-        interaction_constraints_, column_densities_);
+        interaction_constraints_, column_densities_, tparam_);
       builder.Update(gpair->ConstHostVector(), dmat, tree);
     }
     param_.learning_rate = lr;
@@ -153,12 +153,14 @@ class ColMaker: public TreeUpdater {
     explicit Builder(const TrainParam& param,
                      const ColMakerTrainParam& colmaker_train_param,
                      FeatureInteractionConstraintHost _interaction_constraints,
-                     const std::vector<float> &column_densities)
+                     const std::vector<float> &column_densities,
+                     GenericParameter const* ctx)
         : param_(param), colmaker_train_param_{colmaker_train_param},
           nthread_(omp_get_max_threads()),
+          column_sampler_{ctx->seed},
           tree_evaluator_(param_, column_densities.size(), GenericParameter::kCpuId),
           interaction_constraints_{std::move(_interaction_constraints)},
-          column_densities_(column_densities) {}
+          ctx_{ctx}, column_densities_(column_densities) {}
     // update one tree, growing
     virtual void Update(const std::vector<GradientPair>& gpair,
                         DMatrix* p_fmat,
@@ -217,10 +219,9 @@ class ColMaker: public TreeUpdater {
             << "Only uniform sampling is supported, "
             << "gradient-based sampling is only support by GPU Hist.";
           std::bernoulli_distribution coin_flip(param_.subsample);
-          auto& rnd = common::GlobalRandom();
           for (size_t ridx = 0; ridx < position_.size(); ++ridx) {
             if (gpair[ridx].GetHess() < 0.0f) continue;
-            if (!coin_flip(rnd)) position_[ridx] = ~position_[ridx];
+            if (!coin_flip(ctx_->rng)) position_[ridx] = ~position_[ridx];
           }
         }
       }
@@ -618,6 +619,7 @@ class ColMaker: public TreeUpdater {
     TreeEvaluator tree_evaluator_;
 
     FeatureInteractionConstraintHost interaction_constraints_;
+    GenericParameter const* ctx_;
     const std::vector<float> &column_densities_;
   };
 };

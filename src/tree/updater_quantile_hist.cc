@@ -51,11 +51,8 @@ template<typename GradientSumT>
 void QuantileHistMaker::SetBuilder(const size_t n_trees,
                                    std::unique_ptr<Builder<GradientSumT>>* builder,
                                    DMatrix *dmat) {
-  builder->reset(new Builder<GradientSumT>(
-                n_trees,
-                param_,
-                std::move(pruner_),
-                int_constraint_, dmat));
+  builder->reset(new Builder<GradientSumT>(n_trees, param_, std::move(pruner_),
+                                           int_constraint_, dmat, tparam_));
   if (rabit::IsDistributed()) {
     (*builder)->SetHistSynchronizer(new DistributedHistSynchronizer<GradientSumT>());
     (*builder)->SetHistRowsAdder(new DistributedHistRowsAdder<GradientSumT>());
@@ -589,9 +586,8 @@ void QuantileHistMaker::Builder<GradientSumT>::InitSampling(const DMatrix& fmat,
                                                 std::vector<GradientPair>* gpair,
                                                 std::vector<size_t>* row_indices) {
   const auto& info = fmat.Info();
-  auto& rnd = common::GlobalRandom();
+  auto& rnd = ctx_->rng;
   std::vector<GradientPair>& gpair_ref = *gpair;
-
 #if XGBOOST_CUSTOMIZE_GLOBAL_PRNG
   std::bernoulli_distribution coin_flip(param_.subsample);
   for (size_t i = 0; i < info.num_row_; ++i) {
@@ -602,7 +598,6 @@ void QuantileHistMaker::Builder<GradientSumT>::InitSampling(const DMatrix& fmat,
 #else
   const size_t nthread = this->nthread_;
   uint64_t initial_seed = rnd();
-
   const size_t discard_size = info.num_row_ / nthread;
   std::bernoulli_distribution coin_flip(param_.subsample);
 

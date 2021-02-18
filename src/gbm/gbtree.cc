@@ -276,7 +276,7 @@ void GBTree::InitUpdater(Args const& cfg) {
   std::string tval = tparam_.updater_seq;
   std::vector<std::string> ups = common::Split(tval, ',');
 
-  if (updaters_.size() != 0) {
+  if (!updaters_.empty()) {
     // Assert we have a valid set of updaters.
     CHECK_EQ(ups.size(), updaters_.size());
     for (auto const& up : updaters_) {
@@ -906,7 +906,7 @@ class Dart : public GBTree {
     idx_drop_.clear();
 
     std::uniform_real_distribution<> runif(0.0, 1.0);
-    auto& rnd = common::GlobalRandom();
+    auto& rnd = generic_param_->rng;
     bool skip = false;
     if (dparam_.skip_drop > 0.0) skip = (runif(rnd) < dparam_.skip_drop);
     // sample some trees to drop

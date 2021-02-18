@@ -34,7 +34,8 @@ void VerifySampling(size_t page_size,
   }
 
   GradientBasedSampler sampler(page, kRows, param, subsample, sampling_method);
-  auto sample = sampler.Sample(gpair.DeviceSpan(), dmat.get());
+  std::mt19937 rng;
+  auto sample = sampler.Sample(gpair.DeviceSpan(), dmat.get(), &rng);
 
   if (fixed_size_sampling) {
     EXPECT_EQ(sample.sample_rows, kRows);
@@ -87,7 +88,8 @@ TEST(GradientBasedSampler, NoSamplingExternalMemory) {
   EXPECT_NE(page->n_rows, kRows);
 
   GradientBasedSampler sampler(page, kRows, param, kSubsample, TrainParam::kUniform);
-  auto sample = sampler.Sample(gpair.DeviceSpan(), dmat.get());
+  std::mt19937 rng;
+  auto sample = sampler.Sample(gpair.DeviceSpan(), dmat.get(), &rng);
   auto sampled_page = sample.page;
   EXPECT_EQ(sample.sample_rows, kRows);
   EXPECT_EQ(sample.gpair.size(), gpair.Size());

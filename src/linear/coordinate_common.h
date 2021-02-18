@@ -243,7 +243,7 @@ class FeatureSelector {
   virtual void Setup(const gbm::GBLinearModel &,
                      const std::vector<GradientPair> &,
                      DMatrix *,
-                     float , float , int ) {}
+                     float , float , int, GenericParameter const* ctx) {}
   /**
    * \brief Select next coordinate to update.
    *
@@ -284,12 +284,12 @@ class ShuffleFeatureSelector : public FeatureSelector {
  public:
   void Setup(const gbm::GBLinearModel &model,
              const std::vector<GradientPair>&,
-             DMatrix *, float, float, int) override {
+             DMatrix *, float, float, int, GenericParameter const* ctx) override {
     if (feat_index_.size() == 0) {
       feat_index_.resize(model.learner_model_param->num_feature);
       std::iota(feat_index_.begin(), feat_index_.end(), 0);
     }
-    std::shuffle(feat_index_.begin(), feat_index_.end(), common::GlobalRandom());
+    std::shuffle(feat_index_.begin(), feat_index_.end(), ctx->rng);
   }
 
   int NextFeature(int iteration, const gbm::GBLinearModel &model,
@@ -307,11 +307,18 @@ class ShuffleFeatureSelector : public FeatureSelector {
  * \note Its randomness is controllable by setting a random seed.
  */
 class RandomFeatureSelector : public FeatureSelector {
+  GenericParameter const* ctx_;
+
  public:
+  void Setup(const gbm::GBLinearModel &model, const std::vector<GradientPair> &,
+             DMatrix *, float, float, int,
+             GenericParameter const *ctx) override {
+    ctx_ = ctx;
+  }
   int NextFeature(int, const gbm::GBLinearModel &model,
                   int, const std::vector<GradientPair> &,
                   DMatrix *, float, float) override {
-    return common::GlobalRandom()() % model.learner_model_param->num_feature;
+    return ctx_->rng() % model.learner_model_param->num_feature;
   }
 };
 
@@ -328,7 +335,7 @@ class GreedyFeatureSelector : public FeatureSelector {
  public:
   void Setup(const gbm::GBLinearModel &model,
              const std::vector<GradientPair> &,
-             DMatrix *, float, float, int param) override {
+             DMatrix *, float, float, int param, GenericParameter const*) override {
     top_k_ = static_cast<bst_uint>(param);
     const bst_uint ngroup = model.learner_model_param->num_output_group;
     if (param <= 0) top_k_ = std::numeric_limits<bst_uint>::max();
@@ -403,8 +410,9 @@ class GreedyFeatureSelector : public FeatureSelector {
 class ThriftyFeatureSelector : public FeatureSelector {
  public:
   void Setup(const gbm::GBLinearModel &model,
-             const std::vector<GradientPair> &gpair,
-             DMatrix *p_fmat, float alpha, float lambda, int param) override {
+             const std::vector<GradientPair> &gpair, DMatrix *p_fmat,
+             float alpha, float lambda, int param,
+             GenericParameter const *ctx) override {
     top_k_ = static_cast<bst_uint>(param);
     if (param <= 0) top_k_ = std::numeric_limits<bst_uint>::max();
     const bst_uint ngroup = model.learner_model_param->num_output_group;

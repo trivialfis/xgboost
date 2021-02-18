@@ -50,7 +50,7 @@ class ShotgunUpdater : public LinearUpdater {
 
     // lock-free parallel updates of weights
     selector_->Setup(*model, in_gpair->ConstHostVector(), p_fmat,
-                     param_.reg_alpha_denorm, param_.reg_lambda_denorm, 0);
+                     param_.reg_alpha_denorm, param_.reg_lambda_denorm, 0, learner_param_);
     for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
       auto page = batch.GetView();
       const auto nfeat = static_cast<bst_omp_uint>(batch.Size());

@@ -20,20 +20,20 @@ namespace tree {
 
 class QuantileHistMock : public QuantileHistMaker {
   static double constexpr kEps = 1e-6;
+  GenericParameter ctx_;
 
   template <typename GradientSumT>
   struct BuilderMock : public QuantileHistMaker::Builder<GradientSumT> {
     using RealImpl = QuantileHistMaker::Builder<GradientSumT>;
     using GHistRowT = typename RealImpl::GHistRowT;
 
-    BuilderMock(const TrainParam& param,
-                std::unique_ptr<TreeUpdater> pruner,
+    BuilderMock(const TrainParam &param, std::unique_ptr<TreeUpdater> pruner,
                 FeatureInteractionConstraintHost int_constraint,
-                DMatrix const* fmat)
+                DMatrix const* fmat, GenericParameter const *ctx)
         : RealImpl(1, param, std::move(pruner),
-          std::move(int_constraint), fmat) {}
+                   std::move(int_constraint), fmat, ctx) {}
 
-   public:
+  public:
     void TestInitData(const GHistIndexMatrix& gmat,
                       std::vector<GradientPair>* gpair,
                       DMatrix* p_fmat,
@@ -117,7 +117,6 @@ class QuantileHistMock : public QuantileHistMaker {
 
       const size_t nthreads = omp_get_num_threads();
       // save state of global rng engine
-      auto initial_rnd = common::GlobalRandom();
       std::vector<size_t> unused_rows_cpy = this->unused_rows_;
       RealImpl::InitData(gmat, *p_fmat, tree, gpair);
       std::vector<size_t> row_indices_initial = *(this->row_set_collection_.Data());
@@ -134,8 +133,6 @@ class QuantileHistMock : public QuantileHistMaker {
 
       for (size_t i_nthreads = 1; i_nthreads < 4; ++i_nthreads) {
         omp_set_num_threads(i_nthreads);
-        // return initial state of global rng engine
-        common::GlobalRandom() = initial_rnd;
         this->unused_rows_ = unused_rows_cpy;
         RealImpl::InitData(gmat, *p_fmat, tree, gpair);
         std::vector<size_t>& row_indices = *(this->row_set_collection_.Data());
@@ -510,13 +507,11 @@ class QuantileHistMock : public QuantileHistMaker {
       cfg_{args} {
     QuantileHistMaker::Configure(args);
     dmat_ = RandomDataGenerator(kNRows, kNCols, 0.8).Seed(3).GenerateDMatrix();
+    ctx_.UpdateAllowUnknown(args);
+
     if (single_precision_histogram) {
-      float_builder_.reset(
-          new BuilderMock<float>(
-              param_,
-              std::move(pruner_),
-              int_constraint_,
-              dmat_.get()));
+      float_builder_.reset(new BuilderMock<float>(
+          param_, std::move(pruner_), int_constraint_, dmat_.get(), &ctx_));
       if (batch) {
         float_builder_->SetHistSynchronizer(new BatchHistSynchronizer<float>());
         float_builder_->SetHistRowsAdder(new BatchHistRowsAdder<float>());
@@ -525,12 +520,8 @@ class QuantileHistMock : public QuantileHistMaker {
         float_builder_->SetHistRowsAdder(new DistributedHistRowsAdder<float>());
       }
     } else {
-      double_builder_.reset(
-          new BuilderMock<double>(
-              param_,
-              std::move(pruner_),
-              int_constraint_,
-              dmat_.get()));
+      double_builder_.reset(new BuilderMock<double>(
+          param_, std::move(pruner_), int_constraint_, dmat_.get(), &ctx_));
       if (batch) {
         double_builder_->SetHistSynchronizer(new BatchHistSynchronizer<double>());
         double_builder_->SetHistRowsAdder(new BatchHistRowsAdder<double>());

@@ -76,7 +76,7 @@ using GlobalRandomEngine = RandomEngine;
  *  This random engine is thread-local and
  *  only visible to current thread.
  */
-GlobalRandomEngine& GlobalRandom(); // NOLINT(*)
+// GlobalRandomEngine& GlobalRandom(); // NOLINT(*)
 
 /*
  * Original paper:
@@ -85,14 +85,14 @@ GlobalRandomEngine& GlobalRandom(); // NOLINT(*)
  * Blog:
  * https://timvieira.github.io/blog/post/2019/09/16/algorithms-for-sampling-without-replacement/
 */
-template <typename T>
+template <typename T, typename Rng>
 std::vector<T> WeightedSamplingWithoutReplacement(
-    std::vector<T> const &array, std::vector<float> const &weights, size_t n) {
+    std::vector<T> const &array, std::vector<float> const &weights, size_t n, Rng* p_rng) {
   // ES sampling.
+  auto& rng = *p_rng;
   CHECK_EQ(array.size(), weights.size());
   std::vector<float> keys(weights.size());
   std::uniform_real_distribution<float> dist;
-  auto& rng = GlobalRandom();
   for (size_t i = 0; i < array.size(); ++i) {
     auto w = std::max(weights.at(i), kRtEps);
     auto u = dist(rng);
@@ -133,7 +133,7 @@ class ColumnSampler {
    * \brief Column sampler constructor.
    * \note This constructor manually sets the rng seed
    */
-  explicit ColumnSampler(uint32_t seed) {
+  explicit ColumnSampler(int64_t seed) {
     rng_.seed(seed);
   }
 
@@ -141,11 +141,11 @@ class ColumnSampler {
   * \brief Column sampler constructor.
   * \note This constructor synchronizes the RNG seed across processes.
   */
-  ColumnSampler() {
-    uint32_t seed = common::GlobalRandom()();
-    rabit::Broadcast(&seed, sizeof(seed), 0);
-    rng_.seed(seed);
-  }
+  // ColumnSampler() {
+  //   uint32_t seed = common::GlobalRandom()();
+  //   rabit::Broadcast(&seed, sizeof(seed), 0);
+  //   rng_.seed(seed);
+  // }
 
   /**
    * \brief Initialise this object before use.

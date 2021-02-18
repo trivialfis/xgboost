@@ -320,7 +320,7 @@ class CQHistMaker: public HistMaker {
       cache_dmatrix_ = p_fmat;
     }
     feat_helper_.SyncInfo();
-    feat_helper_.SampleCol(this->param_.colsample_bytree, p_fset);
+    feat_helper_.SampleCol(this->param_.colsample_bytree, p_fset, tparam_);
   }
   // code to create histogram
   void CreateHist(const std::vector<GradientPair> &gpair,

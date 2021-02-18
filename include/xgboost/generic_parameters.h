@@ -8,6 +8,7 @@
 #include <xgboost/logging.h>
 #include <xgboost/parameter.h>
 
+#include <random>
 #include <string>
 
 namespace xgboost {
@@ -32,6 +33,7 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
   // gpu page size in external memory mode, 0 means using the default.
   size_t gpu_page_size;
   bool validate_parameters {false};
+  std::mt19937 mutable rng;
 
   /*!
    * \brief Configure the parameter `gpu_id'.
@@ -69,6 +71,9 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
     DMLC_DECLARE_FIELD(validate_parameters)
         .set_default(false)
         .describe("Enable checking whether parameters are used or not.");
+    DMLC_DECLARE_FIELD(rng)
+        .set_default(std::mt19937())
+        .describe("Random engine.");
   }
 };
 }  // namespace xgboost

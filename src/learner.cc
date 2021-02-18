@@ -265,6 +265,8 @@ class LearnerConfiguration : public Learner {
   LearnerModelParamLegacy mparam_;
   LearnerModelParam learner_model_param_;
   LearnerTrainParam tparam_;
+  // Runtime parameter
+  GenericParameter generic_parameters_;
   std::vector<std::string> metric_names_;
 
  public:
@@ -314,7 +316,7 @@ class LearnerConfiguration : public Learner {
 
     // set seed only before the model is initialized
     if (!initialized || generic_parameters_.seed != old_seed) {
-      common::GlobalRandom().seed(generic_parameters_.seed);
+      generic_parameters_.rng.seed(generic_parameters_.seed);
     }
 
     // must precede configure gbm since num_features is required for gbm
@@ -491,10 +493,6 @@ class LearnerConfiguration : public Learner {
 
   const std::map<std::string, std::string>& GetConfigurationArguments() const override {
     return cfg_;
-  }
-
-  GenericParameter const& GetGenericParameter() const override {
-    return generic_parameters_;
   }
 
  private:
@@ -1042,7 +1040,7 @@ class LearnerImpl : public LearnerIO {
     TrainingObserver::Instance().Update(iter);
     this->Configure();
     if (generic_parameters_.seed_per_iteration || rabit::IsDistributed()) {
-      common::GlobalRandom().seed(generic_parameters_.seed * kRandSeedMagic + iter);
+      generic_parameters_.rng.seed(generic_parameters_.seed * kRandSeedMagic + iter);
     }
     this->CheckDataSplitMode();
     this->ValidateDMatrix(train.get(), true);
@@ -1069,7 +1067,7 @@ class LearnerImpl : public LearnerIO {
     monitor_.Start("BoostOneIter");
     this->Configure();
     if (generic_parameters_.seed_per_iteration || rabit::IsDistributed()) {
-      common::GlobalRandom().seed(generic_parameters_.seed * kRandSeedMagic + iter);
+      generic_parameters_.rng.seed(generic_parameters_.seed * kRandSeedMagic + iter);
     }
     this->CheckDataSplitMode();
     this->ValidateDMatrix(train.get(), true);

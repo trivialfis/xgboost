@@ -400,7 +400,6 @@ TEST(GpuHist, UniformSampling) {
   constexpr size_t kRows = 4096;
   constexpr size_t kCols = 2;
   constexpr float kSubsample = 0.9999;
-  common::GlobalRandom().seed(1994);
 
   // Create an in-memory DMatrix.
   std::unique_ptr<DMatrix> dmat(CreateSparsePageDMatrixWithRC(kRows, kCols, 0, true));
@@ -429,7 +428,6 @@ TEST(GpuHist, GradientBasedSampling) {
   constexpr size_t kRows = 4096;
   constexpr size_t kCols = 2;
   constexpr float kSubsample = 0.9999;
-  common::GlobalRandom().seed(1994);
 
   // Create an in-memory DMatrix.
   std::unique_ptr<DMatrix> dmat(CreateSparsePageDMatrixWithRC(kRows, kCols, 0, true));
@@ -493,7 +491,6 @@ TEST(GpuHist, ExternalMemoryWithSampling) {
   constexpr size_t kPageSize = 1024;
   constexpr float kSubsample = 0.5;
   const std::string kSamplingMethod = "gradient_based";
-  common::GlobalRandom().seed(0);
 
   // Create an in-memory DMatrix.
   std::unique_ptr<DMatrix> dmat(CreateSparsePageDMatrixWithRC(kRows, kCols, 0, true));
@@ -506,15 +503,12 @@ TEST(GpuHist, ExternalMemoryWithSampling) {
   auto gpair = GenerateRandomGradients(kRows);
 
   // Build a tree using the in-memory DMatrix.
-  auto rng = common::GlobalRandom();
-
   RegTree tree;
   HostDeviceVector<bst_float> preds(kRows, 0.0, 0);
   UpdateTree(&gpair, dmat.get(), 0, &tree, &preds, kSubsample, kSamplingMethod,
              kRows);
 
   // Build another tree using multiple ELLPACK pages.
-  common::GlobalRandom() = rng;
   RegTree tree_ext;
   HostDeviceVector<bst_float> preds_ext(kRows, 0.0, 0);
   UpdateTree(&gpair, dmat_ext.get(), kPageSize, &tree_ext, &preds_ext,

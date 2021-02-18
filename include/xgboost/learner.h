@@ -270,7 +270,6 @@ class Learner : public Model, public Configurable, public dmlc::Serializable {
    */
   static Learner* Create(const std::vector<std::shared_ptr<DMatrix> >& cache_data);
 
-  virtual GenericParameter const& GetGenericParameter() const = 0;
   /*!
    * \brief Get configuration arguments currently stored by the learner
    * \return Key-value pairs representing configuration arguments
@@ -284,8 +283,6 @@ class Learner : public Model, public Configurable, public dmlc::Serializable {
   std::unique_ptr<GradientBooster> gbm_;
   /*! \brief The evaluation metrics used to evaluate the model. */
   std::vector<std::unique_ptr<Metric> > metrics_;
-  /*! \brief Training parameter. */
-  GenericParameter generic_parameters_;
 };
 
 struct LearnerModelParamLegacy;

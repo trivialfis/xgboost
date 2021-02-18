@@ -94,7 +94,7 @@ class BaseMaker: public TreeUpdater {
       return fminmax_[fid *2 + 1];
     }
 
-    void SampleCol(float p, std::vector<bst_feature_t> *p_findex) const {
+    void SampleCol(float p, std::vector<bst_feature_t> *p_findex, GenericParameter const* ctx) const {
       std::vector<bst_feature_t> &findex = *p_findex;
       findex.clear();
       for (size_t i = 0; i < fminmax_.size(); i += 2) {
@@ -102,7 +102,7 @@ class BaseMaker: public TreeUpdater {
         if (this->Type(fid) != 0) findex.push_back(fid);
       }
       auto n = static_cast<unsigned>(p * findex.size());
-      std::shuffle(findex.begin(), findex.end(), common::GlobalRandom());
+      std::shuffle(findex.begin(), findex.end(), ctx->rng);
       findex.resize(n);
       // sync the findex if it is subsample
       std::string s_cache;
@@ -154,10 +154,9 @@ class BaseMaker: public TreeUpdater {
           << "Only uniform sampling is supported, "
           << "gradient-based sampling is only support by GPU Hist.";
         std::bernoulli_distribution coin_flip(param_.subsample);
-        auto& rnd = common::GlobalRandom();
         for (size_t i = 0; i < position_.size(); ++i) {
           if (gpair[i].GetHess() < 0.0f) continue;
-          if (!coin_flip(rnd)) position_[i] = ~position_[i];
+          if (!coin_flip(tparam_->rng)) position_[i] = ~position_[i];
         }
       }
     }

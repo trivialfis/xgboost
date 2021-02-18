@@ -276,15 +276,17 @@ class QuantileHistMaker: public TreeUpdater {
                      const TrainParam& param,
                      std::unique_ptr<TreeUpdater> pruner,
                      FeatureInteractionConstraintHost int_constraints_,
-                     DMatrix const* fmat)
+                     DMatrix const* fmat,
+                     GenericParameter const* ctx)
       : n_trees_(n_trees),
         param_(param),
         tree_evaluator_(param, fmat->Info().num_col_, GenericParameter::kCpuId),
         pruner_(std::move(pruner)),
         interaction_constraints_{std::move(int_constraints_)},
-        p_last_tree_(nullptr), p_last_fmat_(fmat) {
+        p_last_tree_(nullptr), p_last_fmat_(fmat), column_sampler_{ctx->seed}, ctx_{ctx} {
       builder_monitor_.Init("Quantile::Builder");
     }
+
     // update one tree, growing
     virtual void Update(const GHistIndexMatrix& gmat,
                         const ColumnMatrix& column_matrix,
@@ -405,6 +407,7 @@ class QuantileHistMaker: public TreeUpdater {
     // number of omp thread used during training
     int nthread_;
     common::ColumnSampler column_sampler_;
+    GenericParameter const* ctx_;
     // the internal row sets
     RowSetCollection row_set_collection_;
     // tree rows that were not used for current training

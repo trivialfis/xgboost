@@ -392,8 +392,7 @@ class LogitSerializationTest : public SerializationTest {
     auto &h_labels = p_dmat->Info().labels_.HostVector();
 
     std::bernoulli_distribution flip(0.5);
-    auto& rnd = common::GlobalRandom();
-    rnd.seed(0);
+    std::mt19937 rnd{0};
 
     for (auto& v : h_labels) { v = flip(rnd); }
 
@@ -516,10 +515,9 @@ class MultiClassesSerializationTest : public SerializationTest {
     auto &h_labels = p_dmat->Info().labels_.HostVector();
 
     std::uniform_int_distribution<size_t> categorical(0, kClasses - 1);
-    auto& rnd = common::GlobalRandom();
-    rnd.seed(0);
+    std::mt19937 rng;
 
-    for (auto& v : h_labels) { v = categorical(rnd); }
+    for (auto& v : h_labels) { v = categorical(rng); }
 
     for (size_t i = 0; i < kCols; ++i) {
       std::string name = "feat_" + std::to_string(i);
