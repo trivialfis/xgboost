@@ -90,6 +90,49 @@ class TestCallbacks:
                             verbose_eval=True)
         assert booster.num_boosted_rounds() - 1 == booster.best_iteration
 
+    @pytest.mark.skipif(**tm.no_sklearn())
+    def test_early_stopping_eval_interval(self):
+        from sklearn.datasets import load_digits
+        from sklearn.model_selection import train_test_split
+
+        X, y = load_digits(2, return_X_y=True)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+        eval_start = 2
+        eval_interval = 3
+
+        early_stop = xgb.callback.EarlyStopping(rounds=5)
+        clf = xgb.XGBClassifier(use_label_encoder=False).fit(
+            X_train,
+            y_train,
+            eval_metric="auc",
+            eval_set=[(X_test, y_test)],
+            callbacks=[early_stop],
+        )
+
+        early_stop = xgb.callback.EarlyStopping(rounds=5, eval_start=eval_start)
+        clf1 = xgb.XGBClassifier(use_label_encoder=False).fit(
+            X_train,
+            y_train,
+            eval_metric="auc",
+            eval_set=[(X_test, y_test)],
+            callbacks=[early_stop],
+        )
+
+        early_stop = xgb.callback.EarlyStopping(rounds=5, eval_interval=eval_interval)
+        clf2 = xgb.XGBClassifier(use_label_encoder=False).fit(
+            X_train,
+            y_train,
+            eval_metric="auc",
+            eval_set=[(X_test, y_test)],
+            callbacks=[early_stop],
+        )
+
+        baseline = clf.evals_result()["validation_0"]["auc"]
+
+        assert clf1.evals_result()["validation_0"]["auc"] == baseline[eval_start:]
+        assert clf2.evals_result()["validation_0"]["auc"] == baseline[::eval_interval]
+
     def test_early_stopping_custom_eval(self):
         D_train = xgb.DMatrix(self.X_train, self.y_train)
         D_valid = xgb.DMatrix(self.X_valid, self.y_valid)

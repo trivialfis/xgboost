@@ -484,7 +484,7 @@ class EarlyStopping(TrainingCallback):
         Whether to maximize evaluation metric.  None means auto (discouraged).
     save_best
         Whether training should return the best model or the last model.
-    score_interval
+    eval_interval
         Score the model after a number of iterations.
     """
     def __init__(
@@ -494,7 +494,8 @@ class EarlyStopping(TrainingCallback):
         data_name: Optional[str] = None,
         maximize: Optional[bool] = None,
         save_best: Optional[bool] = False,
-        score_interval: int = 1,
+        eval_start: int = 0,
+        eval_interval: int = 1,
     ) -> None:
         self._data_name = data_name
         self._metric_name = metric_name
@@ -502,9 +503,10 @@ class EarlyStopping(TrainingCallback):
         self._save_best = save_best
         self._maximize = maximize
         self._stopping_history: CallbackContainer.EvalsLog = {}
-        self._score_interval = score_interval
-        if self._score_interval < 1:
-            raise ValueError("score_interval should be greater or equal to 1.")
+        self._eval_start = eval_start
+        self._eval_interval = eval_interval
+        if self._eval_interval < 1:
+            raise ValueError("eval_interval should be greater or equal to 1.")
 
         if self._maximize is not None:
             if self._maximize:
@@ -565,7 +567,9 @@ class EarlyStopping(TrainingCallback):
         msg = 'Must have at least 1 validation dataset for early stopping.'
         assert len(evals_log.keys()) >= 1, msg
 
-        if epoch % self._score_interval != 0:
+        if epoch % self._eval_interval != 0:
+            return False
+        if epoch < self._eval_start:
             return False
 
         data_name = ''
