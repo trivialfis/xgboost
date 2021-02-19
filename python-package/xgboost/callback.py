@@ -484,19 +484,27 @@ class EarlyStopping(TrainingCallback):
         Whether to maximize evaluation metric.  None means auto (discouraged).
     save_best
         Whether training should return the best model or the last model.
+    score_interval
+        Score the model after a number of iterations.
     """
-    def __init__(self,
-                 rounds: int,
-                 metric_name: Optional[str] = None,
-                 data_name: Optional[str] = None,
-                 maximize: Optional[bool] = None,
-                 save_best: Optional[bool] = False) -> None:
+    def __init__(
+        self,
+        rounds: int,
+        metric_name: Optional[str] = None,
+        data_name: Optional[str] = None,
+        maximize: Optional[bool] = None,
+        save_best: Optional[bool] = False,
+        score_interval: int = 1,
+    ) -> None:
         self._data_name = data_name
         self._metric_name = metric_name
         self._rounds = rounds
         self._save_best = save_best
         self._maximize = maximize
         self._stopping_history: CallbackContainer.EvalsLog = {}
+        self._score_interval = score_interval
+        if self._score_interval < 1:
+            raise ValueError("score_interval should be greater or equal to 1.")
 
         if self._maximize is not None:
             if self._maximize:
@@ -550,11 +558,16 @@ class EarlyStopping(TrainingCallback):
             return True
         return False
 
-    def after_iteration(self, model, epoch: int,
-                        evals_log: CallbackContainer.EvalsLog) -> bool:
+    def after_iteration(
+        self, model, epoch: int, evals_log: CallbackContainer.EvalsLog
+    ) -> bool:
         epoch += self._starting_round   # training continuation
         msg = 'Must have at least 1 validation dataset for early stopping.'
         assert len(evals_log.keys()) >= 1, msg
+
+        if epoch % self._score_interval != 0:
+            return False
+
         data_name = ''
         if self._data_name:
             for d, _ in evals_log.items():
@@ -565,6 +578,7 @@ class EarlyStopping(TrainingCallback):
         else:
             # Use the last one as default.
             data_name = list(evals_log.keys())[-1]
+
         assert isinstance(data_name, str) and data_name
         data_log = evals_log[data_name]
 
