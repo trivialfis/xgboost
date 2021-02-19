@@ -76,10 +76,10 @@ def _train_internal(params, dtrain,
     bst = callbacks.before_training(bst)
 
     for i in range(start_iteration, num_boost_round):
-        if callbacks.before_iteration(bst, i, dtrain, evals):
+        if callbacks.before_iteration(bst, i, evals):
             break
         bst.update(dtrain, i, obj)
-        if callbacks.after_iteration(bst, i, dtrain, evals):
+        if callbacks.after_iteration(bst, i, evals):
             break
 
     bst = callbacks.after_training(bst)
@@ -476,11 +476,11 @@ def cv(params, dtrain, num_boost_round=10, nfold=3, stratified=False, folds=None
     callbacks.before_training(booster)
 
     for i in range(num_boost_round):
-        if callbacks.before_iteration(booster, i, dtrain, None):
+        if callbacks.before_iteration(booster, i, None):
             break
         booster.update(i, obj)
 
-        should_break = callbacks.after_iteration(booster, i, dtrain, None)
+        should_break = callbacks.after_iteration(booster, i, None)
         res = callbacks.aggregated_cv
         for key, mean, std in res:
             if key + '-mean' not in results:

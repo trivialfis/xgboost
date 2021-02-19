@@ -390,7 +390,7 @@ class CallbackContainer:
                 assert isinstance(model, Booster), msg
         return model
 
-    def before_iteration(self, model, epoch, dtrain, evals) -> bool:
+    def before_iteration(self, model, epoch, evals) -> bool:
         '''Function called before training iteration.'''
         return any(c.before_iteration(model, epoch, self.history)
                    for c in self.callbacks)
@@ -416,7 +416,7 @@ class CallbackContainer:
                 self.history[data_name][metric_name] = [s]
         return False
 
-    def after_iteration(self, model, epoch, dtrain, evals) -> bool:
+    def after_iteration(self, model, epoch, evals) -> bool:
         '''Function called after training iteration.'''
         if self.is_cv:
             scores = model.eval(epoch, self.metric)
