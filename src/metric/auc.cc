@@ -336,5 +336,17 @@ GPURankingAUC(common::Span<float const> predts, MetaInfo const &info,
 }
 struct DeviceAUCCache {};
 #endif  // !defined(XGBOOST_USE_CUDA)
+
+class EvalPRAUC : public Metric {
+  float Eval(const HostDeviceVector<float> &preds, const MetaInfo &info,
+             bool distributed) override {
+    return 0;
+  }
+  const char *Name() const override { return "pr-auc"; }
+};
+
+XGBOOST_REGISTER_METRIC(EvalPRAUC, "pr-auc")
+.describe("Receiver Operating Characteristic Area Under the Curve.")
+.set_body([](const char*) { return new EvalPRAUC(); });
 }  // namespace metric
 }  // namespace xgboost
