@@ -310,7 +310,7 @@ class EvalAUC : public Metric {
   }
 };
 
-XGBOOST_REGISTER_METRIC(EvalBinaryAUC, "auc")
+XGBOOST_REGISTER_METRIC(EvalAUC, "auc")
 .describe("Receiver Operating Characteristic Area Under the Curve.")
 .set_body([](const char*) { return new EvalAUC(); });
 
