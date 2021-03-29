@@ -243,3 +243,9 @@ class TestEvalMetrics:
         # https://github.com/mlr-org/mlr3measures/blob/main/R/binary_prauc.R
         # https://stats.stackexchange.com/a/260657
         np.testing.assert_allclose(skl_auc, xgb_auc, rtol=1e-6)
+
+        # test items:
+        # - weighted
+        # - ranking
+        # - empty dataset
+        # - 0 recall
