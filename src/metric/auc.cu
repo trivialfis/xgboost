@@ -24,15 +24,6 @@ class Discard : public thrust::discard_iterator<T>  {
  public:
   using value_type = T;  // NOLINT
 };
-
-struct GetWeightOp {
-  common::Span<float const> weights;
-  common::Span<size_t const> sorted_idx;
-
-  __device__ float operator()(size_t i) const {
-    return weights.empty() ? 1.0f : weights[sorted_idx[i]];
-  }
-};
 }  // namespace
 
 /**
@@ -102,7 +93,7 @@ GPUBinaryAUC(common::Span<float const> predts, MetaInfo const &info,
   /**
    * Linear scan
    */
-  auto get_weight = GetWeightOp{weights, d_sorted_idx};
+  auto get_weight = AUCSampleWeight{weights, d_sorted_idx};
   using Pair = thrust::pair<float, float>;
   auto get_fp_tp = [=]__device__(size_t i) {
     size_t idx = d_sorted_idx[i];
@@ -238,7 +229,7 @@ float GPUMultiClassAUCOVR(common::Span<float const> predts, MetaInfo const &info
    */
   dh::caching_device_vector<float> d_auc(n_classes, 0);
   auto s_d_auc = dh::ToSpan(d_auc);
-  auto get_weight = GetWeightOp{weights, d_sorted_idx};
+  auto get_weight = AUCSampleWeight{weights, d_sorted_idx};
   using Pair = thrust::pair<float, float>;
   auto d_fptp = dh::ToSpan(cache->fptp);
   auto get_fp_tp = [=]__device__(size_t i) {

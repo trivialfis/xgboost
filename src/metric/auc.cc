@@ -49,9 +49,7 @@ std::tuple<float, float, float> BinaryAUC(std::vector<float> const &predts,
   auto const sorted_idx = common::ArgSort<size_t>(
       common::Span<float const>(predts), std::greater<>{});
 
-  auto get_weight = [&](size_t i) {
-    return weights.empty() ? 1.0f : weights[sorted_idx[i]];
-  };
+  auto get_weight = AUCSampleWeight{common::Span<float>{weights}, common::Span<size_t>{sorted_idx}};
   float label = labels[sorted_idx.front()];
   float w = get_weight(0);
   float fp = (1.0 - label) * w, tp = label * w;
@@ -336,6 +334,16 @@ GPURankingAUC(common::Span<float const> predts, MetaInfo const &info,
 }
 struct DeviceAUCCache {};
 #endif  // !defined(XGBOOST_USE_CUDA)
+
+float BinaryPRAUC(common::Span<float> predts, MetaInfo const& info) {
+  auto sorted_idx = common::ArgSort<size_t>(predts, std::greater<>{});
+  auto get_weight = AUCSampleWeight{info.weights_.ConstHostSpan(), common::Span<size_t>{sorted_idx}};
+
+  for (size_t i = 0; i < sorted_idx.size(); ++i) {
+    auto w = get_weight(i);
+  }
+  return 0;
+}
 
 class EvalPRAUC : public Metric {
   float Eval(const HostDeviceVector<float> &preds, const MetaInfo &info,

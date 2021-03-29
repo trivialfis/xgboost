@@ -37,6 +37,15 @@ inline void InvalidGroupAUC() {
             << rabit::GetRank() << ".  Calculating AUC value requires at "
             << "least 2 pairs of samples.";
 }
+
+struct AUCSampleWeight {
+  common::Span<float const> weights;
+  common::Span<size_t const> sorted_idx;
+
+  XGBOOST_DEVICE float operator()(size_t i) const {
+    return weights.empty() ? 1.0f : weights[sorted_idx[i]];
+  }
+};
 }      // namespace metric
 }      // namespace xgboost
 #endif  // XGBOOST_METRIC_AUC_H_
