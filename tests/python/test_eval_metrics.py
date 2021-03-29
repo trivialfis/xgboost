@@ -130,7 +130,6 @@ class TestEvalMetrics:
         from sklearn.metrics import roc_auc_score
 
         rng = np.random.RandomState(1994)
-        n_samples = n_samples
         n_features = 10
 
         X, y = make_classification(
@@ -172,7 +171,6 @@ class TestEvalMetrics:
         from sklearn.metrics import roc_auc_score
 
         rng = np.random.RandomState(1994)
-        n_samples = n_samples
         n_features = 10
         n_classes = 4
 
@@ -210,3 +208,36 @@ class TestEvalMetrics:
     @pytest.mark.parametrize("n_samples", [4, 100, 1000])
     def test_roc_auc_multi(self, n_samples):
         self.run_roc_auc_multi("hist", n_samples)
+
+    @pytest.mark.skipif(**tm.no_sklearn())
+    def test_pr_auc(self):
+        # todo: cache the model and dataset.
+        from sklearn.metrics import average_precision_score
+        from sklearn.datasets import make_classification
+
+        rng = np.random.RandomState(1994)
+        n_features = 10
+        n_samples = 1000
+
+        X, y = make_classification(
+            n_samples,
+            n_features,
+            n_informative=n_features,
+            n_redundant=0,
+            random_state=rng
+        )
+        Xy = xgb.DMatrix(X, y)
+        booster = xgb.train(
+            {
+                "tree_method": "hist",
+                "eval_metric": "aucpr",
+                "objective": "binary:logistic",
+            },
+            Xy,
+            num_boost_round=8,
+        )
+
+        proba = booster.predict(xgb.DMatrix(X))
+        skl_auc = average_precision_score(y, proba)
+        xgb_auc = float(booster.eval(Xy).split(":")[1])
+        np.testing.assert_allclose(skl_auc, xgb_auc, rtol=1e-6)
