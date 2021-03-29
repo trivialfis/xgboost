@@ -240,4 +240,5 @@ class TestEvalMetrics:
         proba = booster.predict(xgb.DMatrix(X))
         skl_auc = average_precision_score(y, proba)
         xgb_auc = float(booster.eval(Xy).split(":")[1])
+        # https://stats.stackexchange.com/a/260657
         np.testing.assert_allclose(skl_auc, xgb_auc, rtol=1e-6)
