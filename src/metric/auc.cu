@@ -74,7 +74,7 @@ struct DeviceAUCCache {
  *
  * - Run scan to obtain TP/FP values, which are right coordinates of trapesoid.
  * - Find distinct prediction values and get the corresponding FP_PREV/TP_PREV value,
- *   which are left coordinates of trapesoid.
+ *   which are left coordinates of trapesoids.
  * - Reduce the scan array into 1 AUC value.
  */
 std::tuple<float, float, float>
