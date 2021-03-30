@@ -415,36 +415,55 @@ inline void ThrowOOMError(std::string const& err, size_t bytes) {
 }
 
 /**
- * \brief Default memory allocator, uses cudaMalloc/Free and logs allocations if verbose.
+ * \brief Default memory allocator, uses cudaMalloc/free and logs allocations if verbose.
  */
 template <class T>
 struct XGBDefaultDeviceAllocatorImpl : XGBBaseDeviceAllocator<T> {
   using SuperT = XGBBaseDeviceAllocator<T>;
   using pointer = thrust::device_ptr<T>;  // NOLINT
+
   template<typename U>
   struct rebind  // NOLINT
   {
     using other = XGBDefaultDeviceAllocatorImpl<U>;  // NOLINT
   };
+
   pointer allocate(size_t n) {  // NOLINT
     pointer ptr;
-    try {
-      ptr = SuperT::allocate(n);
-      dh::safe_cuda(cudaGetLastError());
-    } catch (const std::exception &e) {
-      ThrowOOMError(e.what(), n * sizeof(T));
+    if (use_thrust_allocator_) {
+      try {
+        ptr = thrust::device_malloc_allocator<T>::allocate(n);
+        dh::safe_cuda(cudaGetLastError());
+      } catch (const std::exception &e) {
+        ThrowOOMError(e.what(), n * sizeof(T));
+      }
+    } else {
+      try {
+        ptr = SuperT::allocate(n);
+        dh::safe_cuda(cudaGetLastError());
+      } catch (std::exception const &e) {
+        ThrowOOMError(e.what(), n * sizeof(T));
+      }
     }
     GlobalMemoryLogger().RegisterAllocation(ptr.get(), n * sizeof(T));
     return ptr;
   }
   void deallocate(pointer ptr, size_t n) {  // NOLINT
+    if (use_thrust_allocator_) {
+      thrust::device_malloc_allocator<T>::deallocate(ptr, n);
+    } else {
+      SuperT::deallocate(ptr, n);
+    }
     GlobalMemoryLogger().RegisterDeallocation(ptr.get(), n * sizeof(T));
-    SuperT::deallocate(ptr, n);
   }
 #if defined(XGBOOST_USE_RMM) && XGBOOST_USE_RMM == 1
   XGBDefaultDeviceAllocatorImpl()
-    : SuperT(rmm::cuda_stream_default, rmm::mr::get_current_device_resource()) {}
+    : SuperT(rmm::cuda_stream_default, rmm::mr::get_current_device_resource()),
+      use_thrust_allocator_(!xgboost::GlobalConfigThreadLocalStore::Get()->use_rmm) {}
 #endif  // defined(XGBOOST_USE_RMM) && XGBOOST_USE_RMM == 1
+
+ private:
+  bool use_thrust_allocator_{true};
 };
 
 /**

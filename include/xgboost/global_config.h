@@ -7,6 +7,7 @@
 #ifndef XGBOOST_GLOBAL_CONFIG_H_
 #define XGBOOST_GLOBAL_CONFIG_H_
 
+#include <dmlc/thread_local.h>
 #include <xgboost/parameter.h>
 #include <vector>
 #include <string>
