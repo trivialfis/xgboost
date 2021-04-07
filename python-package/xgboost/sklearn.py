@@ -1015,7 +1015,7 @@ def _cls_validate_objective(objective: Union[str, Callable]):
         and objective != "binary:logistic"
         and not callable(objective)
     ):
-        raise ValueError("Objective not supported by `predict_proba`")
+        raise ValueError("Objective not supported by prediction")
 
 
 PredtT = TypeVar("PredtT")
