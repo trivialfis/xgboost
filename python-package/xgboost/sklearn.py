@@ -1004,10 +1004,27 @@ class XGBModel(XGBModelBase):
         return np.array(json.loads(b.get_dump(dump_format='json')[0])['bias'])
 
 
+def _cls_validate_objective(objective: Union[str, Callable]):
+    # custom obj:      Do nothing as we don't know what to do.
+    # multi:softprob:  Do nothing, output is proba.
+    # binary:logistic: Expand the prob vector into 2-class matrix after predict.
+    # multi:softmax:   Unsupported by predict_proba()
+    # binary:logitraw: Unsupported by predict_proba()
+    if (
+        objective != "multi:softprob"
+        and objective != "binary:logistic"
+        and not callable(objective)
+    ):
+        raise ValueError("Objective not supported by `predict_proba`")
+
+
 PredtT = TypeVar("PredtT")
 
 
-def _cls_predict_proba(n_classes: int, prediction: PredtT, vstack: Callable) -> PredtT:
+def _cls_predict_proba(
+    objective, n_classes: int, prediction: PredtT, vstack: Callable
+) -> PredtT:
+    _cls_validate_objective(objective)
     assert len(prediction.shape) <= 2
     if len(prediction.shape) == 2 and prediction.shape[1] == n_classes:
         return prediction
@@ -1182,6 +1199,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         base_margin=None,
         iteration_range: Optional[Tuple[int, int]] = None,
     ):
+        _cls_validate_objective(self.objective)
         class_probs = super().predict(
             X=X,
             output_margin=output_margin,
@@ -1241,14 +1259,8 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
             a numpy array of shape array-like of shape (n_samples, n_classes) with the
             probability of each data example being of a given class.
         """
-        # custom obj:      Do nothing as we don't know what to do.
-        # softprob:        Do nothing, output is proba.
-        # softmax:         Use output margin to remove the argmax in PredTransform.
-        # binary:logistic: Expand the prob vector into 2-class matrix after predict.
-        # binary:logitraw: Unsupported by predict_proba()
         class_probs = super().predict(
             X=X,
-            output_margin=self.objective == "multi:softmax",
             ntree_limit=ntree_limit,
             validate_features=validate_features,
             base_margin=base_margin,
@@ -1256,7 +1268,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         )
         # If model is loaded from a raw booster there's no `n_classes_`
         return _cls_predict_proba(
-            getattr(self, "n_classes_", None), class_probs, np.vstack
+            self.objective, getattr(self, "n_classes_", None), class_probs, np.vstack
         )
 
     def evals_result(self):

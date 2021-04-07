@@ -45,7 +45,7 @@ from .sklearn import XGBModel, XGBClassifier, XGBRegressorBase, XGBClassifierBas
 from .sklearn import _wrap_evaluation_matrices, _objective_decorator
 from .sklearn import XGBRankerMixIn
 from .sklearn import xgboost_model_doc
-from .sklearn import _cls_predict_proba
+from .sklearn import _cls_predict_proba, _cls_validate_objective
 from .sklearn import XGBRanker
 
 
@@ -1793,7 +1793,6 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
     ) -> _DaskCollection:
         predts = await super()._predict_async(
             data=X,
-            output_margin=self.objective == "multi:softmax",
             validate_features=validate_features,
             base_margin=base_margin,
             iteration_range=iteration_range,
@@ -1801,7 +1800,9 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         vstack = update_wrapper(
             partial(da.vstack, allow_unknown_chunksizes=True), da.vstack
         )
-        return _cls_predict_proba(getattr(self, "n_classes_", None), predts, vstack)
+        return _cls_predict_proba(
+            self.objective, getattr(self, "n_classes_", None), predts, vstack
+        )
 
     # pylint: disable=missing-function-docstring
     def predict_proba(
@@ -1833,6 +1834,7 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         base_margin: Optional[_DaskCollection],
         iteration_range: Optional[Tuple[int, int]],
     ) -> _DaskCollection:
+        _cls_validate_objective(self.objective)
         pred_probs = await super()._predict_async(
             data, output_margin, validate_features, base_margin, iteration_range
         )
