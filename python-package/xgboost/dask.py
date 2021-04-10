@@ -265,10 +265,6 @@ class DaskDMatrix:
             raise NotImplementedError(
                 "group structure is not implemented, use qid instead."
             )
-        if enable_categorical:
-            raise NotImplementedError(
-                "categorical support is not enabled on `DaskDMatrix`."
-            )
 
         if len(data.shape) != 2:
             raise ValueError(

@@ -595,6 +595,8 @@ void SketchContainer::AllReduce() {
   }
 
   *this = std::move(new_sketch);
+
+  this->Unique();
   timer_.Stop(__func__);
 }
 
