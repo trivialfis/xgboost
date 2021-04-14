@@ -311,6 +311,29 @@ def _prediction_output(shape, dims, predts, is_cuda):
     return arr_predict
 
 
+def _slice2tuple(val: Union[int, tuple, slice]):
+    if isinstance(val, int):
+        val = slice(val, val+1)
+    if isinstance(val, tuple):
+        raise ValueError('Only supports slicing through 1 dimension.')
+    if not isinstance(val, slice):
+        msg = _expect((int, slice), type(val))
+        raise TypeError(msg)
+    if isinstance(val.start, type(Ellipsis)) or val.start is None:
+        start = 0
+    else:
+        start = val.start
+    if isinstance(val.stop, type(Ellipsis)) or val.stop is None:
+        stop = 0
+    else:
+        stop = val.stop
+        if stop < start:
+            raise ValueError('Invalid slice', val)
+
+    step = val.step if val.step is not None else 1
+    return start, stop, step
+
+
 class DataIter:
     '''The interface for user defined data iterator. Currently is only supported by Device
     DMatrix.
@@ -1183,6 +1206,12 @@ class Booster(object):
         model_file : string/os.PathLike/Booster/bytearray
             Path to the model file if it's string or PathLike.
         """
+        if isinstance(model_file, ctypes.c_void_p):
+            self.handle = model_file
+            assert params is None, "Do not construct Booster with c handle."
+            assert not cache, "Do not construct Booster with c handle."
+            return
+
         for d in cache:
             if not isinstance(d, DMatrix):
                 raise TypeError('invalid cache item: {}'.format(type(d).__name__), cache)
@@ -1195,12 +1224,12 @@ class Booster(object):
             # Validate feature only after the feature names are saved into booster.
             self._validate_features(d)
 
+        if isinstance(params, list):
+            params = {k: v for k, v in params}
         params = params or {}
         params = self._configure_metrics(params.copy())
         params = self._configure_constraints(params)
-        if isinstance(params, list):
-            params.append(('validate_parameters', True))
-        else:
+        if "validate_parameters" not in params.keys():
             params['validate_parameters'] = True
 
         self.set_param(params or {})
@@ -1208,6 +1237,7 @@ class Booster(object):
             self.booster = params['booster']
         else:
             self.booster = 'gbtree'
+
         if isinstance(model_file, Booster):
             assert self.handle is not None
             # We use the pickle interface for getting memory snapshot from
@@ -1227,7 +1257,7 @@ class Booster(object):
         else:
             raise TypeError('Unknown type:', model_file)
 
-    def _configure_metrics(self, params: Union[Dict, List]) -> Union[Dict, List]:
+    def _configure_metrics(self, params: Dict) -> Dict:
         if isinstance(params, dict) and 'eval_metric' in params \
            and isinstance(params['eval_metric'], list):
             params = dict((k, v) for k, v in params.items())
@@ -1338,26 +1368,7 @@ class Booster(object):
         self.__dict__.update(state)
 
     def __getitem__(self, val):
-        if isinstance(val, int):
-            val = slice(val, val+1)
-        if isinstance(val, tuple):
-            raise ValueError('Only supports slicing through 1 dimension.')
-        if not isinstance(val, slice):
-            msg = _expect((int, slice), type(val))
-            raise TypeError(msg)
-        if isinstance(val.start, type(Ellipsis)) or val.start is None:
-            start = 0
-        else:
-            start = val.start
-        if isinstance(val.stop, type(Ellipsis)) or val.stop is None:
-            stop = 0
-        else:
-            stop = val.stop
-            if stop < start:
-                raise ValueError('Invalid slice', val)
-
-        step = val.step if val.step is not None else 1
-
+        start, stop, step = _slice2tuple(val)
         start = ctypes.c_int(start)
         stop = ctypes.c_int(stop)
         step = ctypes.c_int(step)
@@ -1369,9 +1380,7 @@ class Booster(object):
             raise IndexError('Layer index out of range')
         _check_call(status)
 
-        sliced = Booster()
-        _check_call(_LIB.XGBoosterFree(sliced.handle))
-        sliced.handle = sliced_handle
+        sliced = Booster(model_file=sliced_handle)
         return sliced
 
     def save_config(self):
@@ -1770,6 +1779,8 @@ class Booster(object):
             raise TypeError('Expecting data to be a DMatrix object, got: ', type(data))
         if validate_features:
             self._validate_features(data)
+        if iteration_range is not None and not isinstance(iteration_range, tuple):
+            iteration_range = _slice2tuple(iteration_range)
         iteration_range = _convert_ntree_limit(self, ntree_limit, iteration_range)
         args = {
             "type": 0,
@@ -1878,6 +1889,12 @@ class Booster(object):
                 data = data.values
         except ImportError:
             pass
+        if iteration_range is not None and not isinstance(iteration_range, tuple):
+            iteration_range = _slice2tuple(iteration_range)
+            msg = "For slice with step greater than 1, use model slicing instead."
+            assert iteration_range[2] == 1, msg
+            iteration_range = iteration_range[0: 2]
+
         args = {
             "type": 0,
             "training": False,
