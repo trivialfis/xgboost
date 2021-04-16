@@ -9,7 +9,7 @@ from typing import Union, Optional, List, Dict, Callable, Tuple, Any, TypeVar, T
 import numpy as np
 
 from .core import Booster, DMatrix, XGBoostError
-from .core import _deprecate_positional_args, _convert_ntree_limit
+from .core import _deprecate_positional_args, _convert_ntree_limit, _slice2tuple
 from .core import Metric
 from .training import train
 from .callback import TrainingCallback
@@ -773,8 +773,9 @@ class XGBModel(XGBModelBase):
         return False
 
     def _get_iteration_range(
-        self, iteration_range: Optional[Tuple[int, int]]
+        self, iteration_range: Optional[Union[Tuple[int, int], slice, range]]
     ) -> Tuple[int, int]:
+        iteration_range = _slice2tuple(iteration_range)
         if (iteration_range is None or iteration_range[1] == 0):
             # Use best_iteration if defined.
             try:
@@ -792,7 +793,7 @@ class XGBModel(XGBModelBase):
         ntree_limit: Optional[int] = None,
         validate_features: bool = True,
         base_margin: Optional[array_like] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> np.ndarray:
         """Predict with `X`.  If the model is trained with early stopping, then `best_iteration`
         is used automatically.
@@ -859,7 +860,7 @@ class XGBModel(XGBModelBase):
     def apply(
         self, X: array_like,
         ntree_limit: int = 0,
-        iteration_range: Optional[Tuple[int, int]] = None
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None
     ) -> np.ndarray:
         """Return the predicted leaf every tree for each sample. If the model is trained with
         early stopping, then `best_iteration` is used automatically.
@@ -1235,7 +1236,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         ntree_limit: Optional[int] = None,
         validate_features: bool = True,
         base_margin: Optional[array_like] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> np.ndarray:
         class_probs = super().predict(
             X=X,
@@ -1267,7 +1268,7 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         ntree_limit: Optional[int] = None,
         validate_features: bool = False,
         base_margin: Optional[array_like] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> np.ndarray:
         """ Predict the probability of each `X` example being of a given class.
 

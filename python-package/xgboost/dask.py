@@ -1102,7 +1102,7 @@ async def _predict_async(
     approx_contribs: bool,
     pred_interactions: bool,
     validate_features: bool,
-    iteration_range: Tuple[int, int],
+    iteration_range: Optional[Union[Tuple[int, int], slice, range]],
     strict_shape: bool,
 ) -> _DaskCollection:
     _booster = await _get_model_future(client, model)
@@ -1250,7 +1250,7 @@ def predict(                    # pylint: disable=unused-argument
     approx_contribs: bool = False,
     pred_interactions: bool = False,
     validate_features: bool = True,
-    iteration_range: Tuple[int, int] = (0, 0),
+    iteration_range: Optional[Union[Tuple[int, int], slice, range]] = (0, 0),
     strict_shape: bool = False,
 ) -> Any:
     '''Run prediction with a trained booster.
@@ -1298,7 +1298,7 @@ async def _inplace_predict_async(  # pylint: disable=too-many-branches
     global_config: Dict[str, Any],
     model: Union[Booster, Dict, "distributed.Future"],
     data: _DaskCollection,
-    iteration_range: Tuple[int, int],
+    iteration_range: Optional[Union[Tuple[int, int], slice, range]],
     predict_type: str,
     missing: float,
     validate_features: bool,
@@ -1360,7 +1360,7 @@ def inplace_predict(  # pylint: disable=unused-argument
     client: "distributed.Client",
     model: Union[TrainReturnT, Booster, "distributed.Future"],
     data: _DaskCollection,
-    iteration_range: Tuple[int, int] = (0, 0),
+    iteration_range: Optional[Union[Tuple[int, int], slice, range]] = (0, 0),
     predict_type: str = "value",
     missing: float = numpy.nan,
     validate_features: bool = True,
@@ -1463,7 +1463,7 @@ class DaskScikitLearnBase(XGBModel):
         output_margin: bool,
         validate_features: bool,
         base_margin: Optional[_DaskCollection],
-        iteration_range: Optional[Tuple[int, int]],
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]],
     ) -> Any:
         iteration_range = self._get_iteration_range(iteration_range)
         if self._can_use_inplace_predict():
@@ -1500,7 +1500,7 @@ class DaskScikitLearnBase(XGBModel):
         ntree_limit: Optional[int] = None,
         validate_features: bool = True,
         base_margin: Optional[_DaskCollection] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> Any:
         _assert_dask_support()
         msg = "`ntree_limit` is not supported on dask, use `iteration_range` instead."
@@ -1534,7 +1534,7 @@ class DaskScikitLearnBase(XGBModel):
         self,
         X: _DaskCollection,
         ntree_limit: Optional[int] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> Any:
         _assert_dask_support()
         msg = "`ntree_limit` is not supported on dask, use `iteration_range` instead."
@@ -1790,7 +1790,7 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         X: _DaskCollection,
         validate_features: bool,
         base_margin: Optional[_DaskCollection],
-        iteration_range: Optional[Tuple[int, int]],
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]],
     ) -> _DaskCollection:
         predts = await super()._predict_async(
             data=X,
@@ -1811,7 +1811,7 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         ntree_limit: Optional[int] = None,
         validate_features: bool = True,
         base_margin: Optional[_DaskCollection] = None,
-        iteration_range: Optional[Tuple[int, int]] = None,
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]] = None,
     ) -> Any:
         _assert_dask_support()
         msg = "`ntree_limit` is not supported on dask, use `iteration_range` instead."
@@ -1832,7 +1832,7 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         output_margin: bool,
         validate_features: bool,
         base_margin: Optional[_DaskCollection],
-        iteration_range: Optional[Tuple[int, int]],
+        iteration_range: Optional[Union[Tuple[int, int], slice, range]],
     ) -> _DaskCollection:
         pred_probs = await super()._predict_async(
             data, output_margin, validate_features, base_margin, iteration_range

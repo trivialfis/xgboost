@@ -43,6 +43,23 @@ def test_binary_classification():
             assert err < 0.1
 
 
+def test_prediction():
+    from sklearn.datasets import load_digits
+    X, y = load_digits(return_X_y=True)
+    clf = xgb.XGBClassifier(use_label_encoder=False, tree_method="hist", n_estimators=10)
+    clf.fit(X, y)
+    from_clf = clf.predict_proba(X, iteration_range=(1, 3))
+    booster = clf.get_booster()
+    from_bst = booster.predict(xgb.DMatrix(X), iteration_range=range(1, 3))
+    np.testing.assert_allclose(from_bst, from_clf)
+    from_bst = booster.predict(xgb.DMatrix(X), iteration_range=slice(1, 3))
+    np.testing.assert_allclose(from_bst, from_clf)
+    from_bst = booster.predict(xgb.DMatrix(X), iteration_range=(1, 3))
+    np.testing.assert_allclose(from_bst, from_clf)
+    from_bst = booster[1: 3].predict(xgb.DMatrix(X))
+    np.testing.assert_allclose(from_bst, from_clf)
+
+
 def test_multiclass_classification():
     from sklearn.datasets import load_iris
     from sklearn.model_selection import KFold

@@ -311,14 +311,18 @@ def _prediction_output(shape, dims, predts, is_cuda):
     return arr_predict
 
 
-def _slice2tuple(val: Union[int, tuple, slice]):
+def _slice2tuple(val: Union[int, range, tuple, slice]) -> Tuple[int, int, int]:
+    """Convert Python slice into 3-tuple."""
     if isinstance(val, int):
         val = slice(val, val+1)
     if isinstance(val, tuple):
         raise ValueError('Only supports slicing through 1 dimension.')
+    if isinstance(val, range):
+        val = slice(val.start, val.stop, val.step)
     if not isinstance(val, slice):
         msg = _expect((int, slice), type(val))
         raise TypeError(msg)
+
     if isinstance(val.start, type(Ellipsis)) or val.start is None:
         start = 0
     else:
@@ -1689,7 +1693,7 @@ class Booster(object):
         pred_interactions: bool = False,
         validate_features: bool = True,
         training: bool = False,
-        iteration_range: Tuple[int, int] = (0, 0),
+        iteration_range: Union[Tuple[int, int], slice, range] = (0, 0),
         strict_shape: bool = False,
     ) -> np.ndarray:
         """Predict with data.  The full model will be used unless `iteration_range` is specified,
@@ -1780,7 +1784,12 @@ class Booster(object):
         if validate_features:
             self._validate_features(data)
         if iteration_range is not None and not isinstance(iteration_range, tuple):
-            iteration_range = _slice2tuple(iteration_range)
+            start, stop, step = _slice2tuple(iteration_range)
+            msg = "Prediction doesn't support stepping, use model slice instead."
+            assert step == 1, msg
+            iteration_range = (start, stop)
+        assert len(iteration_range) == 2
+
         iteration_range = _convert_ntree_limit(self, ntree_limit, iteration_range)
         args = {
             "type": 0,
@@ -1890,10 +1899,11 @@ class Booster(object):
         except ImportError:
             pass
         if iteration_range is not None and not isinstance(iteration_range, tuple):
-            iteration_range = _slice2tuple(iteration_range)
-            msg = "For slice with step greater than 1, use model slicing instead."
-            assert iteration_range[2] == 1, msg
-            iteration_range = iteration_range[0: 2]
+            start, stop, step = _slice2tuple(iteration_range)
+            msg = "Prediction doesn't support stepping, use model slice instead."
+            assert step == 1, msg
+            iteration_range = (start, stop)
+        assert len(iteration_range) == 2
 
         args = {
             "type": 0,
