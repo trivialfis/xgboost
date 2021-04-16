@@ -1418,17 +1418,6 @@ def inplace_predict(  # pylint: disable=unused-argument
     )
 
 
-def dispatch_train_dmatrix(
-    client: "distributed.Client", tree_method: Optional[str], **kwargs
-) -> DaskDMatrix:
-    if tree_method == "gpu_hist":
-        try:
-            return DaskDeviceQuantileDMatrix(client=client, **kwargs)
-        except TypeError:
-            pass
-    return DaskDMatrix(client=client)
-
-
 async def _async_wrap_evaluation_matrices(
     client: "distributed.Client", tree_method: Optional[str], **kwargs: Any
 ) -> Tuple[DaskDMatrix, Optional[List[Tuple[DaskDMatrix, str]]]]:
@@ -1438,10 +1427,16 @@ async def _async_wrap_evaluation_matrices(
         m = DaskDMatrix(client=client, **kwargs)
         return m
 
+    def _dispatch_train(**kwargs: Any) -> DaskDMatrix:
+        if tree_method == "gpu_hist":
+            try:
+                return DaskDeviceQuantileDMatrix(client=client, **kwargs)
+            except TypeError:
+                pass
+        return DaskDMatrix(client=client)
+
     train_dmatrix, evals = _wrap_evaluation_matrices(
-        create_train_dmatrix=lambda **kwargs: dispatch_train_dmatrix(
-            client, tree_method, **kwargs
-        ),
+        create_train_dmatrix=_dispatch_train,
         create_valid_dmatrix=_inner, **kwargs
     )
     train_dmatrix = await train_dmatrix

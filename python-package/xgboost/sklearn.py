@@ -8,7 +8,7 @@ import os
 from typing import Union, Optional, List, Dict, Callable, Tuple, Any, TypeVar, Type
 import numpy as np
 
-from .core import Booster, DMatrix, XGBoostError
+from .core import Booster, DMatrix, XGBoostError, DeviceQuantileDMatrix
 from .core import _deprecate_positional_args, _convert_ntree_limit
 from .core import Metric
 from .training import train
