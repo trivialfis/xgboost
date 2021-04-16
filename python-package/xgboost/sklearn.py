@@ -242,27 +242,37 @@ Parameters
     return adddoc
 
 
+def dispatch_train_dmatrix(tree_method, n_jobs, **kwargs):
+    if tree_method == "gpu_hist":
+        try:
+            return DeviceQuantileDMatrix(**kwargs)
+        except TypeError:
+            pass
+    return DMatrix(nthread=n_jobs)
+
+
 def _wrap_evaluation_matrices(
     missing: float,
-    X: Any,
-    y: Any,
-    group: Optional[Any],
-    qid: Optional[Any],
-    sample_weight: Optional[Any],
-    base_margin: Optional[Any],
-    feature_weights: Optional[Any],
-    eval_set: Optional[List[Tuple[Any, Any]]],
-    sample_weight_eval_set: Optional[List[Any]],
-    base_margin_eval_set: Optional[List[Any]],
-    eval_group: Optional[List[Any]],
-    eval_qid: Optional[List[Any]],
-    create_dmatrix: Callable,
+    X: array_like,
+    y: array_like,
+    group: Optional[array_like],
+    qid: Optional[array_like],
+    sample_weight: Optional[array_like],
+    base_margin: Optional[array_like],
+    feature_weights: Optional[array_like],
+    eval_set: Optional[List[Tuple[array_like, array_like]]],
+    sample_weight_eval_set: Optional[List[array_like]],
+    base_margin_eval_set: Optional[List[array_like]],
+    eval_group: Optional[List[array_like]],
+    eval_qid: Optional[List[array_like]],
+    create_train_dmatrix: Callable,
+    create_valid_dmatrix: Callable,
     label_transform: Callable = lambda x: x,
 ) -> Tuple[Any, Optional[List[Tuple[Any, str]]]]:
     """Convert array_like evaluation matrices into DMatrix.  Perform validation on the way.
 
     """
-    train_dmatrix = create_dmatrix(
+    train_dmatrix = create_train_dmatrix(
         data=X,
         label=label_transform(y),
         group=group,
@@ -309,7 +319,7 @@ def _wrap_evaluation_matrices(
             ):
                 evals.append(train_dmatrix)
             else:
-                m = create_dmatrix(
+                m = create_valid_dmatrix(
                     data=valid_X,
                     label=label_transform(valid_y),
                     weight=sample_weight_eval_set[i],
@@ -732,7 +742,10 @@ class XGBModel(XGBModelBase):
             base_margin_eval_set=base_margin_eval_set,
             eval_group=None,
             eval_qid=None,
-            create_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
+            create_train_dmatrix=lambda **kwargs: dispatch_train_dmatrix(
+                self.tree_method, self.n_jobs, **kwargs
+            ),
+            create_valid_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
         )
         params = self.get_xgb_params()
 
@@ -1199,7 +1212,10 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
             base_margin_eval_set=base_margin_eval_set,
             eval_group=None,
             eval_qid=None,
-            create_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
+            create_train_dmatrix=lambda **kwargs: dispatch_train_dmatrix(
+                self.tree_method, self.n_jobs, **kwargs
+            ),
+            create_valid_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
             label_transform=label_transform,
         )
 
@@ -1625,7 +1641,10 @@ class XGBRanker(XGBModel, XGBRankerMixIn):
             base_margin_eval_set=base_margin_eval_set,
             eval_group=eval_group,
             eval_qid=eval_qid,
-            create_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
+            create_train_dmatrix=lambda **kwargs: dispatch_train_dmatrix(
+                self.tree_method, self.n_jobs, **kwargs
+            ),
+            create_valid_dmatrix=lambda **kwargs: DMatrix(nthread=self.n_jobs, **kwargs),
         )
 
         evals_result: TrainingCallback.EvalsLog = {}

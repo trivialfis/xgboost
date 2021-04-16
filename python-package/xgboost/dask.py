@@ -1418,8 +1418,19 @@ def inplace_predict(  # pylint: disable=unused-argument
     )
 
 
+def dispatch_train_dmatrix(
+    client: "distributed.Client", tree_method: Optional[str], **kwargs
+) -> DaskDMatrix:
+    if tree_method == "gpu_hist":
+        try:
+            return DaskDeviceQuantileDMatrix(client=client, **kwargs)
+        except TypeError:
+            pass
+    return DaskDMatrix(client=client)
+
+
 async def _async_wrap_evaluation_matrices(
-    client: "distributed.Client", **kwargs: Any
+    client: "distributed.Client", tree_method: Optional[str], **kwargs: Any
 ) -> Tuple[DaskDMatrix, Optional[List[Tuple[DaskDMatrix, str]]]]:
     """A switch function for async environment."""
 
@@ -1427,7 +1438,12 @@ async def _async_wrap_evaluation_matrices(
         m = DaskDMatrix(client=client, **kwargs)
         return m
 
-    train_dmatrix, evals = _wrap_evaluation_matrices(create_dmatrix=_inner, **kwargs)
+    train_dmatrix, evals = _wrap_evaluation_matrices(
+        create_train_dmatrix=lambda **kwargs: dispatch_train_dmatrix(
+            client, tree_method, **kwargs
+        ),
+        create_valid_dmatrix=_inner, **kwargs
+    )
     train_dmatrix = await train_dmatrix
     if evals is None:
         return train_dmatrix, evals
@@ -1618,6 +1634,7 @@ class DaskXGBRegressor(DaskScikitLearnBase, XGBRegressorBase):
         params = self.get_xgb_params()
         dtrain, evals = await _async_wrap_evaluation_matrices(
             client=self.client,
+            tree_method=self.tree_method,
             X=X,
             y=y,
             group=None,
@@ -1706,6 +1723,7 @@ class DaskXGBClassifier(DaskScikitLearnBase, XGBClassifierBase):
         params = self.get_xgb_params()
         dtrain, evals = await _async_wrap_evaluation_matrices(
             self.client,
+            tree_method=self.tree_method,
             X=X,
             y=y,
             group=None,
@@ -1903,6 +1921,7 @@ class DaskXGBRanker(DaskScikitLearnBase, XGBRankerMixIn):
         params = self.get_xgb_params()
         dtrain, evals = await _async_wrap_evaluation_matrices(
             self.client,
+            tree_method=self.tree_method,
             X=X,
             y=y,
             group=None,
