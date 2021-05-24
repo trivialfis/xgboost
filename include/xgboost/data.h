@@ -13,6 +13,7 @@
 #include <xgboost/base.h>
 #include <xgboost/span.h>
 #include <xgboost/host_device_vector.h>
+#include <xgboost/generic_parameters.h>
 
 #include <memory>
 #include <numeric>
@@ -286,7 +287,7 @@ class SparsePage {
     base_rowid = row_id;
   }
 
-  SparsePage GetTranspose(int num_columns) const;
+  SparsePage GetTranspose(int num_columns, int n_threads) const;
 
   void SortRows() {
     auto ncol = static_cast<bst_omp_uint>(this->Size());
@@ -469,7 +470,7 @@ class DMatrix {
    * \brief Gets batches. Use range based for loop over BatchSet to access individual batches.
    */
   template<typename T>
-  BatchSet<T> GetBatches(const BatchParam& param = {});
+  BatchSet<T> GetBatches(GenericParameter const* ctx, const BatchParam& param = {});
   template <typename T>
   bool PageExists() const;
 
@@ -550,16 +551,18 @@ class DMatrix {
 
  protected:
   virtual BatchSet<SparsePage> GetRowBatches() = 0;
-  virtual BatchSet<CSCPage> GetColumnBatches() = 0;
-  virtual BatchSet<SortedCSCPage> GetSortedColumnBatches() = 0;
-  virtual BatchSet<EllpackPage> GetEllpackBatches(const BatchParam& param) = 0;
+  virtual BatchSet<CSCPage> GetColumnBatches(GenericParameter const* ctx) = 0;
+  virtual BatchSet<SortedCSCPage> GetSortedColumnBatches(GenericParameter const* ctx) = 0;
+  virtual BatchSet<EllpackPage> GetEllpackBatches(GenericParameter const *ctx,
+                                                  const BatchParam &param) = 0;
 
   virtual bool EllpackExists() const = 0;
   virtual bool SparsePageExists() const = 0;
 };
 
-template<>
-inline BatchSet<SparsePage> DMatrix::GetBatches(const BatchParam&) {
+template <>
+inline BatchSet<SparsePage> DMatrix::GetBatches(GenericParameter const *ctx,
+                                                const BatchParam &) {
   return GetRowBatches();
 }
 
@@ -573,19 +576,22 @@ inline bool DMatrix::PageExists<SparsePage>() const {
   return this->SparsePageExists();
 }
 
-template<>
-inline BatchSet<CSCPage> DMatrix::GetBatches(const BatchParam&) {
-  return GetColumnBatches();
+template <>
+inline BatchSet<CSCPage> DMatrix::GetBatches(GenericParameter const *ctx,
+                                             const BatchParam &) {
+  return GetColumnBatches(ctx);
 }
 
 template<>
-inline BatchSet<SortedCSCPage> DMatrix::GetBatches(const BatchParam&) {
-  return GetSortedColumnBatches();
+inline BatchSet<SortedCSCPage> DMatrix::GetBatches(GenericParameter const *ctx,
+                                                   const BatchParam&) {
+  return GetSortedColumnBatches(ctx);
 }
 
 template<>
-inline BatchSet<EllpackPage> DMatrix::GetBatches(const BatchParam& param) {
-  return GetEllpackBatches(param);
+inline BatchSet<EllpackPage> DMatrix::GetBatches(GenericParameter const *ctx,
+                                                 const BatchParam& param) {
+  return GetEllpackBatches(ctx, param);
 }
 }  // namespace xgboost
 

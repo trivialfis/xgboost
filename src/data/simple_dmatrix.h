@@ -9,6 +9,7 @@
 
 #include <xgboost/base.h>
 #include <xgboost/data.h>
+#include <xgboost/generic_parameters.h>
 
 #include <memory>
 #include <string>
@@ -40,9 +41,10 @@ class SimpleDMatrix : public DMatrix {
 
  private:
   BatchSet<SparsePage> GetRowBatches() override;
-  BatchSet<CSCPage> GetColumnBatches() override;
-  BatchSet<SortedCSCPage> GetSortedColumnBatches() override;
-  BatchSet<EllpackPage> GetEllpackBatches(const BatchParam& param) override;
+  BatchSet<CSCPage> GetColumnBatches(GenericParameter const* ctx) override;
+  BatchSet<SortedCSCPage> GetSortedColumnBatches(GenericParameter const* ctx) override;
+  BatchSet<EllpackPage> GetEllpackBatches(GenericParameter const *ctx,
+                                          const BatchParam &param) override;
 
   MetaInfo info_;
   SparsePage sparse_page_;  // Primary storage type

@@ -438,7 +438,7 @@ class SparsePageSource {
 
 class CSCPageSource {
  public:
-  CSCPageSource(DMatrix* src, const std::string& cache_info,
+  CSCPageSource(DMatrix *src, const std::string &cache_info, int n_threads,
                 const size_t page_size = DMatrix::kPageSize) {
     std::string page_type = ".col.page";
     cache_info_ = ParseCacheInfo(cache_info, page_type);
@@ -455,7 +455,7 @@ class CSCPageSource {
       size_t bytes_write = 0;
       double tstart = dmlc::GetTime();
       for (auto& batch : src->GetBatches<SparsePage>()) {
-        page->PushCSC(batch.GetTranspose(src->Info().num_col_));
+        page->PushCSC(batch.GetTranspose(src->Info().num_col_, n_threads));
 
         if (page->MemCostBytes() >= page_size) {
           bytes_write += page->MemCostBytes();
@@ -499,7 +499,8 @@ class CSCPageSource {
 
 class SortedCSCPageSource {
  public:
-  SortedCSCPageSource(DMatrix* src, const std::string& cache_info,
+  SortedCSCPageSource(DMatrix *src, const std::string &cache_info,
+                      int n_threads,
                       const size_t page_size = DMatrix::kPageSize) {
     std::string page_type = ".sorted.col.page";
     cache_info_ = ParseCacheInfo(cache_info, page_type);
@@ -516,7 +517,7 @@ class SortedCSCPageSource {
       size_t bytes_write = 0;
       double tstart = dmlc::GetTime();
       for (auto& batch : src->GetBatches<SparsePage>()) {
-        SparsePage tmp = batch.GetTranspose(src->Info().num_col_);
+        SparsePage tmp = batch.GetTranspose(src->Info().num_col_, n_threads);
         page->PushCSC(tmp);
         page->SortRows();
 

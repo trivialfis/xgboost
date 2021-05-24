@@ -827,7 +827,7 @@ DMatrix::Create(data::IteratorAdapter<DataIterHandle, XGBCallbackDataIterNext,
                 float missing, int nthread, const std::string &cache_prefix,
                 size_t page_size);
 
-SparsePage SparsePage::GetTranspose(int num_columns) const {
+SparsePage SparsePage::GetTranspose(int num_columns, int n_threads) const {
   SparsePage transpose;
   common::ParallelGroupBuilder<Entry, bst_row_t> builder(&transpose.offset.HostVector(),
                                                          &transpose.data.HostVector());
@@ -835,7 +835,7 @@ SparsePage SparsePage::GetTranspose(int num_columns) const {
   builder.InitBudget(num_columns, nthread);
   long batch_size = static_cast<long>(this->Size());  // NOLINT(*)
   auto page = this->GetView();
-  common::ParallelFor(batch_size, [&](long i) {  // NOLINT(*)
+  common::ParallelFor(batch_size, n_threads, [&](long i) {  // NOLINT(*)
     int tid = omp_get_thread_num();
     auto inst = page[i];
     for (const auto& entry : inst) {
@@ -843,7 +843,7 @@ SparsePage SparsePage::GetTranspose(int num_columns) const {
     }
   });
   builder.InitStorage();
-  common::ParallelFor(batch_size, [&](long i) {  // NOLINT(*)
+  common::ParallelFor(batch_size, n_threads, [&](long i) {  // NOLINT(*)
     int tid = omp_get_thread_num();
     auto inst = page[i];
     for (const auto& entry : inst) {
@@ -855,6 +855,7 @@ SparsePage SparsePage::GetTranspose(int num_columns) const {
   });
   return transpose;
 }
+
 void SparsePage::Push(const SparsePage &batch) {
   auto& data_vec = data.HostVector();
   auto& offset_vec = offset.HostVector();

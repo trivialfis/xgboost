@@ -112,8 +112,31 @@ public:
   enum { kAuto, kDynamic, kGuided, kStatic, kRuntime } sched{kAuto};
   size_t chunk{1};
 
-  OmpSched() = default;
-  explicit OmpSched(size_t chunk) : sched{kDynamic}, chunk{chunk} {}
+  static OmpSched Auto(size_t chunk) {
+    OmpSched sched;
+    return sched;
+  }
+  static OmpSched Dynamic(size_t chunk) {
+    OmpSched sched;
+    sched.sched = kDynamic;
+    sched.chunk = chunk;
+    return sched;
+  }
+  static OmpSched Guided() {
+    OmpSched sched;
+    sched.sched = kGuided;
+    return sched;
+  }
+  static OmpSched Static() {
+    OmpSched sched;
+    sched.sched = kStatic;
+    return sched;
+  }
+  static OmpSched Runtime() {
+    OmpSched sched;
+    sched.sched = kRuntime;
+    return sched;
+  }
 };
 
 // Wrapper to implement nested parallelism with simple omp parallel for
@@ -142,7 +165,7 @@ void ParallelFor2d(const BlockedSpace2d& space, int nthreads, Func func) {
 }
 
 template <typename Index, typename Func>
-void ParallelFor(Index size, size_t n_threads, OmpSched sched, Func fn) {
+void ParallelFor(Index size, size_t n_threads, OmpSched sched, Func const& fn) {
   if (n_threads <= 0) {
     n_threads = omp_get_num_procs();
   }
@@ -185,8 +208,8 @@ void ParallelFor(Index size, size_t n_threads, OmpSched sched, Func fn) {
 }
 
 template <typename Index, typename Func>
-void ParallelFor(Index size, size_t n_threads, Func fn) {
-  ParallelFor(size, n_threads, OmpSched::kStatic, fn);
+void ParallelFor(Index size, size_t n_threads, Func const& fn) {
+  ParallelFor(size, n_threads, OmpSched::Static(), fn);
 }
 
 template <typename Func>

@@ -243,7 +243,7 @@ class FeatureSelector {
   virtual void Setup(const gbm::GBLinearModel &,
                      const std::vector<GradientPair> &,
                      DMatrix *,
-                     float , float , int ) {}
+                     float , float , int, GenericParameter const*) {};
   /**
    * \brief Select next coordinate to update.
    *
@@ -284,7 +284,7 @@ class ShuffleFeatureSelector : public FeatureSelector {
  public:
   void Setup(const gbm::GBLinearModel &model,
              const std::vector<GradientPair>&,
-             DMatrix *, float, float, int) override {
+             DMatrix *, float, float, int, GenericParameter const*) override {
     if (feat_index_.size() == 0) {
       feat_index_.resize(model.learner_model_param->num_feature);
       std::iota(feat_index_.begin(), feat_index_.end(), 0);
@@ -325,10 +325,12 @@ class RandomFeatureSelector : public FeatureSelector {
  * O(num_feature*top_k).
  */
 class GreedyFeatureSelector : public FeatureSelector {
+  GenericParameter const* ctx_;
+
  public:
   void Setup(const gbm::GBLinearModel &model,
              const std::vector<GradientPair> &,
-             DMatrix *, float, float, int param) override {
+             DMatrix *, float, float, int param, GenericParameter const* ctx) override {
     top_k_ = static_cast<bst_uint>(param);
     const bst_uint ngroup = model.learner_model_param->num_output_group;
     if (param <= 0) top_k_ = std::numeric_limits<bst_uint>::max();
@@ -339,6 +341,7 @@ class GreedyFeatureSelector : public FeatureSelector {
     for (bst_uint gid = 0u; gid < ngroup; ++gid) {
       counter_[gid] = 0u;
     }
+    ctx_ = ctx;
   }
 
   int NextFeature(int, const gbm::GBLinearModel &model,
@@ -355,7 +358,7 @@ class GreedyFeatureSelector : public FeatureSelector {
     std::fill(gpair_sums_.begin(), gpair_sums_.end(), std::make_pair(0., 0.));
     for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
       auto page = batch.GetView();
-      common::ParallelFor(nfeat, [&](bst_omp_uint i) {
+      common::ParallelFor(nfeat, ctx_->nthread, [&](bst_omp_uint i) {
         const auto col = page[i];
         const bst_uint ndata = col.size();
         auto &sums = gpair_sums_[group_idx * nfeat + i];
@@ -403,8 +406,9 @@ class GreedyFeatureSelector : public FeatureSelector {
 class ThriftyFeatureSelector : public FeatureSelector {
  public:
   void Setup(const gbm::GBLinearModel &model,
-             const std::vector<GradientPair> &gpair,
-             DMatrix *p_fmat, float alpha, float lambda, int param) override {
+             const std::vector<GradientPair> &gpair, DMatrix *p_fmat,
+             float alpha, float lambda, int param,
+             GenericParameter const *ctx) override {
     top_k_ = static_cast<bst_uint>(param);
     if (param <= 0) top_k_ = std::numeric_limits<bst_uint>::max();
     const bst_uint ngroup = model.learner_model_param->num_output_group;
@@ -421,7 +425,7 @@ class ThriftyFeatureSelector : public FeatureSelector {
     for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
       auto page = batch.GetView();
       // column-parallel is usually fastaer than row-parallel
-      common::ParallelFor(nfeat, [&](bst_omp_uint i) {
+      common::ParallelFor(nfeat, ctx->nthread, [&](bst_omp_uint i) {
         const auto col = page[i];
         const bst_uint ndata = col.size();
         for (bst_uint gid = 0u; gid < ngroup; ++gid) {
