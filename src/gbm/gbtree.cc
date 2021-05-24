@@ -745,11 +745,11 @@ class Dart : public GBTree {
       } else {
         auto &h_out_predts = p_out_preds->predictions.HostVector();
         auto &h_predts = predts.predictions.HostVector();
-#pragma omp parallel for
-        for (omp_ulong ridx = 0; ridx < p_fmat->Info().num_row_; ++ridx) {
-          const size_t offset = ridx * n_groups + group;
-          h_out_predts[offset] += (h_predts[offset] * w);
-        }
+        common::ParallelFor(p_fmat->Info().num_row_, generic_param_->nthread,
+                            [&](omp_ulong ridx) {
+                              const size_t offset = ridx * n_groups + group;
+                              h_out_predts[offset] += (h_predts[offset] * w);
+                            });
       }
     }
   }

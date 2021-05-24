@@ -339,18 +339,13 @@ class BaseMaker: public TreeUpdater {
     std::vector< std::vector<TStats> > &thread_temp = *p_thread_temp;
     thread_temp.resize(omp_get_max_threads());
     p_node_stats->resize(tree.param.num_nodes);
-    dmlc::OMPException exc;
-#pragma omp parallel
-    {
-      exc.Run([&]() {
-        const int tid = omp_get_thread_num();
-        thread_temp[tid].resize(tree.param.num_nodes, TStats());
-        for (unsigned int nid : qexpand_) {
-          thread_temp[tid][nid] = TStats();
-        }
-      });
-    }
-    exc.Rethrow();
+    common::ParallelExec(tparam_->nthread, [&]() {
+      const int tid = omp_get_thread_num();
+      thread_temp[tid].resize(tree.param.num_nodes, TStats());
+      for (unsigned int nid : qexpand_) {
+        thread_temp[tid][nid] = TStats();
+      }
+    });
     // setup position
     const auto ndata = static_cast<bst_omp_uint>(fmat.Info().num_row_);
     common::ParallelFor(ndata, [&](bst_omp_uint ridx) {

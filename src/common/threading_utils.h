@@ -107,6 +107,14 @@ class BlockedSpace2d {
   std::vector<size_t> first_dimension_;
 };
 
+class OmpSched {
+public:
+  enum { kAuto, kDynamic, kGuided, kStatic, kRuntime } sched{kAuto};
+  size_t chunk{1};
+
+  OmpSched() = default;
+  explicit OmpSched(size_t chunk) : sched{kDynamic}, chunk{chunk} {}
+};
 
 // Wrapper to implement nested parallelism with simple omp parallel for
 template <typename Func>
@@ -134,18 +142,65 @@ void ParallelFor2d(const BlockedSpace2d& space, int nthreads, Func func) {
 }
 
 template <typename Index, typename Func>
-void ParallelFor(Index size, size_t nthreads, Func fn) {
-  dmlc::OMPException exc;
-#pragma omp parallel for num_threads(nthreads) schedule(static)
-  for (Index i = 0; i < size; ++i) {
-    exc.Run(fn, i);
+void ParallelFor(Index size, size_t n_threads, OmpSched sched, Func fn) {
+  if (n_threads <= 0) {
+    n_threads = omp_get_num_procs();
   }
+
+  dmlc::OMPException exc;
+
+  switch (sched.sched) {
+  case OmpSched::kAuto: {
+#pragma omp parallel for num_threads(n_threads)
+    for (Index i = 0; i < size; ++i) {
+      exc.Run(fn, i);
+    }
+  }
+  case OmpSched::kDynamic: {
+#pragma omp parallel for num_threads(n_threads) schedule(dynamic, sched.chunk)
+    for (Index i = 0; i < size; ++i) {
+      exc.Run(fn, i);
+    }
+  }
+  case OmpSched::kGuided: {
+#pragma omp parallel for num_threads(n_threads) schedule(guided)
+    for (Index i = 0; i < size; ++i) {
+      exc.Run(fn, i);
+    }
+  }
+  case OmpSched::kStatic: {
+#pragma omp parallel for num_threads(n_threads) schedule(static)
+    for (Index i = 0; i < size; ++i) {
+      exc.Run(fn, i);
+    }
+  }
+  case OmpSched::kRuntime: {
+#pragma omp parallel for num_threads(n_threads) schedule(runtime)
+    for (Index i = 0; i < size; ++i) {
+      exc.Run(fn, i);
+    }
+  }
+  };
   exc.Rethrow();
 }
 
 template <typename Index, typename Func>
-void ParallelFor(Index size, Func fn) {
-  ParallelFor(size, omp_get_max_threads(), fn);
+void ParallelFor(Index size, size_t n_threads, Func fn) {
+  ParallelFor(size, n_threads, OmpSched::kStatic, fn);
+}
+
+template <typename Func>
+void ParallelExec(omp_ulong n_threads, Func const &fn) {
+  if (n_threads <= 0) {
+    n_threads = omp_get_num_procs();
+  }
+
+  dmlc::OMPException exc;
+#pragma omp parallel num_threads(n_threads)
+  {
+    exc.Run([&]() { fn(); });
+  }
+  exc.Rethrow();
 }
 
 /* \brief Configure parallel threads.
@@ -164,6 +219,7 @@ inline int32_t OmpSetNumThreads(int32_t* p_threads) {
   omp_set_num_threads(threads);
   return nthread_original;
 }
+
 inline int32_t OmpSetNumThreadsWithoutHT(int32_t* p_threads) {
   auto& threads = *p_threads;
   int32_t nthread_original = omp_get_max_threads();
