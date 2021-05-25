@@ -69,6 +69,12 @@ jobs:
         conda info
         conda list
 
+    - name: Set up MinGW
+      if: matrix.config.compiler == 'mingw'
+      uses: egor-tensin/setup-mingw@v2
+      with:
+        platform: x64
+
     - name: Build XGBoost with mingw
       shell: bash -l {0}
       if: matrix.config.compiler == 'mingw'
