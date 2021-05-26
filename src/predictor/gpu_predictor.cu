@@ -14,6 +14,7 @@
 #include "xgboost/tree_updater.h"
 #include "xgboost/host_device_vector.h"
 
+#include "predict_fn.h"
 #include "../gbm/gbtree_model.h"
 #include "../data/ellpack_page.cuh"
 #include "../data/device_adapter.cuh"
@@ -178,31 +179,6 @@ struct DeviceAdapterLoader {
   }
 };
 
-inline XGBOOST_DEVICE bst_node_t GetNextNode(
-    common::Span<RegTree::Node const> tree, bst_node_t nid, float fvalue,
-    bool is_missing, common::Span<FeatureType const> split_types,
-    common::Span<uint32_t const> categories,
-    common::Span<RegTree::Segment const> cat_ptrs) {
-  if (is_missing) {
-    nid = tree[nid].DefaultChild();
-  } else {
-    bool go_left = true;
-    if (common::IsCat(split_types, nid)) {
-      auto node_categories =
-          categories.subspan(cat_ptrs[nid].beg, cat_ptrs[nid].size);
-      go_left = Decision(node_categories, common::AsCat(fvalue));
-    } else {
-      go_left = fvalue < tree[nid].SplitCond();
-    }
-    if (go_left) {
-      nid = tree[nid].LeftChild();
-    } else {
-      nid = tree[nid].RightChild();
-    }
-  }
-  return nid;
-}
-
 template <typename Loader>
 __device__ bst_node_t
 GetLeafIndex(bst_row_t ridx, common::Span<RegTree::Node const> tree,
@@ -286,20 +262,18 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
   if (num_group == 1) {
     float sum = 0;
     for (int tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
-      const RegTree::Node* d_tree =
-          &d_nodes[d_tree_segments[tree_idx - tree_begin]];
-      auto tree_cat_ptrs = d_cat_node_segments.subspan(
-          d_tree_segments[tree_idx - tree_begin],
-          d_tree_segments[tree_idx - tree_begin + 1] -
-              d_tree_segments[tree_idx - tree_begin]);
+      auto begin = d_tree_segments[tree_idx - tree_begin];
+      auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
+                     d_tree_segments[tree_idx - tree_begin];
+
+      auto d_tree = d_nodes.subspan(begin, n_nodes);
+      auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
+      auto tree_split_types = d_tree_split_types.subspan(begin, n_nodes);
+
       auto tree_categories =
           d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
                                d_cat_tree_segments[tree_idx - tree_begin + 1] -
                                d_cat_tree_segments[tree_idx - tree_begin]);
-      auto tree_split_types =
-          d_tree_split_types.subspan(d_tree_segments[tree_idx - tree_begin],
-                                     d_tree_segments[tree_idx - tree_begin + 1] -
-                                     d_tree_segments[tree_idx - tree_begin]);
       float leaf = GetLeafWeight(global_idx, d_tree, tree_split_types,
                                  tree_cat_ptrs,
                                  tree_categories,
@@ -310,17 +284,18 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
   } else {
     for (int tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
       int tree_group = d_tree_group[tree_idx];
-      const RegTree::Node* d_tree =
-          &d_nodes[d_tree_segments[tree_idx - tree_begin]];
-      bst_uint out_prediction_idx = global_idx * num_group + tree_group;
-      auto tree_cat_ptrs = d_cat_node_segments.subspan(
-          d_tree_segments[tree_idx - tree_begin],
-          d_tree_segments[tree_idx - tree_begin + 1] -
-              d_tree_segments[tree_idx - tree_begin]);
+      auto begin = d_tree_segments[tree_idx - tree_begin];
+      auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
+                     d_tree_segments[tree_idx - tree_begin];
+      auto d_tree = d_nodes.subspan(begin, n_nodes);
+      auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
+
       auto tree_categories =
           d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
                                d_cat_tree_segments[tree_idx - tree_begin + 1] -
                                d_cat_tree_segments[tree_idx - tree_begin]);
+
+      bst_uint out_prediction_idx = global_idx * num_group + tree_group;
       d_out_predictions[out_prediction_idx] +=
           GetLeafWeight(global_idx, d_tree, d_tree_split_types,
                         tree_cat_ptrs,
