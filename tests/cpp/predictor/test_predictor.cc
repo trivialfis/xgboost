@@ -268,9 +268,14 @@ void TestCategoricalPredictLeaf(StringView name) {
 
   predictor->PredictLeaf(m.get(), &out_predictions.predictions, model);
   CHECK_EQ(out_predictions.predictions.Size(), 1);
-
-  auto const& h_predt = out_predictions.predictions.ConstHostVector();
   // go to left if it doesn't match the category, otherwise right.
-  ASSERT_EQ(h_predt[0], 2);
+  ASSERT_EQ(out_predictions.predictions.HostVector()[0], 2);
+
+  row[split_ind] = split_cat + 1;
+  m = GetDMatrixFromData(row, 1, kCols);
+  out_predictions.version = 0;
+  predictor->InitOutPredictions(m->Info(), &out_predictions.predictions, model);
+  predictor->PredictLeaf(m.get(), &out_predictions.predictions, model);
+  ASSERT_EQ(out_predictions.predictions.HostVector()[0], 1);
 }
 }  // namespace xgboost

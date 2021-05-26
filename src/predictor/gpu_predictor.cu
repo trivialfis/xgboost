@@ -40,7 +40,6 @@ struct TreeView {
            common::Span<uint32_t const> d_cat_tree_segments,
            common::Span<RegTree::Segment const> d_cat_node_segments,
            common::Span<uint32_t const> d_categories) {
-    RegTree::CategoricalSplitMatrix cats;
     auto begin = d_tree_segments[tree_idx - tree_begin];
     auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
                    d_tree_segments[tree_idx - tree_begin];
