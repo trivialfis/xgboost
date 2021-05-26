@@ -28,23 +28,6 @@ namespace predictor {
 
 DMLC_REGISTRY_FILE_TAG(cpu_predictor);
 
-template <bool has_missing>
-bst_node_t GetLeafIndex(RegTree const &tree, const RegTree::FVec &feat,
-                        common::Span<FeatureType const> split_types,
-                        common::Span<RegTree::Segment const> cat_ptrs,
-                        common::Span<uint32_t const> categories) {
-  bst_node_t nid = 0;
-  while (!tree[nid].IsLeaf()) {
-    unsigned split_index = tree[nid].SplitIndex();
-    auto fvalue = feat.GetFvalue(split_index);
-    auto nodes = common::Span<RegTree::Node const>{tree.GetNodes()};
-    nid = GetNextNode(nodes, nid, fvalue,
-                      has_missing && feat.IsMissing(split_index), split_types,
-                      categories, cat_ptrs);
-  }
-  return nid;
-}
-
 bst_float PredValue(const SparsePage::Inst &inst,
                     const std::vector<std::unique_ptr<RegTree>> &trees,
                     const std::vector<int> &tree_info, int bst_group,
@@ -60,9 +43,9 @@ bst_float PredValue(const SparsePage::Inst &inst,
       auto split_types = tree.GetSplitTypes();
       auto categories_ptr =
           common::Span<RegTree::Segment const>{tree.GetSplitCategoriesPtr()};
+      auto cats = tree.GetCategoriesMatrix();
 
-      auto nidx = GetLeafIndex<true>(tree, *p_feats, split_types,
-                                     categories_ptr, categories);
+      auto nidx = GetLeafIndex<true>(tree, *p_feats, cats);
       psum += (*trees[i])[nidx].LeafValue();
     }
   }
@@ -72,16 +55,12 @@ bst_float PredValue(const SparsePage::Inst &inst,
 
 bst_float
 PredValueByOneTree(const RegTree::FVec &p_feats, RegTree const &tree,
-                   common::Span<FeatureType const> split_types,
-                   common::Span<uint32_t const> categories,
-                   common::Span<RegTree::Segment const> categories_ptr) {
+                   RegTree::CategoricalSplitMatrix const& cats) {
   bst_node_t leaf = -1;
   if (p_feats.HasMissing()) {
-    leaf = GetLeafIndex<true>(tree, p_feats, split_types, categories_ptr,
-                              categories);
+    leaf = GetLeafIndex<true>(tree, p_feats, cats);
   } else {
-    leaf = GetLeafIndex<false>(tree, p_feats, split_types, categories_ptr,
-                               categories);
+    leaf = GetLeafIndex<false>(tree, p_feats, cats);
   }
   return tree[leaf].LeafValue();
 }
@@ -95,15 +74,11 @@ void PredictByAllTrees(gbm::GBTreeModel const &model, const size_t tree_begin,
   for (size_t tree_id = tree_begin; tree_id < tree_end; ++tree_id) {
     const size_t gid = model.tree_info[tree_id];
     auto const &tree = *model.trees[tree_id];
-
-    auto categories = tree.GetSplitCategories();
-    auto split_types = tree.GetSplitTypes();
-    auto categories_ptr = tree.GetSplitCategoriesPtr();
+    auto const& cats = tree.GetCategoriesMatrix();
 
     for (size_t i = 0; i < block_size; ++i) {
       preds[(predict_offset + i) * num_group + gid] +=
-          PredValueByOneTree(thread_temp[offset + i], tree, split_types,
-                             categories, categories_ptr);
+          PredValueByOneTree(thread_temp[offset + i], tree, cats);
     }
   }
 }
@@ -395,11 +370,8 @@ class CPUPredictor : public Predictor {
         feats.Fill(page[i]);
         for (unsigned j = 0; j < ntree_limit; ++j) {
           auto const& tree = *model.trees[j];
-          auto categories = tree.GetSplitCategories();
-          auto split_types = tree.GetSplitTypes();
-          auto categories_ptr = tree.GetSplitCategoriesPtr();
-          bst_node_t tid = GetLeafIndex<true>(tree, feats, split_types,
-                                              categories_ptr, categories);
+          auto const& cats = tree.GetCategoriesMatrix();
+          bst_node_t tid = GetLeafIndex<true>(tree, feats, cats);
           preds[ridx * ntree_limit + j] = static_cast<bst_float>(tid);
         }
         feats.Drop(page[i]);

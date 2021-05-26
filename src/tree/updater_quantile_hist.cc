@@ -29,6 +29,7 @@
 #include "../common/row_set.h"
 #include "../common/column_matrix.h"
 #include "../common/threading_utils.h"
+#include "../predictor/predict_fn.h"
 
 namespace xgboost {
 namespace tree {
@@ -661,6 +662,8 @@ bool QuantileHistMaker::Builder<GradientSumT>::UpdatePredictionCache(
     while (fvecs_size < feat_vecs_.size()) {
       feat_vecs_[fvecs_size++].Init(data->Info().num_col_);
     }
+    CHECK(p_last_tree_);
+    auto const& cats = p_last_tree_->GetCategoriesMatrix();
     for (auto&& batch : p_last_fmat_mutable_->GetBatches<SparsePage>()) {
       HostSparsePageView page_view = batch.GetView();
       const auto num_parallel_ops = static_cast<bst_omp_uint>(unused_rows_.size());
@@ -670,8 +673,10 @@ bool QuantileHistMaker::Builder<GradientSumT>::UpdatePredictionCache(
         feats.Fill(inst);
 
         const size_t row_num = unused_rows_[block_id] + batch.base_rowid;
-        const int lid = feats.HasMissing() ? p_last_tree_->GetLeafIndex<true>(feats) :
-                                            p_last_tree_->GetLeafIndex<false>(feats);
+        const int lid =
+            feats.HasMissing()
+                ? predictor::GetLeafIndex<true>(*p_last_tree_, feats, cats)
+                : predictor::GetLeafIndex<false>(*p_last_tree_, feats, cats);
         out_preds[row_num] += (*p_last_tree_)[lid].LeafValue();
 
         feats.Drop(inst);

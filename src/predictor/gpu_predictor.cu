@@ -28,6 +28,39 @@ namespace predictor {
 
 DMLC_REGISTRY_FILE_TAG(gpu_predictor);
 
+struct TreeView {
+  RegTree::CategoricalSplitMatrix cats;
+  common::Span<RegTree::Node const> d_tree;
+
+  XGBOOST_DEVICE
+  TreeView(size_t tree_begin, size_t tree_idx,
+           common::Span<const RegTree::Node> d_nodes,
+           common::Span<size_t const> d_tree_segments,
+           common::Span<FeatureType const> d_tree_split_types,
+           common::Span<uint32_t const> d_cat_tree_segments,
+           common::Span<RegTree::Segment const> d_cat_node_segments,
+           common::Span<uint32_t const> d_categories) {
+    RegTree::CategoricalSplitMatrix cats;
+    auto begin = d_tree_segments[tree_idx - tree_begin];
+    auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
+                   d_tree_segments[tree_idx - tree_begin];
+
+    d_tree = d_nodes.subspan(begin, n_nodes);
+
+    auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
+    auto tree_split_types = d_tree_split_types.subspan(begin, n_nodes);
+
+    auto tree_categories =
+        d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
+                             d_cat_tree_segments[tree_idx - tree_begin + 1] -
+                                 d_cat_tree_segments[tree_idx - tree_begin]);
+
+    cats.split_type = tree_split_types;
+    cats.categories = tree_categories;
+    cats.node_ptr = tree_cat_ptrs;
+  }
+};
+
 struct SparsePageView {
   common::Span<const Entry> d_data;
   common::Span<const bst_row_t> d_row_ptr;
@@ -180,31 +213,25 @@ struct DeviceAdapterLoader {
 };
 
 template <typename Loader>
-__device__ bst_node_t
-GetLeafIndex(bst_row_t ridx, common::Span<RegTree::Node const> tree,
-             common::Span<FeatureType const> split_types,
-             common::Span<RegTree::Segment const> d_cat_ptrs,
-             common::Span<uint32_t const> d_categories, Loader *loader) {
+__device__ bst_node_t GetLeafIndex(bst_row_t ridx,
+                                   TreeView const& tree,
+                                   Loader *loader) {
   bst_node_t nidx = 0;
-  RegTree::Node n = tree[nidx];
+  RegTree::Node n = tree.d_tree[nidx];
   while (!n.IsLeaf()) {
     float fvalue = loader->GetElement(ridx, n.SplitIndex());
     bool is_missing = common::CheckNAN(fvalue);
-    nidx = GetNextNode(tree, nidx, fvalue, is_missing, split_types, d_categories,  d_cat_ptrs);
-    n = tree[nidx];
+    nidx = GetNextNode(tree.d_tree, nidx, fvalue, is_missing, tree.cats);
+    n = tree.d_tree[nidx];
   }
   return nidx;
 }
 
 template <typename Loader>
-__device__ float GetLeafWeight(bst_row_t ridx, common::Span<RegTree::Node const> tree,
-                               common::Span<FeatureType const> split_types,
-                               common::Span<RegTree::Segment const> d_cat_ptrs,
-                               common::Span<uint32_t const> d_categories,
-                               Loader* loader) {
-  bst_node_t nidx =
-      GetLeafIndex(ridx, tree, split_types, d_cat_ptrs, d_categories, loader);
-  return tree[nidx].LeafValue();
+__device__ float
+GetLeafWeight(bst_row_t ridx, TreeView const& tree, Loader *loader) {
+  bst_node_t nidx = GetLeafIndex(ridx, tree, loader);
+  return tree.d_tree[nidx].LeafValue();
 }
 
 template <typename Loader, typename Data>
@@ -226,20 +253,13 @@ PredictLeafKernel(Data data, common::Span<const RegTree::Node> d_nodes,
     return;
   }
   Loader loader(data, use_shared, num_features, num_rows, entry_start, missing);
-  for (int tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
-    auto begin = d_tree_segments[tree_idx - tree_begin];
-    auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
-                   d_tree_segments[tree_idx - tree_begin];
-    auto d_tree = d_nodes.subspan(begin, n_nodes);
-    auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
-    auto tree_split_types = d_tree_split_types.subspan(begin, n_nodes);
+  for (size_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
+    TreeView d_tree{
+        tree_begin,          tree_idx,           d_nodes,
+        d_tree_segments,     d_tree_split_types, d_cat_tree_segments,
+        d_cat_node_segments, d_categories};
 
-    auto tree_categories =
-        d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
-                             d_cat_tree_segments[tree_idx - tree_begin + 1] -
-                                 d_cat_tree_segments[tree_idx - tree_begin]);
-    auto leaf = GetLeafIndex(ridx, d_tree, tree_split_types, tree_cat_ptrs,
-                             tree_categories, &loader);
+    auto leaf = GetLeafIndex(ridx, d_tree, &loader);
     d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
   }
 }
@@ -261,46 +281,25 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
   if (global_idx >= num_rows) return;
   if (num_group == 1) {
     float sum = 0;
-    for (int tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
-      auto begin = d_tree_segments[tree_idx - tree_begin];
-      auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
-                     d_tree_segments[tree_idx - tree_begin];
-
-      auto d_tree = d_nodes.subspan(begin, n_nodes);
-      auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
-      auto tree_split_types = d_tree_split_types.subspan(begin, n_nodes);
-
-      auto tree_categories =
-          d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
-                               d_cat_tree_segments[tree_idx - tree_begin + 1] -
-                               d_cat_tree_segments[tree_idx - tree_begin]);
-      float leaf = GetLeafWeight(global_idx, d_tree, tree_split_types,
-                                 tree_cat_ptrs,
-                                 tree_categories,
-                                 &loader);
+    for (size_t tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
+      TreeView d_tree{
+          tree_begin,          tree_idx,           d_nodes,
+          d_tree_segments,     d_tree_split_types, d_cat_tree_segments,
+          d_cat_node_segments, d_categories};
+      float leaf = GetLeafWeight(global_idx, d_tree, &loader);
       sum += leaf;
     }
     d_out_predictions[global_idx] += sum;
   } else {
-    for (int tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
+    for (size_t tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
       int tree_group = d_tree_group[tree_idx];
-      auto begin = d_tree_segments[tree_idx - tree_begin];
-      auto n_nodes = d_tree_segments[tree_idx - tree_begin + 1] -
-                     d_tree_segments[tree_idx - tree_begin];
-      auto d_tree = d_nodes.subspan(begin, n_nodes);
-      auto tree_cat_ptrs = d_cat_node_segments.subspan(begin, n_nodes);
-
-      auto tree_categories =
-          d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
-                               d_cat_tree_segments[tree_idx - tree_begin + 1] -
-                               d_cat_tree_segments[tree_idx - tree_begin]);
-
+      TreeView d_tree{
+          tree_begin,          tree_idx,           d_nodes,
+          d_tree_segments,     d_tree_split_types, d_cat_tree_segments,
+          d_cat_node_segments, d_categories};
       bst_uint out_prediction_idx = global_idx * num_group + tree_group;
       d_out_predictions[out_prediction_idx] +=
-          GetLeafWeight(global_idx, d_tree, d_tree_split_types,
-                        tree_cat_ptrs,
-                        tree_categories,
-                        &loader);
+          GetLeafWeight(global_idx, d_tree, &loader);
     }
   }
 }

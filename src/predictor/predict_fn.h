@@ -1,4 +1,5 @@
-#include "xgboost/tree_model.h"
+#ifndef XGBOOST_PREDICT_FN_H_
+#define XGBOOST_PREDICT_FN_H_
 #include "xgboost/tree_model.h"
 #include "../common/categorical.h"
 
@@ -6,16 +7,14 @@ namespace xgboost {
 namespace predictor {
 inline XGBOOST_DEVICE bst_node_t GetNextNode(
     common::Span<RegTree::Node const> tree, bst_node_t nid, float fvalue,
-    bool is_missing, common::Span<FeatureType const> split_types,
-    common::Span<uint32_t const> categories,
-    common::Span<RegTree::Segment const> cat_ptrs) {
+    bool is_missing, RegTree::CategoricalSplitMatrix const& cats) {
   if (is_missing) {
     nid = tree[nid].DefaultChild();
   } else {
     bool go_left = true;
-    if (common::IsCat(split_types, nid)) {
-      auto node_categories =
-          categories.subspan(cat_ptrs[nid].beg, cat_ptrs[nid].size);
+    if (common::IsCat(cats.split_type, nid)) {
+      auto node_categories = cats.categories.subspan(cats.node_ptr[nid].beg,
+                                                     cats.node_ptr[nid].size);
       go_left = Decision(node_categories, common::AsCat(fvalue));
     } else {
       go_left = fvalue < tree[nid].SplitCond();
@@ -28,5 +27,20 @@ inline XGBOOST_DEVICE bst_node_t GetNextNode(
   }
   return nid;
 }
+
+template <bool has_missing>
+bst_node_t GetLeafIndex(RegTree const &tree, const RegTree::FVec &feat,
+                        RegTree::CategoricalSplitMatrix const& cats) {
+  bst_node_t nid = 0;
+  while (!tree[nid].IsLeaf()) {
+    unsigned split_index = tree[nid].SplitIndex();
+    auto fvalue = feat.GetFvalue(split_index);
+    auto nodes = common::Span<RegTree::Node const>{tree.GetNodes()};
+    nid = GetNextNode(nodes, nid, fvalue,
+                      has_missing && feat.IsMissing(split_index), cats);
+  }
+  return nid;
+}
 }  // namespace predictor
 }  // namespace xgboost
+#endif  // XGBOOST_PREDICT_FN_H_

@@ -1055,16 +1055,13 @@ void RegTree::CalculateContributionsApprox(const RegTree::FVec &feat,
   }
 
   bst_node_t nid = 0;
+  auto cats = this->GetCategoriesMatrix();
   auto nodes = common::Span<Node const>{this->GetNodes()};
-  auto split_types = common::Span<FeatureType const>{this->GetSplitTypes()};
-  auto categories = this->GetSplitCategories();
-  auto categories_ptr = common::Span<Segment const>{this->GetSplitCategoriesPtr()};
 
   while (!(*this)[nid].IsLeaf()) {
     split_index = (*this)[nid].SplitIndex();
     nid = predictor::GetNextNode(nodes, nid, (*this)[nid].SplitCond(),
-                                 feat.IsMissing(split_index), split_types,
-                                 categories, categories_ptr);
+                                 feat.IsMissing(split_index), cats);
     bst_float new_value = this->node_mean_values_[nid];
     // update feature weight
     out_contribs[split_index] += new_value - node_value;
