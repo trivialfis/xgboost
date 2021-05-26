@@ -19,6 +19,7 @@
 #include "../data/adapter.h"
 #include "../common/math.h"
 #include "../common/threading_utils.h"
+#include "../common/categorical.h"
 #include "../gbm/gbtree_model.h"
 
 namespace xgboost {
@@ -43,24 +44,71 @@ bst_float PredValue(const SparsePage::Inst &inst,
   return psum;
 }
 
-inline bst_float PredValueByOneTree(const RegTree::FVec& p_feats,
-                                    const std::unique_ptr<RegTree>& tree) {
-  const int lid = p_feats.HasMissing() ? tree->GetLeafIndex<true>(p_feats) :
-                                         tree->GetLeafIndex<false>(p_feats);  // 35% speed up
-  return (*tree)[lid].LeafValue();
+template <bool has_missing>
+bst_node_t GetLeafIndex(RegTree const &tree, const RegTree::FVec &feat,
+                        common::Span<FeatureType const> split_types,
+                        common::Span<RegTree::Segment const> cat_ptrs,
+                        common::Span<uint32_t const> categories) {
+  bst_node_t nid = 0;
+  while (!tree[nid].IsLeaf()) {
+    unsigned split_index = tree[nid].SplitIndex();
+    auto fvalue = feat.GetFvalue(split_index);
+
+    if (has_missing && feat.IsMissing(split_index)) {
+      nid = tree[nid].DefaultChild();
+    } else {
+      bool go_left = true;
+      if (common::IsCat(split_types, nid)) {
+        go_left = Decision(categories, common::AsCat(fvalue));
+      } else {
+        go_left = fvalue < tree[nid].SplitCond();
+      }
+      if (go_left) {
+        nid = tree[nid].LeftChild();
+      } else {
+        nid = tree[nid].RightChild();
+      }
+    }
+  }
+  return nid;
 }
 
-inline void PredictByAllTrees(gbm::GBTreeModel const &model, const size_t tree_begin,
-                              const size_t tree_end, std::vector<bst_float>* out_preds,
-                              const size_t predict_offset, const size_t num_group,
+bst_float
+PredValueByOneTree(const RegTree::FVec &p_feats, RegTree const &tree,
+                   common::Span<FeatureType const> split_types,
+                   common::Span<uint32_t const> categories,
+                   common::Span<RegTree::Segment const> categories_ptr) {
+  bst_node_t leaf = -1;
+  if (p_feats.HasMissing()) {
+    leaf = GetLeafIndex<true>(tree, p_feats, split_types, categories_ptr,
+                              categories);
+  } else {
+    leaf = GetLeafIndex<false>(tree, p_feats, split_types, categories_ptr,
+                               categories);
+  }
+  return tree[leaf].LeafValue();
+}
+
+inline void PredictByAllTrees(gbm::GBTreeModel const &model,
+                              const size_t tree_begin, const size_t tree_end,
+                              std::vector<bst_float> *out_preds,
+                              const size_t predict_offset,
+                              const size_t num_group,
                               const std::vector<RegTree::FVec> &thread_temp,
                               const size_t offset, const size_t block_size) {
   std::vector<bst_float> &preds = *out_preds;
   for (size_t tree_id = tree_begin; tree_id < tree_end; ++tree_id) {
     const size_t gid = model.tree_info[tree_id];
+    auto const &tree = *model.trees[tree_id];
+
+    auto categories = tree.GetSplitCategories();
+    auto split_types = tree.GetSplitTypes();
+    auto categories_ptr = tree.GetSplitCategoriesPtr();
+
     for (size_t i = 0; i < block_size; ++i) {
-      preds[(predict_offset + i) * num_group + gid] += PredValueByOneTree(thread_temp[offset + i],
-                                                                      model.trees[tree_id]);
+      preds[(predict_offset + i) * num_group + gid] +=
+          PredValueByOneTree(thread_temp[offset + i], tree, split_types,
+                             categories, categories_ptr);
     }
   }
 }
@@ -77,6 +125,7 @@ void FVecFill(const size_t block_size, const size_t batch_offset, const int num_
     feats.Fill(inst);
   }
 }
+
 template <typename DataView>
 void FVecDrop(const size_t block_size, const size_t batch_offset, DataView* batch,
               const size_t fvec_offset, std::vector<RegTree::FVec>* p_feats) {
@@ -145,11 +194,11 @@ class AdapterView {
 };
 
 template <typename DataView, size_t block_of_rows_size>
-void PredictBatchByBlockOfRowsKernel(DataView batch, std::vector<bst_float> *out_preds,
-                                     gbm::GBTreeModel const &model, int32_t tree_begin,
-                                     int32_t tree_end,
-                                     std::vector<RegTree::FVec> *p_thread_temp) {
-  auto& thread_temp = *p_thread_temp;
+void PredictBatchByBlockOfRowsKernel(
+    DataView batch, std::vector<bst_float> *out_preds,
+    gbm::GBTreeModel const &model, int32_t tree_begin, int32_t tree_end,
+    std::vector<RegTree::FVec> *p_thread_temp) {
+  auto &thread_temp = *p_thread_temp;
   int32_t const num_group = model.learner_model_param->num_output_group;
 
   CHECK_EQ(model.param.size_leaf_vector, 0)
@@ -157,16 +206,22 @@ void PredictBatchByBlockOfRowsKernel(DataView batch, std::vector<bst_float> *out
   // parallel over local batch
   const auto nsize = static_cast<bst_omp_uint>(batch.Size());
   const int num_feature = model.learner_model_param->num_feature;
-  const bst_omp_uint n_row_blocks = (nsize) / block_of_rows_size + !!((nsize) % block_of_rows_size);
-  common::ParallelFor(n_row_blocks, [&](bst_omp_uint block_id) {
+  const bst_omp_uint n_blocks =
+      (nsize) / block_of_rows_size + !!((nsize) % block_of_rows_size);
+  CHECK_EQ(common::DivRoundUp(nsize, block_of_rows_size), n_blocks);
+
+  common::ParallelFor(n_blocks, [&](bst_omp_uint block_id) {
     const size_t batch_offset = block_id * block_of_rows_size;
-    const size_t block_size = std::min(nsize - batch_offset, block_of_rows_size);
+    const size_t block_size =
+        std::min(nsize - batch_offset, block_of_rows_size);
     const size_t fvec_offset = omp_get_thread_num() * block_of_rows_size;
 
-    FVecFill(block_size, batch_offset, num_feature, &batch, fvec_offset, p_thread_temp);
+    FVecFill(block_size, batch_offset, num_feature, &batch, fvec_offset,
+             p_thread_temp);
     // process block of rows through all trees to keep cache locality
-    PredictByAllTrees(model, tree_begin, tree_end, out_preds, batch_offset + batch.base_rowid,
-                      num_group, thread_temp, fvec_offset, block_size);
+    PredictByAllTrees(model, tree_begin, tree_end, out_preds,
+                      batch_offset + batch.base_rowid, num_group, thread_temp,
+                      fvec_offset, block_size);
     FVecDrop(block_size, batch_offset, &batch, fvec_offset, p_thread_temp);
   });
 }
