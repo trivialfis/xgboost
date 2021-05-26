@@ -1060,7 +1060,7 @@ void RegTree::CalculateContributionsApprox(const RegTree::FVec &feat,
 
   while (!(*this)[nid].IsLeaf()) {
     split_index = (*this)[nid].SplitIndex();
-    nid = predictor::GetNextNode(nodes, nid, (*this)[nid].SplitCond(),
+    nid = predictor::GetNextNode(nodes, nid, feat.GetFvalue(split_index),
                                  feat.IsMissing(split_index), cats);
     bst_float new_value = this->node_mean_values_[nid];
     // update feature weight
