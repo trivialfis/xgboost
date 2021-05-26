@@ -1,5 +1,8 @@
-#ifndef XGBOOST_PREDICT_FN_H_
-#define XGBOOST_PREDICT_FN_H_
+/*!
+ * Copyright 2021 by XGBoost Contributors
+ */
+#ifndef XGBOOST_PREDICTOR_PREDICT_FN_H_
+#define XGBOOST_PREDICTOR_PREDICT_FN_H_
 #include "xgboost/tree_model.h"
 #include "../common/categorical.h"
 
@@ -43,4 +46,4 @@ bst_node_t GetLeafIndex(RegTree const &tree, const RegTree::FVec &feat,
 }
 }  // namespace predictor
 }  // namespace xgboost
-#endif  // XGBOOST_PREDICT_FN_H_
+#endif  // XGBOOST_PREDICTOR_PREDICT_FN_H_

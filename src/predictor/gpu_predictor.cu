@@ -827,7 +827,7 @@ class GPUPredictor : public xgboost::Predictor {
         size_t num_rows = batch.Size();
         auto grid =
             static_cast<uint32_t>(common::DivRoundUp(num_rows, kBlockThreads));
-        dh::LaunchKernel{grid, kBlockThreads, shared_memory_bytes}(
+        dh::LaunchKernel {grid, kBlockThreads, shared_memory_bytes} (
             PredictLeafKernel<SparsePageLoader, SparsePageView>, data,
             d_model.nodes.ConstDeviceSpan(),
             predictions->DeviceSpan().subspan(batch_offset),

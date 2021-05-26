@@ -624,7 +624,7 @@ class RegTree : public Model {
     view.categories = this->GetSplitCategories();
     view.node_ptr = common::Span<Segment const>(split_categories_segments_);
     return view;
-  };
+  }
 
  private:
   void LoadCategoricalSplit(Json const& in);
