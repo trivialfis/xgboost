@@ -179,11 +179,11 @@ struct DeviceAdapterLoader {
 };
 
 template <typename Loader>
-__device__ float GetLeafWeight(bst_row_t ridx, const RegTree::Node* tree,
-                               common::Span<FeatureType const> split_types,
-                               common::Span<RegTree::Segment const> d_cat_ptrs,
-                               common::Span<uint32_t const> d_categories,
-                               Loader* loader) {
+__device__ bst_node_t
+GetLeafIndex(bst_row_t ridx, const RegTree::Node *tree,
+             common::Span<FeatureType const> split_types,
+             common::Span<RegTree::Segment const> d_cat_ptrs,
+             common::Span<uint32_t const> d_categories, Loader *loader) {
   bst_node_t nidx = 0;
   RegTree::Node n = tree[nidx];
   while (!n.IsLeaf()) {
@@ -208,41 +208,34 @@ __device__ float GetLeafWeight(bst_row_t ridx, const RegTree::Node* tree,
     }
     n = tree[nidx];
   }
-  return tree[nidx].LeafValue();
-}
-
-template <typename Loader>
-__device__ bst_node_t GetLeafIndex(bst_row_t ridx, const RegTree::Node* tree,
-                                   Loader const& loader) {
-  bst_node_t nidx = 0;
-  RegTree::Node n = tree[nidx];
-  while (!n.IsLeaf()) {
-    float fvalue = loader.GetElement(ridx, n.SplitIndex());
-    // Missing value
-    if (common::CheckNAN(fvalue)) {
-      nidx = n.DefaultChild();
-      n = tree[nidx];
-    } else {
-      if (fvalue < n.SplitCond()) {
-        nidx = n.LeftChild();
-        n = tree[nidx];
-      } else {
-        nidx = n.RightChild();
-        n = tree[nidx];
-      }
-    }
-  }
   return nidx;
 }
 
+template <typename Loader>
+__device__ float GetLeafWeight(bst_row_t ridx, const RegTree::Node* tree,
+                               common::Span<FeatureType const> split_types,
+                               common::Span<RegTree::Segment const> d_cat_ptrs,
+                               common::Span<uint32_t const> d_categories,
+                               Loader* loader) {
+  bst_node_t nidx =
+      GetLeafIndex(ridx, tree, split_types, d_cat_ptrs, d_categories, loader);
+  return tree[nidx].LeafValue();
+}
+
 template <typename Loader, typename Data>
-__global__ void PredictLeafKernel(Data data,
-                                  common::Span<const RegTree::Node> d_nodes,
-                                  common::Span<float> d_out_predictions,
-                                  common::Span<size_t const> d_tree_segments,
-                                  size_t tree_begin, size_t tree_end, size_t num_features,
-                                  size_t num_rows, size_t entry_start, bool use_shared,
-                                  float missing) {
+__global__ void
+PredictLeafKernel(Data data, common::Span<const RegTree::Node> d_nodes,
+                  common::Span<float> d_out_predictions,
+                  common::Span<size_t const> d_tree_segments,
+
+                  common::Span<FeatureType const> d_tree_split_types,
+                  common::Span<uint32_t const> d_cat_tree_segments,
+                  common::Span<RegTree::Segment const> d_cat_node_segments,
+                  common::Span<uint32_t const> d_categories,
+
+                  size_t tree_begin, size_t tree_end, size_t num_features,
+                  size_t num_rows, size_t entry_start, bool use_shared,
+                  float missing) {
   bst_row_t ridx = blockDim.x * blockIdx.x + threadIdx.x;
   if (ridx >= num_rows) {
     return;
@@ -250,8 +243,21 @@ __global__ void PredictLeafKernel(Data data,
   Loader loader(data, use_shared, num_features, num_rows, entry_start, missing);
   for (int tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
     const RegTree::Node* d_tree = &d_nodes[d_tree_segments[tree_idx - tree_begin]];
-    auto leaf = GetLeafIndex(ridx, d_tree, loader);
-    d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
+      auto tree_cat_ptrs = d_cat_node_segments.subspan(
+          d_tree_segments[tree_idx - tree_begin],
+          d_tree_segments[tree_idx - tree_begin + 1] -
+              d_tree_segments[tree_idx - tree_begin]);
+      auto tree_categories =
+          d_categories.subspan(d_cat_tree_segments[tree_idx - tree_begin],
+                               d_cat_tree_segments[tree_idx - tree_begin + 1] -
+                               d_cat_tree_segments[tree_idx - tree_begin]);
+      auto tree_split_types =
+          d_tree_split_types.subspan(d_tree_segments[tree_idx - tree_begin],
+                                     d_tree_segments[tree_idx - tree_begin + 1] -
+                                     d_tree_segments[tree_idx - tree_begin]);
+      auto leaf = GetLeafIndex(ridx, d_tree, tree_split_types, tree_cat_ptrs,
+                               tree_categories, &loader);
+      d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
   }
 }
 
@@ -841,11 +847,17 @@ class GPUPredictor : public xgboost::Predictor {
         size_t num_rows = batch.Size();
         auto grid =
             static_cast<uint32_t>(common::DivRoundUp(num_rows, kBlockThreads));
-        dh::LaunchKernel {grid, kBlockThreads, shared_memory_bytes} (
+        dh::LaunchKernel{grid, kBlockThreads, shared_memory_bytes}(
             PredictLeafKernel<SparsePageLoader, SparsePageView>, data,
             d_model.nodes.ConstDeviceSpan(),
             predictions->DeviceSpan().subspan(batch_offset),
             d_model.tree_segments.ConstDeviceSpan(),
+
+            d_model.split_types.ConstDeviceSpan(),
+            d_model.categories_tree_segments.ConstDeviceSpan(),
+            d_model.categories_node_segments.ConstDeviceSpan(),
+            d_model.categories.ConstDeviceSpan(),
+
             d_model.tree_beg_, d_model.tree_end_, num_features, num_rows,
             entry_start, use_shared, nan(""));
         batch_offset += batch.Size();
@@ -862,6 +874,12 @@ class GPUPredictor : public xgboost::Predictor {
             d_model.nodes.ConstDeviceSpan(),
             predictions->DeviceSpan().subspan(batch_offset),
             d_model.tree_segments.ConstDeviceSpan(),
+
+            d_model.split_types.ConstDeviceSpan(),
+            d_model.categories_tree_segments.ConstDeviceSpan(),
+            d_model.categories_node_segments.ConstDeviceSpan(),
+            d_model.categories.ConstDeviceSpan(),
+
             d_model.tree_beg_, d_model.tree_end_, num_features, num_rows,
             entry_start, use_shared, nan(""));
         batch_offset += batch.Size();

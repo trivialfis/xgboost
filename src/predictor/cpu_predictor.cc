@@ -89,13 +89,11 @@ PredValueByOneTree(const RegTree::FVec &p_feats, RegTree const &tree,
   return tree[leaf].LeafValue();
 }
 
-inline void PredictByAllTrees(gbm::GBTreeModel const &model,
-                              const size_t tree_begin, const size_t tree_end,
-                              std::vector<bst_float> *out_preds,
-                              const size_t predict_offset,
-                              const size_t num_group,
-                              const std::vector<RegTree::FVec> &thread_temp,
-                              const size_t offset, const size_t block_size) {
+void PredictByAllTrees(gbm::GBTreeModel const &model, const size_t tree_begin,
+                       const size_t tree_end, std::vector<bst_float> *out_preds,
+                       const size_t predict_offset, const size_t num_group,
+                       const std::vector<RegTree::FVec> &thread_temp,
+                       const size_t offset, const size_t block_size) {
   std::vector<bst_float> &preds = *out_preds;
   for (size_t tree_id = tree_begin; tree_id < tree_end; ++tree_id) {
     const size_t gid = model.tree_info[tree_id];
@@ -399,7 +397,12 @@ class CPUPredictor : public Predictor {
         }
         feats.Fill(page[i]);
         for (unsigned j = 0; j < ntree_limit; ++j) {
-          int tid = model.trees[j]->GetLeafIndex(feats);
+          auto const& tree = *model.trees[j];
+          auto categories = tree.GetSplitCategories();
+          auto split_types = tree.GetSplitTypes();
+          auto categories_ptr = tree.GetSplitCategoriesPtr();
+          bst_node_t tid = GetLeafIndex<true>(tree, feats, split_types,
+                                              categories_ptr, categories);
           preds[ridx * ntree_limit + j] = static_cast<bst_float>(tid);
         }
         feats.Drop(page[i]);
