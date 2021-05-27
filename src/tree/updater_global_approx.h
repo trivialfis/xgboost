@@ -111,8 +111,8 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
       int right_nidx = tree[candidate.nid].RightChild();
       auto build_hist_nidx = left_nidx;
       auto subtraction_trick_nidx = right_nidx;
-      bool fewer_right = candidate.split.right_sum.GetHess() <
-                         candidate.split.left_sum.GetHess();
+      bool fewer_right = row_indices[left_nidx].Size() >
+                         row_indices[right_nidx].Size();
       if (fewer_right) {
         std::swap(build_hist_nidx, subtraction_trick_nidx);
       }
@@ -503,6 +503,9 @@ void UpdateTreeWithDriver(TrainParam param_, RegTree *p_tree,
         new_candidates[i * 2 + 1] = LocalExpandEntry();
       }
     }
+
+    // FIXME: Parents of leaf nodes don't require partitioning, but update prediction
+    // cache requires fully partitioned nodes.
     timer->Start("Update Position");
     update_position(applid);
     timer->Stop("Update Position");

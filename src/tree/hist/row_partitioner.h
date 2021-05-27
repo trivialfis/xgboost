@@ -239,7 +239,7 @@ class PartitionBuilder {
 
   template <typename BinIdxType>
   void PartitionKernel(const size_t node_in_set, const size_t nid,
-                       common::Range1d range, const int32_t split_cond,
+                       common::Range1d const &range, const int32_t split_cond,
                        const common::ColumnMatrix &column_matrix,
                        const RegTree &tree,
                        common::RowSetCollection *p_row_set_collection) {

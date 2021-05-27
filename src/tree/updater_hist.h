@@ -20,8 +20,7 @@ class HistRowPartitioner {
                                  },
                                  kPartitionBlockSize};
     partition_builder_.Init(space.Size(), n_nodes, [&](size_t node_in_set) {
-      auto candidate = candidates[node_in_set];
-      const int32_t nid = candidate.nid;
+      const int32_t nid = candidates[node_in_set].nid;
       const size_t size = row_set_collection_[nid].Size();
       const size_t n_tasks =
           size / kPartitionBlockSize + !!(size % kPartitionBlockSize);
@@ -32,8 +31,7 @@ class HistRowPartitioner {
     auto threads = omp_get_max_threads();
     common::ParallelFor2d(
         space, threads, [&](size_t node_in_set, common::Range1d r) {
-          auto candidate = candidates[node_in_set];
-          const int32_t nid = candidate.nid;
+          const bst_node_t nid = candidates[node_in_set].nid;
           switch (column_matrix.GetTypeSize()) {
           case common::kUint8BinsTypeSize:
             partition_builder_.template PartitionKernel<uint8_t>(
@@ -56,6 +54,8 @@ class HistRowPartitioner {
         });
 
     partition_builder_.CalculateRowOffsets();
+    // 4. Copy elements from partition_builder_ to row_set_collection_ back
+    // with updated row-indexes for each tree-node
     common::ParallelFor2d(
         space, threads, [&](size_t node_in_set, common::Range1d r) {
           auto candidate = candidates[node_in_set];
@@ -64,9 +64,9 @@ class HistRowPartitioner {
               node_in_set, r.begin(),
               const_cast<size_t *>(row_set_collection_[nid].begin));
         });
-    for (size_t i = 0; i < candidates.size(); ++i) {
-      auto const& candidate = candidates[i];
-      auto nidx = candidate.nid;
+
+    for (size_t i = 0; i < n_nodes; ++i) {
+      auto nidx = candidates[i].nid;
       auto n_left = partition_builder_.GetNLeftElems(i);
       auto n_right = partition_builder_.GetNRightElems(i);
       CHECK_EQ(n_left + n_right, row_set_collection_[nidx].Size());
