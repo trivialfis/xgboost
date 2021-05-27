@@ -66,24 +66,20 @@ template <typename GradientSumT> class GloablApproxBuilder {
     return best;
   }
 
-  void UpdatePredictionCache(const DMatrix *data,
-                             HostDeviceVector<bst_float> *p_out_preds) {
+  void UpdatePredictionCache(const DMatrix *data, VectorView<float> out_preds) {
     monitor_->Start(__func__);
-    // Caching prediction seems redundant for approx tree method, as sketching takes up
-    // majority of training time.
-    std::vector<bst_float>& out_preds = p_out_preds->HostVector();
-    CHECK_EQ(out_preds.size(), data->Info().num_row_);
+    // Caching prediction seems redundant for approx tree method, as sketching
+    // takes up majority of training time.
     CHECK(p_last_tree_);
 
     size_t n_nodes = p_last_tree_->GetNodes().size();
     CHECK_EQ(partitioner_.Size(), n_nodes);
     common::BlockedSpace2d space(
-        n_nodes, [&](size_t node) { return partitioner_[node].Size(); },
-        1024);
+        n_nodes, [&](size_t node) { return partitioner_[node].Size(); }, 1024);
 
     auto evaluator = evaluator_.GetEvaluator();
-    auto const& tree = *p_last_tree_;
-    auto const& snode = evaluator_.Stats();
+    auto const &tree = *p_last_tree_;
+    auto const &snode = evaluator_.Stats();
     common::ParallelFor2d(
         space, omp_get_max_threads(), [&](size_t nidx, common::Range1d r) {
           if (tree[nidx].IsLeaf()) {
@@ -225,13 +221,13 @@ class GlobalApproxUpdater : public TreeUpdater {
 
   bool
   UpdatePredictionCache(const DMatrix *data,
-                        HostDeviceVector<bst_float> *p_out_preds) override {
+                        VectorView<float> out_preds) override {
     if (data != cached_) { return false; }
 
     if (hist_param_.single_precision_histogram) {
-      this->f32_impl_->UpdatePredictionCache(data, p_out_preds);
+      this->f32_impl_->UpdatePredictionCache(data, out_preds);
     } else {
-      this->f64_impl_->UpdatePredictionCache(data, p_out_preds);
+      this->f64_impl_->UpdatePredictionCache(data, out_preds);
     }
     return true;
   }
