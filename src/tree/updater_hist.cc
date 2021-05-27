@@ -97,19 +97,17 @@ template <typename GradientSumT> class HistBuilder {
     auto const &h_gpair = gpair;
     sampled.resize(h_gpair.size());
     std::copy(h_gpair.cbegin(), h_gpair.cend(), sampled.begin());
-    auto &rnd = common::GlobalRandom();
     if (param_.subsample != 1.0) {
+      auto const &rng = common::GlobalRandom();
       CHECK(param_.sampling_method != TrainParam::kGradientBased)
-          << "Gradient based sampling is not supported for approx tree method.";
+          << "Gradient based sampling is not supported for CPU Hist tree method.";
+      std::vector<std::mt19937> rngs(omp_get_max_threads(), rng);
       std::bernoulli_distribution coin_flip(param_.subsample);
-      std::transform(sampled.begin(), sampled.end(), sampled.begin(),
-                     [&](GradientPair &g) {
-                       if (coin_flip(rnd)) {
-                         return g;
-                       } else {
-                         return GradientPair{};
-                       }
-                     });
+      common::ParallelFor(sampled.size(), [&](size_t i) {
+        if (!coin_flip(rngs[omp_get_thread_num()])) {
+          sampled[i] = GradientPair{};
+        }
+      });
     }
 
     UpdateTreeWithDriver(
