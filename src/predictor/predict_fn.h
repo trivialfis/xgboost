@@ -8,7 +8,7 @@
 
 namespace xgboost {
 namespace predictor {
-template <bool has_missing, bool has_categorical = true>
+template <bool has_missing, bool has_categorical>
 inline XGBOOST_DEVICE bst_node_t GetNextNode(
     common::Span<RegTree::Node const> tree, bst_node_t nid, float fvalue,
     bool is_missing, RegTree::CategoricalSplitMatrix const& cats) {

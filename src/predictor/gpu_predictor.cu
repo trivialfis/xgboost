@@ -223,8 +223,8 @@ __device__ bst_node_t GetLeafIndex(bst_row_t ridx, TreeView const &tree,
   while (!n.IsLeaf()) {
     float fvalue = loader->GetElement(ridx, n.SplitIndex());
     bool is_missing = common::CheckNAN(fvalue);
-    nidx = GetNextNode<has_categorical>(tree.d_tree, nidx, fvalue, is_missing,
-                                        tree.cats);
+    nidx = GetNextNode<has_missing, has_categorical>(tree.d_tree, nidx, fvalue,
+                                                     is_missing, tree.cats);
     n = tree.d_tree[nidx];
   }
   return nidx;
