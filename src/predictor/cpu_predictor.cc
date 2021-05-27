@@ -38,14 +38,19 @@ bst_float PredValue(const SparsePage::Inst &inst,
   for (size_t i = tree_begin; i < tree_end; ++i) {
     if (tree_info[i] == bst_group) {
       auto const &tree = *trees[i];
+      bool has_categorical = tree.HasCategoricalSplit();
 
       auto categories = common::Span<uint32_t const>{tree.GetSplitCategories()};
       auto split_types = tree.GetSplitTypes();
       auto categories_ptr =
           common::Span<RegTree::Segment const>{tree.GetSplitCategoriesPtr()};
       auto cats = tree.GetCategoriesMatrix();
-
-      auto nidx = GetLeafIndex<true>(tree, *p_feats, cats);
+      bst_node_t nidx = -1;
+      if (has_categorical) {
+        nidx = GetLeafIndex<true, true>(tree, *p_feats, cats);
+      } else {
+        nidx = GetLeafIndex<true, false>(tree, *p_feats, cats);
+      }
       psum += (*trees[i])[nidx].LeafValue();
     }
   }
@@ -57,10 +62,16 @@ bst_float
 PredValueByOneTree(const RegTree::FVec &p_feats, RegTree const &tree,
                    RegTree::CategoricalSplitMatrix const& cats) {
   bst_node_t leaf = -1;
-  if (p_feats.HasMissing()) {
-    leaf = GetLeafIndex<true>(tree, p_feats, cats);
+  auto has_missing = p_feats.HasMissing();
+  auto has_categorical = tree.HasCategoricalSplit();
+  if (has_missing && has_categorical) {
+    leaf = GetLeafIndex<true, true>(tree, p_feats, cats);
+  } else if (has_missing && !has_categorical) {
+    leaf = GetLeafIndex<true, false>(tree, p_feats, cats);
+  } else if (!has_missing && has_categorical) {
+    leaf = GetLeafIndex<false, true>(tree, p_feats, cats);
   } else {
-    leaf = GetLeafIndex<false>(tree, p_feats, cats);
+    leaf = GetLeafIndex<false, false>(tree, p_feats, cats);
   }
   return tree[leaf].LeafValue();
 }
@@ -371,7 +382,7 @@ class CPUPredictor : public Predictor {
         for (unsigned j = 0; j < ntree_limit; ++j) {
           auto const& tree = *model.trees[j];
           auto const& cats = tree.GetCategoriesMatrix();
-          bst_node_t tid = GetLeafIndex<true>(tree, feats, cats);
+          bst_node_t tid = GetLeafIndex<true, true>(tree, feats, cats);
           preds[ridx * ntree_limit + j] = static_cast<bst_float>(tid);
         }
         feats.Drop(page[i]);

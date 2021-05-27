@@ -667,17 +667,26 @@ bool QuantileHistMaker::Builder<GradientSumT>::UpdatePredictionCache(
     for (auto&& batch : p_last_fmat_mutable_->GetBatches<SparsePage>()) {
       HostSparsePageView page_view = batch.GetView();
       const auto num_parallel_ops = static_cast<bst_omp_uint>(unused_rows_.size());
+      auto has_categorical = p_last_tree_->HasCategoricalSplit();
       common::ParallelFor(num_parallel_ops, [&](bst_omp_uint block_id) {
         RegTree::FVec &feats = feat_vecs_[omp_get_thread_num()];
         const SparsePage::Inst inst = page_view[unused_rows_[block_id]];
         feats.Fill(inst);
 
         const size_t row_num = unused_rows_[block_id] + batch.base_rowid;
-        const int lid =
-            feats.HasMissing()
-                ? predictor::GetLeafIndex<true>(*p_last_tree_, feats, cats)
-                : predictor::GetLeafIndex<false>(*p_last_tree_, feats, cats);
-        out_preds[row_num] += (*p_last_tree_)[lid].LeafValue();
+        bst_node_t leaf_id = -1;
+        if (has_categorical) {
+          leaf_id = feats.HasMissing()
+                        ? predictor::GetLeafIndex<true, true>(*p_last_tree_,
+                                                              feats, cats)
+                        : predictor::GetLeafIndex<false, true>(*p_last_tree_,
+                                                               feats, cats);
+        } else {
+          feats.HasMissing()
+              ? predictor::GetLeafIndex<true, false>(*p_last_tree_, feats, cats)
+              : predictor::GetLeafIndex<false, false>(*p_last_tree_, feats, cats);
+        }
+        out_preds[row_num] += (*p_last_tree_)[leaf_id].LeafValue();
 
         feats.Drop(inst);
       });

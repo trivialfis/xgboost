@@ -445,6 +445,10 @@ class RegTree : public Model {
                          bst_float right_leaf_weight, bst_float loss_change,
                          float sum_hess, float left_sum, float right_sum);
 
+  bool HasCategoricalSplit() const {
+    return !split_categories_.empty();
+  }
+
   /*!
    * \brief get current depth
    * \param nid node id

@@ -58,6 +58,10 @@ struct TreeView {
     cats.categories = tree_categories;
     cats.node_ptr = tree_cat_ptrs;
   }
+
+  __device__ bool HasCategoricalSplit() const {
+    return !cats.categories.empty();
+  }
 };
 
 struct SparsePageView {
@@ -211,25 +215,30 @@ struct DeviceAdapterLoader {
   }
 };
 
-template <typename Loader>
-__device__ bst_node_t GetLeafIndex(bst_row_t ridx,
-                                   TreeView const& tree,
+template <bool has_missing, bool has_categorical, typename Loader>
+__device__ bst_node_t GetLeafIndex(bst_row_t ridx, TreeView const &tree,
                                    Loader *loader) {
   bst_node_t nidx = 0;
   RegTree::Node n = tree.d_tree[nidx];
   while (!n.IsLeaf()) {
     float fvalue = loader->GetElement(ridx, n.SplitIndex());
     bool is_missing = common::CheckNAN(fvalue);
-    nidx = GetNextNode(tree.d_tree, nidx, fvalue, is_missing, tree.cats);
+    nidx = GetNextNode<has_categorical>(tree.d_tree, nidx, fvalue, is_missing,
+                                        tree.cats);
     n = tree.d_tree[nidx];
   }
   return nidx;
 }
 
-template <typename Loader>
-__device__ float
-GetLeafWeight(bst_row_t ridx, TreeView const& tree, Loader *loader) {
-  bst_node_t nidx = GetLeafIndex(ridx, tree, loader);
+template <bool has_missing, typename Loader>
+__device__ float GetLeafWeight(bst_row_t ridx, TreeView const &tree,
+                               Loader *loader) {
+  bst_node_t nidx = -1;
+  if (tree.HasCategoricalSplit()) {
+    nidx = GetLeafIndex<has_missing, true>(ridx, tree, loader);
+  } else {
+    nidx = GetLeafIndex<has_missing, false>(ridx, tree, loader);
+  }
   return tree.d_tree[nidx].LeafValue();
 }
 
@@ -258,12 +267,17 @@ PredictLeafKernel(Data data, common::Span<const RegTree::Node> d_nodes,
         d_tree_segments,     d_tree_split_types, d_cat_tree_segments,
         d_cat_node_segments, d_categories};
 
-    auto leaf = GetLeafIndex(ridx, d_tree, &loader);
+    bst_node_t leaf = -1;
+    if (d_tree.HasCategoricalSplit()) {
+      leaf = GetLeafIndex<true, true>(ridx, d_tree, &loader);
+    } else {
+      leaf = GetLeafIndex<true, false>(ridx, d_tree, &loader);
+    }
     d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
   }
 }
 
-template <typename Loader, typename Data>
+template <typename Loader, typename Data, bool has_missing = true>
 __global__ void
 PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
               common::Span<float> d_out_predictions,
@@ -285,7 +299,7 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
           tree_begin,          tree_idx,           d_nodes,
           d_tree_segments,     d_tree_split_types, d_cat_tree_segments,
           d_cat_node_segments, d_categories};
-      float leaf = GetLeafWeight(global_idx, d_tree, &loader);
+      float leaf = GetLeafWeight<has_missing>(global_idx, d_tree, &loader);
       sum += leaf;
     }
     d_out_predictions[global_idx] += sum;
@@ -298,7 +312,7 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
           d_cat_node_segments, d_categories};
       bst_uint out_prediction_idx = global_idx * num_group + tree_group;
       d_out_predictions[out_prediction_idx] +=
-          GetLeafWeight(global_idx, d_tree, &loader);
+          GetLeafWeight<has_missing>(global_idx, d_tree, &loader);
     }
   }
 }
@@ -501,7 +515,7 @@ class GPUPredictor : public xgboost::Predictor {
                        DeviceModel const& model,
                        size_t num_features,
                        HostDeviceVector<bst_float>* predictions,
-                       size_t batch_offset) const {
+                       size_t batch_offset, bool is_dense) const {
     batch.offset.SetDevice(generic_param_->gpu_id);
     batch.data.SetDevice(generic_param_->gpu_id);
     const uint32_t BLOCK_THREADS = 128;
@@ -515,16 +529,33 @@ class GPUPredictor : public xgboost::Predictor {
     size_t entry_start = 0;
     SparsePageView data(batch.data.DeviceSpan(), batch.offset.DeviceSpan(),
                         num_features);
-    dh::LaunchKernel {GRID_SIZE, BLOCK_THREADS, shared_memory_bytes} (
-        PredictKernel<SparsePageLoader, SparsePageView>, data,
-        model.nodes.ConstDeviceSpan(),
-        predictions->DeviceSpan().subspan(batch_offset),
-        model.tree_segments.ConstDeviceSpan(), model.tree_group.ConstDeviceSpan(),
-        model.split_types.ConstDeviceSpan(),
-        model.categories_tree_segments.ConstDeviceSpan(),
-        model.categories_node_segments.ConstDeviceSpan(),
-        model.categories.ConstDeviceSpan(), model.tree_beg_, model.tree_end_,
-        num_features, num_rows, entry_start, use_shared, model.num_group, nan(""));
+    if (is_dense) {
+      dh::LaunchKernel{GRID_SIZE, BLOCK_THREADS, shared_memory_bytes}(
+          PredictKernel<SparsePageLoader, SparsePageView, false>, data,
+          model.nodes.ConstDeviceSpan(),
+          predictions->DeviceSpan().subspan(batch_offset),
+          model.tree_segments.ConstDeviceSpan(),
+          model.tree_group.ConstDeviceSpan(),
+          model.split_types.ConstDeviceSpan(),
+          model.categories_tree_segments.ConstDeviceSpan(),
+          model.categories_node_segments.ConstDeviceSpan(),
+          model.categories.ConstDeviceSpan(), model.tree_beg_, model.tree_end_,
+          num_features, num_rows, entry_start, use_shared, model.num_group,
+          nan(""));
+    } else {
+      dh::LaunchKernel{GRID_SIZE, BLOCK_THREADS, shared_memory_bytes}(
+          PredictKernel<SparsePageLoader, SparsePageView, true>, data,
+          model.nodes.ConstDeviceSpan(),
+          predictions->DeviceSpan().subspan(batch_offset),
+          model.tree_segments.ConstDeviceSpan(),
+          model.tree_group.ConstDeviceSpan(),
+          model.split_types.ConstDeviceSpan(),
+          model.categories_tree_segments.ConstDeviceSpan(),
+          model.categories_node_segments.ConstDeviceSpan(),
+          model.categories.ConstDeviceSpan(), model.tree_beg_, model.tree_end_,
+          num_features, num_rows, entry_start, use_shared, model.num_group,
+          nan(""));
+    }
   }
   void PredictInternal(EllpackDeviceAccessor const& batch,
                        DeviceModel const& model,
@@ -564,7 +595,7 @@ class GPUPredictor : public xgboost::Predictor {
       size_t batch_offset = 0;
       for (auto &batch : dmat->GetBatches<SparsePage>()) {
         this->PredictInternal(batch, d_model, model.learner_model_param->num_feature,
-                              out_preds, batch_offset);
+                              out_preds, batch_offset, dmat->IsDense());
         batch_offset += batch.Size() * model.learner_model_param->num_output_group;
       }
     } else {
