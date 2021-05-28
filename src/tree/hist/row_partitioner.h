@@ -177,11 +177,11 @@ class PartitionBuilder {
 
 
   size_t GetNLeftElems(int nid) const {
-    return left_right_nodes_sizes_.at(nid).first;
+    return left_right_nodes_sizes_[nid].first;
   }
 
   size_t GetNRightElems(int nid) const {
-    return left_right_nodes_sizes_.at(nid).second;
+    return left_right_nodes_sizes_[nid].second;
   }
 
   // Each thread has partial results for some set of tree-nodes

@@ -521,10 +521,9 @@ void UpdateTreeWithDriver(TrainParam param_, RegTree *p_tree,
         auto candidate = valid_candidates[c];
         int left_child_nidx = tree[candidate.nid].LeftChild();
         int right_child_nidx = tree[candidate.nid].RightChild();
-        LocalExpandEntry l_best{
-            left_child_nidx, tree.GetDepth(left_child_nidx), {}};
-        LocalExpandEntry r_best{
-            right_child_nidx, tree.GetDepth(right_child_nidx), {}};
+        int depth = tree.GetDepth(left_child_nidx);
+        LocalExpandEntry l_best{left_child_nidx, depth, {}};
+        LocalExpandEntry r_best{right_child_nidx, depth, {}};
         new_candidates[i * 2] = l_best;
         new_candidates[i * 2 + 1] = r_best;
         best_splits.push_back(&new_candidates[i * 2]);

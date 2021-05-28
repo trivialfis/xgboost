@@ -12,10 +12,12 @@ class HistRowPartitioner {
                       std::vector<LocalExpandEntry> const &candidates,
                       RegTree const *p_tree) {
     size_t n_nodes = candidates.size();
+    std::vector<int32_t> split_conditions;
+    FindSplitConditions(candidates, *p_tree, index, &split_conditions);
+
     common::BlockedSpace2d space{n_nodes,
                                  [&](size_t node_in_set) {
-                                   auto candidate = candidates[node_in_set];
-                                   int32_t nid = candidate.nid;
+                                   bst_node_t nid = candidates[node_in_set].nid;
                                    return row_set_collection_[nid].Size();
                                  },
                                  kPartitionBlockSize};
@@ -26,8 +28,6 @@ class HistRowPartitioner {
           size / kPartitionBlockSize + !!(size % kPartitionBlockSize);
       return n_tasks;
     });
-    std::vector<int32_t> split_conditions;
-    FindSplitConditions(candidates, *p_tree, index, &split_conditions);
     auto threads = omp_get_max_threads();
     common::ParallelFor2d(
         space, threads, [&](size_t node_in_set, common::Range1d r) {
@@ -58,8 +58,7 @@ class HistRowPartitioner {
     // with updated row-indexes for each tree-node
     common::ParallelFor2d(
         space, threads, [&](size_t node_in_set, common::Range1d r) {
-          auto candidate = candidates[node_in_set];
-          const int32_t nid = candidate.nid;
+          auto nid = candidates[node_in_set].nid;
           partition_builder_.MergeToArray(
               node_in_set, r.begin(),
               const_cast<size_t *>(row_set_collection_[nid].begin));
