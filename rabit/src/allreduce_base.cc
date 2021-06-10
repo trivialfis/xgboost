@@ -285,8 +285,9 @@ bool AllreduceBase::ReConnectLinks(const char *cmd) {
     int newrank, num_neighbors;
     Assert(tracker.RecvAll(&newrank, sizeof(newrank)) == sizeof(newrank),
            "ReConnectLink failure 4");
-    Assert(tracker.RecvAll(&parent_rank, sizeof(parent_rank)) == \
-         sizeof(parent_rank), "ReConnectLink failure 4");
+    Assert(tracker.RecvAll(&parent_rank, sizeof(parent_rank)) ==
+               sizeof(parent_rank),
+           "ReConnectLink failure 4");
     Assert(tracker.RecvAll(&world_size, sizeof(world_size)) == sizeof(world_size),
            "ReConnectLink failure 4");
     Assert(rank == -1 || newrank == rank,
