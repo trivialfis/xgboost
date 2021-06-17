@@ -108,7 +108,8 @@ class HistogramCuts {
   }
 };
 
-inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
+inline HistogramCuts SketchOnDMatrix(Context const *ctx, DMatrix *m,
+                                     int32_t max_bins) {
   HistogramCuts out;
   auto const& info = m->Info();
   const auto threads = omp_get_max_threads();
@@ -117,7 +118,7 @@ inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
     column.resize(info.num_col_, 0);
   }
   std::vector<bst_row_t> reduced(info.num_col_, 0);
-  for (auto const& page : m->GetBatches<SparsePage>()) {
+  for (auto const& page : m->GetBatches<SparsePage>(ctx)) {
     auto const &entries_per_column =
         HostSketchContainer::CalcColumnSize(page, info.num_col_, threads);
     for (size_t i = 0; i < entries_per_column.size(); ++i) {
@@ -126,7 +127,7 @@ inline HistogramCuts SketchOnDMatrix(DMatrix *m, int32_t max_bins) {
   }
   HostSketchContainer container(reduced, max_bins,
                                 HostSketchContainer::UseGroup(info));
-  for (auto const &page : m->GetBatches<SparsePage>()) {
+  for (auto const &page : m->GetBatches<SparsePage>(ctx)) {
     container.PushRowPage(page, info);
   }
   container.MakeCuts(&out);
@@ -245,7 +246,7 @@ struct GHistIndexMatrix {
   DMatrix* p_fmat;
   size_t max_num_bins;
   // Create a global histogram matrix, given cut
-  void Init(DMatrix* p_fmat, int max_num_bins);
+  void Init(Context const* ctx, DMatrix* p_fmat, int max_num_bins);
 
   // specific method for sparse data as no possibility to reduce allocated memory
   template <typename BinIdxType, typename GetOffset>
@@ -633,9 +634,21 @@ class GHistBuilder {
                  const GHistIndexMatrix& gmat,
                  GHistRowT hist);
   // construct a histogram via subtraction trick
-  void SubtractionTrick(GHistRowT self,
-                        GHistRowT sibling,
-                        GHistRowT parent);
+  void SubtractionTrick(Context const* ctx, GHistRowT self, GHistRowT sibling, GHistRowT parent) {
+    const size_t size = self.size();
+    CHECK_EQ(sibling.size(), size);
+    CHECK_EQ(parent.size(), size);
+
+    const size_t block_size = 1024; // aproximatly 1024 values per block
+    size_t n_blocks = size / block_size + !!(size % block_size);
+
+    ParallelFor(omp_ulong(n_blocks), ctx->Threads(), [&](omp_ulong iblock) {
+      const size_t ibegin = iblock * block_size;
+      const size_t iend =
+          (((iblock + 1) * block_size > size) ? size : ibegin + block_size);
+      SubtractionHist(self, parent, sibling, ibegin, iend);
+    });
+  }
 
   uint32_t GetNumBins() const {
       return nbins_;

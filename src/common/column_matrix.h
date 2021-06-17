@@ -145,8 +145,9 @@ class ColumnMatrix {
   }
 
   // construct column matrix from GHistIndexMatrix
-  inline void Init(const GHistIndexMatrix& gmat,
+  inline void Init(Context const* ctx, const GHistIndexMatrix& gmat,
                    double  sparse_threshold) {
+    ctx_ = ctx;
     const int32_t nfeature = static_cast<int32_t>(gmat.cut.Ptrs().size() - 1);
     const size_t nrow = gmat.row_ptr.size() - 1;
     // identify type of each column
@@ -270,7 +271,7 @@ class ColumnMatrix {
     /* missing values make sense only for column with type kDenseColumn,
        and if no missing values were observed it could be handled much faster. */
     if (noMissingValues) {
-      ParallelFor(omp_ulong(nrow), [&](omp_ulong rid) {
+      ParallelFor(omp_ulong(nrow), ctx_->Threads(), [&](omp_ulong rid) {
         const size_t ibegin = rid*nfeature;
         const size_t iend = (rid+1)*nfeature;
         size_t j = 0;
@@ -282,7 +283,7 @@ class ColumnMatrix {
     } else {
       /* to handle rows in all batches, sum of all batch sizes equal to gmat.row_ptr.size() - 1 */
       size_t rbegin = 0;
-      for (const auto &batch : gmat.p_fmat->GetBatches<SparsePage>()) {
+      for (const auto &batch : gmat.p_fmat->GetBatches<SparsePage>(ctx_)) {
         const xgboost::Entry* data_ptr = batch.data.HostVector().data();
         const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
         const size_t batch_size = batch.Size();
@@ -317,7 +318,7 @@ class ColumnMatrix {
 
     T* local_index = reinterpret_cast<T*>(&index_[0]);
     size_t rbegin = 0;
-    for (const auto &batch : gmat.p_fmat->GetBatches<SparsePage>()) {
+    for (const auto &batch : gmat.p_fmat->GetBatches<SparsePage>(ctx_)) {
       const xgboost::Entry* data_ptr = batch.data.HostVector().data();
       const std::vector<bst_row_t>& offset_vec = batch.offset.HostVector();
       const size_t batch_size = batch.Size();
@@ -366,6 +367,7 @@ class ColumnMatrix {
   }
 
  private:
+  Context const* ctx_;
   std::vector<uint8_t> index_;
 
   std::vector<size_t> feature_counts_;

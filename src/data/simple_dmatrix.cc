@@ -24,10 +24,10 @@ MetaInfo& SimpleDMatrix::Info() { return info_; }
 
 const MetaInfo& SimpleDMatrix::Info() const { return info_; }
 
-DMatrix* SimpleDMatrix::Slice(common::Span<int32_t const> ridxs) {
+DMatrix* SimpleDMatrix::Slice(Context const* ctx, common::Span<int32_t const> ridxs) {
   auto out = new SimpleDMatrix;
   SparsePage& out_page = out->sparse_page_;
-  for (auto const &page : this->GetBatches<SparsePage>()) {
+  for (auto const &page : this->GetBatches<SparsePage>(ctx)) {
     auto batch = page.GetView();
     auto& h_data = out_page.data.HostVector();
     auto& h_offset = out_page.offset.HostVector();
@@ -51,21 +51,22 @@ BatchSet<SparsePage> SimpleDMatrix::GetRowBatches() {
   return BatchSet<SparsePage>(begin_iter);
 }
 
-BatchSet<CSCPage> SimpleDMatrix::GetColumnBatches() {
+BatchSet<CSCPage> SimpleDMatrix::GetColumnBatches(Context const* ctx) {
   // column page doesn't exist, generate it
   if (!column_page_) {
-    column_page_.reset(new CSCPage(sparse_page_.GetTranspose(info_.num_col_)));
+    column_page_.reset(
+        new CSCPage(sparse_page_.GetTranspose(info_.num_col_, ctx->Threads())));
   }
   auto begin_iter =
       BatchIterator<CSCPage>(new SimpleBatchIteratorImpl<CSCPage>(column_page_.get()));
   return BatchSet<CSCPage>(begin_iter);
 }
 
-BatchSet<SortedCSCPage> SimpleDMatrix::GetSortedColumnBatches() {
+BatchSet<SortedCSCPage> SimpleDMatrix::GetSortedColumnBatches(Context const* ctx) {
   // Sorted column page doesn't exist, generate it
   if (!sorted_column_page_) {
     sorted_column_page_.reset(
-        new SortedCSCPage(sparse_page_.GetTranspose(info_.num_col_)));
+        new SortedCSCPage(sparse_page_.GetTranspose(info_.num_col_, ctx->Threads())));
     sorted_column_page_->SortRows();
   }
   auto begin_iter = BatchIterator<SortedCSCPage>(
@@ -73,7 +74,7 @@ BatchSet<SortedCSCPage> SimpleDMatrix::GetSortedColumnBatches() {
   return BatchSet<SortedCSCPage>(begin_iter);
 }
 
-BatchSet<EllpackPage> SimpleDMatrix::GetEllpackBatches(const BatchParam& param) {
+BatchSet<EllpackPage> SimpleDMatrix::GetEllpackBatches(Context const* ctx, const BatchParam& param) {
   // ELLPACK page doesn't exist, generate it
   if (!(batch_param_ != BatchParam{})) {
     CHECK(param != BatchParam{}) << "Batch parameter is not initialized.";
@@ -81,7 +82,7 @@ BatchSet<EllpackPage> SimpleDMatrix::GetEllpackBatches(const BatchParam& param) 
   if (!ellpack_page_  || (batch_param_ != param && param != BatchParam{})) {
     CHECK_GE(param.gpu_id, 0);
     CHECK_GE(param.max_bin, 2);
-    ellpack_page_.reset(new EllpackPage(this, param));
+    ellpack_page_.reset(new EllpackPage(ctx, this, param));
     batch_param_ = param;
   }
   auto begin_iter =

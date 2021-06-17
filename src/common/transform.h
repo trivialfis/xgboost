@@ -61,10 +61,10 @@ class Transform {
   template <typename Functor>
   struct Evaluator {
    public:
-    Evaluator(Functor func, Range range, int device, bool shard) :
+    Evaluator(Functor func, Range range, Context const* ctx, bool shard) :
         func_(func), range_{std::move(range)},
         shard_{shard},
-        device_{device} {}
+        ctx_{ctx} {}
 
     /*!
      * \brief Evaluate the functor with input pointers to HostDeviceVector.
@@ -74,7 +74,7 @@ class Transform {
      */
     template <typename... HDV>
     void Eval(HDV... vectors) const {
-      bool on_device = device_ >= 0;
+      bool on_device = ctx_->gpu_id >= 0;
 
       if (on_device) {
         LaunchCUDA(func_, vectors...);
@@ -135,7 +135,7 @@ class Transform {
               typename... HDV>
     void LaunchCUDA(Functor _func, HDV*... _vectors) const {
       if (shard_) {
-        UnpackShard(device_, _vectors...);
+        UnpackShard(ctx_->gpu_id, _vectors...);
       }
 
       size_t range_size = *range_.end() - *range_.begin();
@@ -145,7 +145,7 @@ class Transform {
       // granularity is used in data vector.
       size_t shard_size = range_size;
       Range shard_range {0, static_cast<Range::DifferenceType>(shard_size)};
-      dh::safe_cuda(cudaSetDevice(device_));
+      dh::safe_cuda(cudaSetDevice(ctx_->gpu_id));
       const int kGrids =
           static_cast<int>(DivRoundUp(*(range_.end()), kBlockThreads));
       if (kGrids == 0) {
@@ -170,19 +170,19 @@ class Transform {
     void LaunchCPU(Functor func, HDV*... vectors) const {
       omp_ulong end = static_cast<omp_ulong>(*(range_.end()));
       SyncHost(vectors...);
-      ParallelFor(end, [&](omp_ulong idx) {
+      ParallelFor(end, ctx_->Threads(), [&](omp_ulong idx) {
         func(idx, UnpackHDV(vectors)...);
       });
     }
 
    private:
+    Context const* ctx_;
     /*! \brief Callable object. */
     Functor func_;
     /*! \brief Range object specifying parallel threads index range. */
     Range range_;
     /*! \brief Whether sharding for vectors is required. */
     bool shard_;
-    int device_;
   };
 
  public:
@@ -200,9 +200,9 @@ class Transform {
    */
   template <typename Functor>
   static Evaluator<Functor> Init(Functor func, Range const range,
-                                 int device,
+                                 Context const* ctx,
                                  bool const shard = true) {
-    return Evaluator<Functor> {func, std::move(range), device, shard};
+    return Evaluator<Functor> {func, std::move(range), ctx, shard};
   }
 };
 

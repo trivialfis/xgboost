@@ -33,12 +33,13 @@ TEST(SimpleDMatrix, RowAccess) {
 
   // Loop over the batches and count the records
   int64_t row_count = 0;
-  for (auto &batch : dmat->GetBatches<xgboost::SparsePage>()) {
+  Context ctx;
+  for (auto &batch : dmat->GetBatches<xgboost::SparsePage>(&ctx)) {
     row_count += batch.Size();
   }
   EXPECT_EQ(row_count, dmat->Info().num_row_);
   // Test the data read into the first row
-  auto &batch = *dmat->GetBatches<xgboost::SparsePage>().begin();
+  auto &batch = *dmat->GetBatches<xgboost::SparsePage>(&ctx).begin();
   auto page = batch.GetView();
   auto first_row = page[0];
   ASSERT_EQ(first_row.size(), 3);
@@ -57,8 +58,9 @@ TEST(SimpleDMatrix, ColAccessWithoutBatches) {
   ASSERT_TRUE(dmat->SingleColBlock());
 
   // Loop over the batches and assert the data is as expected
+  Context ctx;
   int64_t num_col_batch = 0;
-  for (const auto &batch : dmat->GetBatches<xgboost::SortedCSCPage>()) {
+  for (const auto &batch : dmat->GetBatches<xgboost::SortedCSCPage>(&ctx)) {
     num_col_batch += 1;
     EXPECT_EQ(batch.Size(), dmat->Info().num_col_)
         << "Expected batch size = number of cells as #batches is 1.";
@@ -79,7 +81,8 @@ TEST(SimpleDMatrix, Empty) {
   CHECK_EQ(dmat->Info().num_nonzero_, 0);
   CHECK_EQ(dmat->Info().num_row_, 0);
   CHECK_EQ(dmat->Info().num_col_, 0);
-  for (auto &batch : dmat->GetBatches<SparsePage>()) {
+  Context ctx;
+  for (auto &batch : dmat->GetBatches<SparsePage>(&ctx)) {
     CHECK_EQ(batch.Size(), 0);
   }
 
@@ -89,7 +92,7 @@ TEST(SimpleDMatrix, Empty) {
   CHECK_EQ(dmat->Info().num_nonzero_, 0);
   CHECK_EQ(dmat->Info().num_row_, 0);
   CHECK_EQ(dmat->Info().num_col_, 0);
-  for (auto &batch : dmat->GetBatches<SparsePage>()) {
+  for (auto &batch : dmat->GetBatches<SparsePage>(&ctx)) {
     CHECK_EQ(batch.Size(), 0);
   }
 
@@ -99,7 +102,7 @@ TEST(SimpleDMatrix, Empty) {
   CHECK_EQ(dmat->Info().num_nonzero_, 0);
   CHECK_EQ(dmat->Info().num_row_, 0);
   CHECK_EQ(dmat->Info().num_col_, 0);
-  for (auto &batch : dmat->GetBatches<SparsePage>()) {
+  for (auto &batch : dmat->GetBatches<SparsePage>(&ctx)) {
     CHECK_EQ(batch.Size(), 0);
   }
 }
@@ -151,7 +154,8 @@ TEST(SimpleDMatrix, FromDense) {
   EXPECT_EQ(dmat.Info().num_row_, 3);
   EXPECT_EQ(dmat.Info().num_nonzero_, 6);
 
-  for (auto &batch : dmat.GetBatches<SparsePage>()) {
+  Context ctx;
+  for (auto &batch : dmat.GetBatches<SparsePage>(&ctx)) {
     auto page = batch.GetView();
     for (auto i = 0ull; i < batch.Size(); i++) {
       auto inst = page[i];
@@ -174,7 +178,8 @@ TEST(SimpleDMatrix, FromCSC) {
   EXPECT_EQ(dmat.Info().num_row_, 3);
   EXPECT_EQ(dmat.Info().num_nonzero_, 5);
 
-  auto &batch = *dmat.GetBatches<SparsePage>().begin();
+  Context ctx;
+  auto &batch = *dmat.GetBatches<SparsePage>(&ctx).begin();
   auto page = batch.GetView();
   auto inst = page[0];
   EXPECT_EQ(inst[0].fvalue, 1);
@@ -231,7 +236,8 @@ TEST(SimpleDMatrix, FromFile) {
                            1);
   ASSERT_EQ(dmat.Info().num_col_, kCols);
 
-  for (auto &batch : dmat.GetBatches<SparsePage>()) {
+  Context ctx;
+  for (auto &batch : dmat.GetBatches<SparsePage>(&ctx)) {
     verify_batch(batch);
   }
 }
@@ -263,9 +269,10 @@ TEST(SimpleDMatrix, Slice) {
   ASSERT_EQ(out->Info().labels_upper_bound_.Size(), ridxs.size());
   ASSERT_EQ(out->Info().base_margin_.Size(), ridxs.size() * kClasses);
 
-  for (auto const& in_batch : p_m->GetBatches<SparsePage>()) {
+  Context ctx;
+  for (auto const& in_batch : p_m->GetBatches<SparsePage>(&ctx)) {
     auto in_page = in_batch.GetView();
-    for (auto const &out_batch : out->GetBatches<SparsePage>()) {
+    for (auto const &out_batch : out->GetBatches<SparsePage>(&ctx)) {
       auto out_page = out_batch.GetView();
       for (size_t i = 0; i < ridxs.size(); ++i) {
         auto ridx = ridxs[i];
@@ -314,10 +321,11 @@ TEST(SimpleDMatrix, SaveLoadBinary) {
   EXPECT_EQ(dmat->Info().num_row_, dmat_read->Info().num_row_);
 
   // Test we have non-empty batch
-  EXPECT_EQ(dmat->GetBatches<xgboost::SparsePage>().begin().AtEnd(), false);
+  Context ctx;
+  EXPECT_EQ(dmat->GetBatches<xgboost::SparsePage>(&ctx).begin().AtEnd(), false);
 
-  auto row_iter = dmat->GetBatches<xgboost::SparsePage>().begin();
-  auto row_iter_read = dmat_read->GetBatches<xgboost::SparsePage>().begin();
+  auto row_iter = dmat->GetBatches<xgboost::SparsePage>(&ctx).begin();
+  auto row_iter_read = dmat_read->GetBatches<xgboost::SparsePage>(&ctx).begin();
   // Test the data read into the first row
   auto first_row = (*row_iter).GetView()[0];
   auto first_row_read = (*row_iter_read).GetView()[0];

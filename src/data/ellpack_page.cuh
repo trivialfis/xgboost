@@ -131,7 +131,7 @@ class EllpackPageImpl {
    * This is used in the in-memory case. The ELLPACK page is constructed from an existing DMatrix
    * in CSR format.
    */
-  explicit EllpackPageImpl(DMatrix* dmat, const BatchParam& parm);
+  explicit EllpackPageImpl(Context const* ctx, DMatrix* dmat, const BatchParam& parm);
 
   template <typename AdapterBatch>
   explicit EllpackPageImpl(AdapterBatch batch, float missing, int device, bool is_dense, int nthread,
@@ -209,11 +209,11 @@ public:
   common::Monitor monitor_;
 };
 
-inline size_t GetRowStride(DMatrix* dmat) {
+inline size_t GetRowStride(Context const* ctx, DMatrix* dmat) {
   if (dmat->IsDense()) return dmat->Info().num_col_;
 
   size_t row_stride = 0;
-  for (const auto& batch : dmat->GetBatches<SparsePage>()) {
+  for (const auto& batch : dmat->GetBatches<SparsePage>(ctx)) {
     const auto& row_offset = batch.offset.ConstHostVector();
     for (auto i = 1ull; i < row_offset.size(); i++) {
       row_stride = std::max(

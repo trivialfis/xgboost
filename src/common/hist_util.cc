@@ -48,8 +48,8 @@ HistogramCuts::HistogramCuts() {
   cut_ptrs_.HostVector().emplace_back(0);
 }
 
-void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
-  cut = SketchOnDMatrix(p_fmat, max_bins);
+void GHistIndexMatrix::Init(Context const* ctx, DMatrix* p_fmat, int max_bins) {
+  cut = SketchOnDMatrix(ctx, p_fmat, max_bins);
 
   max_num_bins = max_bins;
   const int32_t nthread = omp_get_max_threads();
@@ -59,7 +59,7 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
 
   this->p_fmat = p_fmat;
   size_t new_size = 1;
-  for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+  for (const auto &batch : p_fmat->GetBatches<SparsePage>(ctx)) {
     new_size += batch.Size();
   }
 
@@ -71,7 +71,7 @@ void GHistIndexMatrix::Init(DMatrix* p_fmat, int max_bins) {
   const bool isDense = p_fmat->IsDense();
   this->isDense_ = isDense;
 
-  for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+  for (const auto &batch : p_fmat->GetBatches<SparsePage>(ctx)) {
     // The number of threads is pegged to the batch size. If the OMP
     // block is parallelized on anything other than the batch/block size,
     // it should be reassigned
@@ -402,32 +402,5 @@ void GHistBuilder<double>::BuildHist<false>(const std::vector<GradientPair>& gpa
                              const RowSetCollection::Elem row_indices,
                              const GHistIndexMatrix& gmat,
                              GHistRow<double> hist);
-
-template<typename GradientSumT>
-void GHistBuilder<GradientSumT>::SubtractionTrick(GHistRowT self,
-                                                  GHistRowT sibling,
-                                                  GHistRowT parent) {
-  const size_t size = self.size();
-  CHECK_EQ(sibling.size(), size);
-  CHECK_EQ(parent.size(), size);
-
-  const size_t block_size = 1024;  // aproximatly 1024 values per block
-  size_t n_blocks = size/block_size + !!(size%block_size);
-
-  ParallelFor(omp_ulong(n_blocks), [&](omp_ulong iblock) {
-    const size_t ibegin = iblock*block_size;
-    const size_t iend = (((iblock+1)*block_size > size) ? size : ibegin + block_size);
-    SubtractionHist(self, parent, sibling, ibegin, iend);
-  });
-}
-template
-void GHistBuilder<float>::SubtractionTrick(GHistRow<float> self,
-                                           GHistRow<float> sibling,
-                                           GHistRow<float> parent);
-template
-void GHistBuilder<double>::SubtractionTrick(GHistRow<double> self,
-                                            GHistRow<double> sibling,
-                                            GHistRow<double> parent);
-
 }  // namespace common
 }  // namespace xgboost

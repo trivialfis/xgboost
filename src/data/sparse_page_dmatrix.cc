@@ -27,28 +27,30 @@ BatchSet<SparsePage> SparsePageDMatrix::GetRowBatches() {
   return row_source_->GetBatchSet();
 }
 
-BatchSet<CSCPage> SparsePageDMatrix::GetColumnBatches() {
+BatchSet<CSCPage> SparsePageDMatrix::GetColumnBatches(Context const* ctx) {
   // Lazily instantiate
   if (!column_source_) {
-    column_source_.reset(new CSCPageSource(this, cache_info_));
+    column_source_.reset(new CSCPageSource(ctx, this, cache_info_));
   }
   return column_source_->GetBatchSet();
 }
 
-BatchSet<SortedCSCPage> SparsePageDMatrix::GetSortedColumnBatches() {
+BatchSet<SortedCSCPage> SparsePageDMatrix::GetSortedColumnBatches(Context const* ctx) {
   // Lazily instantiate
   if (!sorted_column_source_) {
-    sorted_column_source_.reset(new SortedCSCPageSource(this, cache_info_));
+    sorted_column_source_.reset(new SortedCSCPageSource(ctx, this, cache_info_));
   }
   return sorted_column_source_->GetBatchSet();
 }
 
-BatchSet<EllpackPage> SparsePageDMatrix::GetEllpackBatches(const BatchParam& param) {
+BatchSet<EllpackPage>
+SparsePageDMatrix::GetEllpackBatches(Context const *ctx,
+                                     const BatchParam &param) {
   CHECK_GE(param.gpu_id, 0);
   CHECK_GE(param.max_bin, 2);
   // Lazily instantiate
   if (!ellpack_source_ || (batch_param_ != param && param != BatchParam{})) {
-    ellpack_source_.reset(new EllpackPageSource(this, cache_info_, param));
+    ellpack_source_.reset(new EllpackPageSource(ctx, this, cache_info_, param));
     batch_param_ = param;
   }
   return ellpack_source_->GetBatchSet();

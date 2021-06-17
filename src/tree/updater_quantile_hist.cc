@@ -52,10 +52,7 @@ void QuantileHistMaker::SetBuilder(const size_t n_trees,
                                    std::unique_ptr<Builder<GradientSumT>>* builder,
                                    DMatrix *dmat) {
   builder->reset(new Builder<GradientSumT>(
-                n_trees,
-                param_,
-                std::move(pruner_),
-                int_constraint_, dmat));
+      tparam_, n_trees, param_, std::move(pruner_), int_constraint_, dmat));
   if (rabit::IsDistributed()) {
     (*builder)->SetHistSynchronizer(new DistributedHistSynchronizer<GradientSumT>());
     (*builder)->SetHistRowsAdder(new DistributedHistRowsAdder<GradientSumT>());
@@ -435,8 +432,8 @@ void QuantileHistMaker::Builder<GradientSumT>::BuildNodeStats(
     InitNewNode(cleft, gmat, gpair_h, fmat, *p_tree);
     InitNewNode(cright, gmat, gpair_h, fmat, *p_tree);
     bst_uint featureid = snode_[nid].best.SplitIndex();
-    tree_evaluator_.AddSplit(nid, cleft, cright, featureid,
-                            snode_[cleft].weight, snode_[cright].weight);
+    tree_evaluator_.AddSplit(context_, nid, cleft, cright, featureid,
+                             snode_[cleft].weight, snode_[cright].weight);
     interaction_constraints_.Split(nid, featureid, cleft, cright);
   }
 }

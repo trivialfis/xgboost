@@ -73,12 +73,12 @@ class RegLossObj : public ObjFunction {
     additional_input_.HostVector().begin()[1] = scale_pos_weight;
     additional_input_.HostVector().begin()[2] = is_null_weight;
 
-    common::Transform<>::Init([] XGBOOST_DEVICE(size_t _idx,
-                           common::Span<float> _additional_input,
-                           common::Span<GradientPair> _out_gpair,
-                           common::Span<const bst_float> _preds,
-                           common::Span<const bst_float> _labels,
-                           common::Span<const bst_float> _weights) {
+    common::Transform<>::Init(
+        [] XGBOOST_DEVICE(size_t _idx, common::Span<float> _additional_input,
+                          common::Span<GradientPair> _out_gpair,
+                          common::Span<const bst_float> _preds,
+                          common::Span<const bst_float> _labels,
+                          common::Span<const bst_float> _weights) {
           const float _scale_pos_weight = _additional_input[1];
           const bool _is_null_weight = _additional_input[2];
 
@@ -95,8 +95,9 @@ class RegLossObj : public ObjFunction {
           _out_gpair[_idx] = GradientPair(Loss::FirstOrderGradient(p, label) * w,
                                           Loss::SecondOrderGradient(p, label) * w);
         },
-        common::Range{0, static_cast<int64_t>(ndata)}, device).Eval(
-            &additional_input_, out_gpair, &preds, &info.labels_, &info.weights_);
+        common::Range{0, static_cast<int64_t>(ndata)}, tparam_)
+        .Eval(&additional_input_, out_gpair, &preds, &info.labels_,
+              &info.weights_);
 
     auto const flag = additional_input_.HostVector().begin()[0];
     if (flag == 0) {
@@ -110,11 +111,13 @@ class RegLossObj : public ObjFunction {
   }
 
   void PredTransform(HostDeviceVector<float> *io_preds) override {
+    auto ctx = *tparam_;
+    ctx.gpu_id = io_preds->DeviceIdx();
     common::Transform<>::Init(
         [] XGBOOST_DEVICE(size_t _idx, common::Span<float> _preds) {
           _preds[_idx] = Loss::PredTransform(_preds[_idx]);
-        }, common::Range{0, static_cast<int64_t>(io_preds->Size())},
-        io_preds->DeviceIdx())
+        },
+        common::Range{0, static_cast<int64_t>(io_preds->Size())}, &ctx)
         .Eval(io_preds);
   }
 
@@ -223,7 +226,7 @@ class PoissonRegression : public ObjFunction {
           _out_gpair[_idx] = GradientPair{(expf(p) - y) * w,
                                           expf(p + max_delta_step) * w};
         },
-        common::Range{0, static_cast<int64_t>(ndata)}, device).Eval(
+        common::Range{0, static_cast<int64_t>(ndata)}, tparam_).Eval(
             &label_correct_, out_gpair, &preds, &info.labels_, &info.weights_);
     // copy "label correct" flags back to host
     std::vector<int>& label_correct_h = label_correct_.HostVector();
@@ -234,12 +237,13 @@ class PoissonRegression : public ObjFunction {
     }
   }
   void PredTransform(HostDeviceVector<bst_float> *io_preds) override {
+    auto ctx = *tparam_;
+    ctx.gpu_id = io_preds->DeviceIdx();
     common::Transform<>::Init(
         [] XGBOOST_DEVICE(size_t _idx, common::Span<bst_float> _preds) {
           _preds[_idx] = expf(_preds[_idx]);
         },
-        common::Range{0, static_cast<int64_t>(io_preds->Size())},
-        io_preds->DeviceIdx())
+        common::Range{0, static_cast<int64_t>(io_preds->Size())}, &ctx)
         .Eval(io_preds);
   }
   void EvalTransform(HostDeviceVector<bst_float> *io_preds) override {
@@ -346,7 +350,7 @@ class CoxRegression : public ObjFunction {
   void PredTransform(HostDeviceVector<bst_float> *io_preds) override {
     std::vector<bst_float> &preds = io_preds->HostVector();
     const long ndata = static_cast<long>(preds.size()); // NOLINT(*)
-    common::ParallelFor(ndata, [&](long j) { // NOLINT(*)
+    common::ParallelFor(ndata, tparam_->Threads(), [&](long j) { // NOLINT(*)
       preds[j] = std::exp(preds[j]);
     });
   }
@@ -409,7 +413,7 @@ class GammaRegression : public ObjFunction {
           }
           _out_gpair[_idx] = GradientPair((1 - y / expf(p)) * w, y / expf(p) * w);
         },
-        common::Range{0, static_cast<int64_t>(ndata)}, device).Eval(
+        common::Range{0, static_cast<int64_t>(ndata)}, tparam_).Eval(
             &label_correct_, out_gpair, &preds, &info.labels_, &info.weights_);
 
     // copy "label correct" flags back to host
@@ -421,12 +425,13 @@ class GammaRegression : public ObjFunction {
     }
   }
   void PredTransform(HostDeviceVector<bst_float> *io_preds) override {
+    auto ctx = *tparam_;
+    ctx.gpu_id = io_preds->DeviceIdx();
     common::Transform<>::Init(
         [] XGBOOST_DEVICE(size_t _idx, common::Span<bst_float> _preds) {
           _preds[_idx] = expf(_preds[_idx]);
         },
-        common::Range{0, static_cast<int64_t>(io_preds->Size())},
-        io_preds->DeviceIdx())
+        common::Range{0, static_cast<int64_t>(io_preds->Size())}, &ctx)
         .Eval(io_preds);
   }
   void EvalTransform(HostDeviceVector<bst_float> *io_preds) override {
@@ -512,7 +517,7 @@ class TweedieRegression : public ObjFunction {
               std::exp((1 - rho) * p) + (2 - rho) * expf((2 - rho) * p);
           _out_gpair[_idx] = GradientPair(grad * w, hess * w);
         },
-        common::Range{0, static_cast<int64_t>(ndata), 1}, device)
+        common::Range{0, static_cast<int64_t>(ndata), 1}, tparam_)
         .Eval(&label_correct_, out_gpair, &preds, &info.labels_, &info.weights_);
 
     // copy "label correct" flags back to host
@@ -524,12 +529,13 @@ class TweedieRegression : public ObjFunction {
     }
   }
   void PredTransform(HostDeviceVector<bst_float> *io_preds) override {
+    auto ctx = *tparam_;
+    ctx.gpu_id = io_preds->DeviceIdx();
     common::Transform<>::Init(
         [] XGBOOST_DEVICE(size_t _idx, common::Span<bst_float> _preds) {
           _preds[_idx] = expf(_preds[_idx]);
         },
-        common::Range{0, static_cast<int64_t>(io_preds->Size())},
-        io_preds->DeviceIdx())
+        common::Range{0, static_cast<int64_t>(io_preds->Size())}, &ctx)
         .Eval(io_preds);
   }
 

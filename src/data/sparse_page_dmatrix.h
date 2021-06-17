@@ -16,6 +16,7 @@
 
 #include "ellpack_page_source.h"
 #include "sparse_page_source.h"
+#include "xgboost/generic_parameters.h"
 
 namespace xgboost {
 namespace data {
@@ -37,16 +38,16 @@ class SparsePageDMatrix : public DMatrix {
   const MetaInfo& Info() const override;
 
   bool SingleColBlock() const override { return false; }
-  DMatrix *Slice(common::Span<int32_t const>) override {
+  DMatrix *Slice(Context const*, common::Span<int32_t const>) override {
     LOG(FATAL) << "Slicing DMatrix is not supported for external memory.";
     return nullptr;
   }
 
  private:
   BatchSet<SparsePage> GetRowBatches() override;
-  BatchSet<CSCPage> GetColumnBatches() override;
-  BatchSet<SortedCSCPage> GetSortedColumnBatches() override;
-  BatchSet<EllpackPage> GetEllpackBatches(const BatchParam& param) override;
+  BatchSet<CSCPage> GetColumnBatches(Context const*) override;
+  BatchSet<SortedCSCPage> GetSortedColumnBatches(Context const*) override;
+  BatchSet<EllpackPage> GetEllpackBatches(Context const*, const BatchParam& param) override;
 
   // source data pointers.
   std::unique_ptr<SparsePageSource> row_source_;

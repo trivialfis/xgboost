@@ -15,9 +15,10 @@ namespace data {
 
 // Build the quantile sketch across the whole input data, then use the histogram cuts to compress
 // each CSR page, and write the accumulated ELLPACK pages to disk.
-EllpackPageSource::EllpackPageSource(DMatrix* dmat,
+EllpackPageSource::EllpackPageSource(Context const* ctx, DMatrix* dmat,
                                      const std::string& cache_info,
                                      const BatchParam& param) noexcept(false) {
+  context_ = ctx;
   cache_info_ = ParseCacheInfo(cache_info, kPageType_);
   for (auto file : cache_info_.name_shards) {
     CheckCacheFileExists(file);
@@ -30,7 +31,7 @@ EllpackPageSource::EllpackPageSource(DMatrix* dmat,
   dh::safe_cuda(cudaSetDevice(param.gpu_id));
 
   monitor_.Start("Quantiles");
-  size_t row_stride = GetRowStride(dmat);
+  size_t row_stride = GetRowStride(ctx, dmat);
   auto cuts = common::DeviceSketch(param.gpu_id, dmat, param.max_bin);
   monitor_.Stop("Quantiles");
 
@@ -59,7 +60,7 @@ void EllpackPageSource::WriteEllpackPages(int device, DMatrix* dmat,
 
   size_t bytes_write = 0;
   double tstart = dmlc::GetTime();
-  for (const auto& batch : dmat->GetBatches<SparsePage>()) {
+  for (const auto& batch : dmat->GetBatches<SparsePage>(context_)) {
     temp_host_page.Push(batch);
 
     size_t mem_cost_bytes =

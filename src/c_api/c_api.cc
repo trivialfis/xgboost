@@ -334,6 +334,7 @@ XGB_DLL int XGDMatrixSliceDMatrixEx(DMatrixHandle handle,
                                     int allow_groups) {
   API_BEGIN();
   CHECK_HANDLE();
+  Context ctx;
   if (!allow_groups) {
     CHECK_EQ(static_cast<std::shared_ptr<DMatrix>*>(handle)
                  ->get()
@@ -344,7 +345,7 @@ XGB_DLL int XGDMatrixSliceDMatrixEx(DMatrixHandle handle,
   }
   DMatrix* dmat = static_cast<std::shared_ptr<DMatrix>*>(handle)->get();
   *out = new std::shared_ptr<DMatrix>(
-      dmat->Slice({idxset, static_cast<std::size_t>(len)}));
+      dmat->Slice(&ctx, {idxset, static_cast<std::size_t>(len)}));
   API_END();
 }
 

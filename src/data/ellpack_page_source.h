@@ -26,7 +26,7 @@ class EllpackPageSource {
    * \brief Create source from cache files the cache_prefix.
    * \param cache_prefix The prefix of cache we want to solve.
    */
-  explicit EllpackPageSource(DMatrix* dmat,
+  explicit EllpackPageSource(Context const* ctx, DMatrix* dmat,
                              const std::string& cache_info,
                              const BatchParam& param) noexcept(false);
 
@@ -57,6 +57,7 @@ class EllpackPageSource {
   common::Monitor monitor_;
   std::unique_ptr<ExternalMemoryPrefetcher<EllpackPage>> external_prefetcher_;
   CacheInfo cache_info_;
+  Context const* context_;
 };
 
 }  // namespace data

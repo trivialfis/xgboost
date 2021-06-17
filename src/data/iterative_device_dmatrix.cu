@@ -175,7 +175,9 @@ void IterativeDeviceDMatrix::Initialize(DataIterHandle iter_handle, float missin
   rabit::Allreduce<rabit::op::Max>(&info_.num_col_, 1);
 }
 
-BatchSet<EllpackPage> IterativeDeviceDMatrix::GetEllpackBatches(const BatchParam& param) {
+BatchSet<EllpackPage>
+IterativeDeviceDMatrix::GetEllpackBatches(Context const *,
+                                          const BatchParam &param) {
   CHECK(page_);
   auto begin_iter =
       BatchIterator<EllpackPage>(new SimpleBatchIteratorImpl<EllpackPage>(page_.get()));

@@ -143,7 +143,7 @@ class TreeEvaluator {
   }
 
   template <bool CompiledWithCuda = WITH_CUDA()>
-  void AddSplit(bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid,
+  void AddSplit(Context const* ctx, bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid,
                 bst_feature_t f, float left_weight, float right_weight) {
     if (!has_constraint_) {
       return;
@@ -170,7 +170,7 @@ class TreeEvaluator {
             lower[rightid] = mid;
           }
         },
-        common::Range(0, 1), device_, false)
+        common::Range(0, 1), ctx, false)
         .Eval(&lower_bounds_, &upper_bounds_, &monotone_);
   }
 };

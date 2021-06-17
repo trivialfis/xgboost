@@ -109,12 +109,14 @@ struct GBTreeModel : public Model {
   void SaveModel(Json* p_out) const override;
   void LoadModel(Json const& p_out) override;
 
-  std::vector<std::string> DumpModel(const FeatureMap &fmap, bool with_stats,
+  std::vector<std::string> DumpModel(Context const *ctx, const FeatureMap &fmap,
+                                     bool with_stats,
                                      std::string format) const {
     std::vector<std::string> dump(trees.size());
-    common::ParallelFor(static_cast<omp_ulong>(trees.size()), [&](size_t i) {
-      dump[i] = trees[i]->DumpModel(fmap, with_stats, format);
-    });
+    common::ParallelFor(
+        static_cast<omp_ulong>(trees.size()), ctx->Threads(), [&](size_t i) {
+          dump[i] = trees[i]->DumpModel(fmap, with_stats, format);
+        });
     return dump;
   }
   void CommitModel(std::vector<std::unique_ptr<RegTree> >&& new_trees,

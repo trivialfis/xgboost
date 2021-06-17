@@ -272,12 +272,13 @@ class QuantileHistMaker: public TreeUpdater {
     using GHistRowT = GHistRow<GradientSumT>;
     using GradientPairT = xgboost::detail::GradientPairInternal<GradientSumT>;
     // constructor
-    explicit Builder(const size_t n_trees,
+    explicit Builder(Context const* ctx, const size_t n_trees,
                      const TrainParam& param,
                      std::unique_ptr<TreeUpdater> pruner,
                      FeatureInteractionConstraintHost int_constraints_,
                      DMatrix const* fmat)
-      : n_trees_(n_trees),
+      : context_{ctx},
+        n_trees_(n_trees),
         param_(param),
         tree_evaluator_(param, fmat->Info().num_col_, GenericParameter::kCpuId),
         pruner_(std::move(pruner)),
@@ -296,7 +297,7 @@ class QuantileHistMaker: public TreeUpdater {
                                  GHistRowT sibling,
                                  GHistRowT parent) {
       builder_monitor_.Start("SubtractionTrick");
-      hist_builder_.SubtractionTrick(self, sibling, parent);
+      hist_builder_.SubtractionTrick(context_, self, sibling, parent);
       builder_monitor_.Stop("SubtractionTrick");
     }
 
@@ -400,6 +401,7 @@ class QuantileHistMaker: public TreeUpdater {
                     const std::vector<GradientPair>& gpair_h);
 
     //  --data fields--
+    Context const* context_;
     const size_t n_trees_;
     const TrainParam& param_;
     // number of omp thread used during training

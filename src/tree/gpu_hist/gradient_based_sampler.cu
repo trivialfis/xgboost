@@ -131,7 +131,7 @@ class PoissonSampling : public thrust::binary_function<GradientPair, size_t, Gra
       if (rnd_(i) <= p) {
         return gpair / p;
       } else {
-        return GradientPair();
+        return {};
       }
     }
   }

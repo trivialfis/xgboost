@@ -366,7 +366,7 @@ class EllpackPage {
    * This is used in the in-memory case. The ELLPACK page is constructed from an existing DMatrix
    * in CSR format.
    */
-  explicit EllpackPage(DMatrix* dmat, const BatchParam& param);
+  explicit EllpackPage(Context const* ctx, DMatrix* dmat, const BatchParam& param);
 
   /*! \brief Destructor. */
   ~EllpackPage();
@@ -544,7 +544,7 @@ class DMatrix {
                          int nthread,
                          int max_bin);
 
-  virtual DMatrix *Slice(common::Span<int32_t const> ridxs) = 0;
+  virtual DMatrix *Slice(Context const* ctx, common::Span<int32_t const> ridxs) = 0;
   /*! \brief Number of rows per page in external memory.  Approximately 100MB per page for
    *  dataset with 100 features. */
   static const size_t kPageSize = 32UL << 12UL;

@@ -42,7 +42,7 @@ class IterativeDeviceDMatrix : public DMatrix {
 
   bool EllpackExists() const override { return true; }
   bool SparsePageExists() const override { return false; }
-  DMatrix *Slice(common::Span<int32_t const> ridxs) override {
+  DMatrix *Slice(Context const*, common::Span<int32_t const> ridxs) override {
     LOG(FATAL) << "Slicing DMatrix is not supported for Device DMatrix.";
     return nullptr;
   }
@@ -50,16 +50,16 @@ class IterativeDeviceDMatrix : public DMatrix {
     LOG(FATAL) << "Not implemented.";
     return BatchSet<SparsePage>(BatchIterator<SparsePage>(nullptr));
   }
-  BatchSet<CSCPage> GetColumnBatches() override {
+  BatchSet<CSCPage> GetColumnBatches(Context const*) override {
     LOG(FATAL) << "Not implemented.";
     return BatchSet<CSCPage>(BatchIterator<CSCPage>(nullptr));
   }
-  BatchSet<SortedCSCPage> GetSortedColumnBatches() override {
+  BatchSet<SortedCSCPage> GetSortedColumnBatches(Context const*) override {
     LOG(FATAL) << "Not implemented.";
     return BatchSet<SortedCSCPage>(BatchIterator<SortedCSCPage>(nullptr));
   }
 
-  BatchSet<EllpackPage> GetEllpackBatches(const BatchParam& param) override;
+  BatchSet<EllpackPage> GetEllpackBatches(Context const*, const BatchParam& param) override;
 
   bool SingleColBlock() const override { return false; }
 

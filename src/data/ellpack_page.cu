@@ -14,8 +14,8 @@ namespace xgboost {
 
 EllpackPage::EllpackPage() : impl_{new EllpackPageImpl()} {}
 
-EllpackPage::EllpackPage(DMatrix* dmat, const BatchParam& param)
-    : impl_{new EllpackPageImpl(dmat, param)} {}
+EllpackPage::EllpackPage(Context const* ctx, DMatrix* dmat, const BatchParam& param)
+    : impl_{new EllpackPageImpl(ctx, dmat, param)} {}
 
 EllpackPage::~EllpackPage() = default;
 
@@ -102,7 +102,7 @@ EllpackPageImpl::EllpackPageImpl(int device, common::HistogramCuts cuts,
 }
 
 // Construct an ELLPACK matrix in memory.
-EllpackPageImpl::EllpackPageImpl(DMatrix* dmat, const BatchParam& param)
+EllpackPageImpl::EllpackPageImpl(Context const* ctx, DMatrix* dmat, const BatchParam& param)
     : is_dense(dmat->IsDense()) {
   monitor_.Init("ellpack_page");
   dh::safe_cuda(cudaSetDevice(param.gpu_id));
@@ -111,7 +111,7 @@ EllpackPageImpl::EllpackPageImpl(DMatrix* dmat, const BatchParam& param)
 
   monitor_.Start("Quantiles");
   // Create the quantile sketches for the dmatrix and initialize HistogramCuts.
-  row_stride = GetRowStride(dmat);
+  row_stride = GetRowStride(ctx, dmat);
   cuts_ = common::DeviceSketch(param.gpu_id, dmat, param.max_bin);
   monitor_.Stop("Quantiles");
 
@@ -122,7 +122,7 @@ EllpackPageImpl::EllpackPageImpl(DMatrix* dmat, const BatchParam& param)
   dmat->Info().feature_types.SetDevice(param.gpu_id);
   auto ft = dmat->Info().feature_types.ConstDeviceSpan();
   monitor_.Start("BinningCompression");
-  for (const auto& batch : dmat->GetBatches<SparsePage>()) {
+  for (const auto& batch : dmat->GetBatches<SparsePage>(ctx)) {
     CreateHistIndices(param.gpu_id, batch, ft);
   }
   monitor_.Stop("BinningCompression");
