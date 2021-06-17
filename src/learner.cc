@@ -266,7 +266,7 @@ class LearnerConfiguration : public Learner {
   LearnerModelParam learner_model_param_;
   LearnerTrainParam tparam_;
   // Runtime parameter
-  GenericParameter generic_parameters_;
+  GenericParameter context_;
   std::vector<std::string> metric_names_;
 
  public:
@@ -301,12 +301,12 @@ class LearnerConfiguration : public Learner {
 
     mparam_.UpdateAllowUnknown(args);
 
-    auto initialized = generic_parameters_.GetInitialised();
-    auto old_seed = generic_parameters_.seed;
-    generic_parameters_.UpdateAllowUnknown(args);
+    auto initialized = context_.GetInitialised();
+    auto old_seed = context_.seed;
+    context_.UpdateAllowUnknown(args);
 
     ConsoleLogger::Configure(args);
-    common::OmpSetNumThreads(&generic_parameters_.nthread);
+    common::OmpSetNumThreads(&context_.nthread);
 
     // add additional parameters
     // These are cosntraints that need to be satisfied.
@@ -315,8 +315,8 @@ class LearnerConfiguration : public Learner {
     }
 
     // set seed only before the model is initialized
-    if (!initialized || generic_parameters_.seed != old_seed) {
-      generic_parameters_.rng.seed(generic_parameters_.seed);
+    if (!initialized || context_.seed != old_seed) {
+      context_.rng.seed(context_.seed);
     }
 
     // must precede configure gbm since num_features is required for gbm
@@ -342,12 +342,12 @@ class LearnerConfiguration : public Learner {
     }
 
     this->ConfigureGBM(old_tparam, args);
-    generic_parameters_.ConfigureGpuId(this->gbm_->UseGPU());
+    context_.ConfigureGpuId(this->gbm_->UseGPU());
 
     this->ConfigureMetrics(args);
 
     this->need_configuration_ = false;
-    if (generic_parameters_.validate_parameters) {
+    if (context_.validate_parameters) {
       this->ValidateParameters();
     }
 
@@ -370,14 +370,14 @@ class LearnerConfiguration : public Learner {
 
     auto const& objective_fn = learner_parameters.at("objective");
     if (!obj_) {
-      obj_.reset(ObjFunction::Create(tparam_.objective, &generic_parameters_));
+      obj_.reset(ObjFunction::Create(tparam_.objective, &context_));
     }
     obj_->LoadConfig(objective_fn);
 
     tparam_.booster = get<String>(gradient_booster["name"]);
     if (!gbm_) {
       gbm_.reset(GradientBooster::Create(tparam_.booster,
-                                         &generic_parameters_, &learner_model_param_));
+                                         &context_, &learner_model_param_));
     }
     gbm_->LoadConfig(gradient_booster);
 
@@ -388,12 +388,12 @@ class LearnerConfiguration : public Learner {
     for (size_t i = 0; i < n_metrics; ++i) {
       metric_names_[i]= get<String>(j_metrics[i]);
       metrics_[i] = std::unique_ptr<Metric>(
-          Metric::Create(metric_names_[i], &generic_parameters_));
+          Metric::Create(metric_names_[i], &context_));
     }
 
-    FromJson(learner_parameters.at("generic_param"), &generic_parameters_);
+    FromJson(learner_parameters.at("generic_param"), &context_);
     // make sure the GPU ID is valid in new environment before start running configure.
-    generic_parameters_.ConfigureGpuId(false);
+    context_.ConfigureGpuId(false);
 
     this->need_configuration_ = true;
   }
@@ -422,7 +422,7 @@ class LearnerConfiguration : public Learner {
     }
     learner_parameters["metrics"] = Array(std::move(metrics));
 
-    learner_parameters["generic_param"] = ToJson(generic_parameters_);
+    learner_parameters["generic_param"] = ToJson(context_);
   }
 
   void SetParam(const std::string& key, const std::string& value) override {
@@ -602,7 +602,7 @@ class LearnerConfiguration : public Learner {
 
   void ConfigureGBM(LearnerTrainParam const& old, Args const& args) {
     if (gbm_ == nullptr || old.booster != tparam_.booster) {
-      gbm_.reset(GradientBooster::Create(tparam_.booster, &generic_parameters_,
+      gbm_.reset(GradientBooster::Create(tparam_.booster, &context_,
                                          &learner_model_param_));
     }
     gbm_->Configure(args);
@@ -626,7 +626,7 @@ class LearnerConfiguration : public Learner {
       cfg_["max_delta_step"] = kMaxDeltaStepDefaultValue;
     }
     if (obj_ == nullptr || tparam_.objective != old.objective) {
-      obj_.reset(ObjFunction::Create(tparam_.objective, &generic_parameters_));
+      obj_.reset(ObjFunction::Create(tparam_.objective, &context_));
     }
     auto& args = *p_args;
     args = {cfg_.cbegin(), cfg_.cend()};  // renew
@@ -639,7 +639,7 @@ class LearnerConfiguration : public Learner {
                         return m->Name() != name;
                       };
       if (std::all_of(metrics_.begin(), metrics_.end(), DupCheck)) {
-        metrics_.emplace_back(std::unique_ptr<Metric>(Metric::Create(name, &generic_parameters_)));
+        metrics_.emplace_back(std::unique_ptr<Metric>(Metric::Create(name, &context_)));
         mparam_.contain_eval_metrics = 1;
       }
     }
@@ -672,14 +672,14 @@ class LearnerIO : public LearnerConfiguration {
 
     std::string name = get<String>(objective_fn["name"]);
     tparam_.UpdateAllowUnknown(Args{{"objective", name}});
-    obj_.reset(ObjFunction::Create(name, &generic_parameters_));
+    obj_.reset(ObjFunction::Create(name, &context_));
     obj_->LoadConfig(objective_fn);
 
     auto const& gradient_booster = learner.at("gradient_booster");
     name = get<String>(gradient_booster["name"]);
     tparam_.UpdateAllowUnknown(Args{{"booster", name}});
     gbm_.reset(GradientBooster::Create(tparam_.booster,
-                                       &generic_parameters_, &learner_model_param_));
+                                       &context_, &learner_model_param_));
     gbm_->LoadModel(gradient_booster);
 
     auto const& j_attributes = get<Object const>(learner.at("attributes"));
@@ -746,7 +746,7 @@ class LearnerIO : public LearnerConfiguration {
   }
   // About to be deprecated by JSON format
   void LoadModel(dmlc::Stream* fi) override {
-    generic_parameters_.UpdateAllowUnknown(Args{});
+    context_.UpdateAllowUnknown(Args{});
     tparam_.Init(std::vector<std::pair<std::string, std::string>>{});
     // TODO(tqchen) mark deprecation of old format.
     common::PeekableInStream fp(fi);
@@ -782,8 +782,8 @@ class LearnerIO : public LearnerConfiguration {
     CHECK(fi->Read(&tparam_.objective)) << "BoostLearner: wrong model format";
     CHECK(fi->Read(&tparam_.booster)) << "BoostLearner: wrong model format";
 
-    obj_.reset(ObjFunction::Create(tparam_.objective, &generic_parameters_));
-    gbm_.reset(GradientBooster::Create(tparam_.booster, &generic_parameters_,
+    obj_.reset(ObjFunction::Create(tparam_.objective, &context_));
+    gbm_.reset(GradientBooster::Create(tparam_.booster, &context_,
                                        &learner_model_param_));
     gbm_->Load(fi);
     if (mparam_.contain_extra_attrs != 0) {
@@ -1021,7 +1021,7 @@ class LearnerImpl : public LearnerIO {
     CHECK_GE(begin_layer, 0);
     auto *out_impl = new LearnerImpl({});
     auto gbm = std::unique_ptr<GradientBooster>(GradientBooster::Create(
-        this->tparam_.booster, &this->generic_parameters_,
+        this->tparam_.booster, &this->context_,
         &this->learner_model_param_));
     this->gbm_->Slice(begin_layer, end_layer, step, gbm.get(), out_of_bound);
     out_impl->gbm_ = std::move(gbm);
@@ -1039,14 +1039,14 @@ class LearnerImpl : public LearnerIO {
     monitor_.Start("UpdateOneIter");
     TrainingObserver::Instance().Update(iter);
     this->Configure();
-    if (generic_parameters_.seed_per_iteration || rabit::IsDistributed()) {
-      generic_parameters_.rng.seed(generic_parameters_.seed * kRandSeedMagic + iter);
+    if (context_.seed_per_iteration || rabit::IsDistributed()) {
+      context_.rng.seed(context_.seed * kRandSeedMagic + iter);
     }
     this->CheckDataSplitMode();
     this->ValidateDMatrix(train.get(), true);
 
     auto local_cache = this->GetPredictionCache();
-    auto& predt = local_cache->Cache(train, generic_parameters_.gpu_id);
+    auto& predt = local_cache->Cache(train, context_.gpu_id);
 
     monitor_.Start("PredictRaw");
     this->PredictRaw(train.get(), &predt, true, 0, 0);
@@ -1066,13 +1066,13 @@ class LearnerImpl : public LearnerIO {
                     HostDeviceVector<GradientPair>* in_gpair) override {
     monitor_.Start("BoostOneIter");
     this->Configure();
-    if (generic_parameters_.seed_per_iteration || rabit::IsDistributed()) {
-      generic_parameters_.rng.seed(generic_parameters_.seed * kRandSeedMagic + iter);
+    if (context_.seed_per_iteration || rabit::IsDistributed()) {
+      context_.rng.seed(context_.seed * kRandSeedMagic + iter);
     }
     this->CheckDataSplitMode();
     this->ValidateDMatrix(train.get(), true);
     auto local_cache = this->GetPredictionCache();
-    local_cache->Cache(train, generic_parameters_.gpu_id);
+    local_cache->Cache(train, context_.gpu_id);
 
     gbm_->DoBoost(train.get(), in_gpair, &local_cache->Entry(train.get()));
     monitor_.Stop("BoostOneIter");
@@ -1101,18 +1101,18 @@ class LearnerImpl : public LearnerIO {
       } else if ((tparam_.objective == "multi:softmax" || tparam_.objective == "multi:softprob")) {
         warn_default_eval_metric(tparam_.objective, "merror", "mlogloss", "1.3.0");
       }
-      metrics_.emplace_back(Metric::Create(obj_->DefaultEvalMetric(), &generic_parameters_));
+      metrics_.emplace_back(Metric::Create(obj_->DefaultEvalMetric(), &context_));
       metrics_.back()->Configure({cfg_.begin(), cfg_.end()});
     }
 
     auto local_cache = this->GetPredictionCache();
     for (size_t i = 0; i < data_sets.size(); ++i) {
       std::shared_ptr<DMatrix> m = data_sets[i];
-      auto &predt = local_cache->Cache(m, generic_parameters_.gpu_id);
+      auto &predt = local_cache->Cache(m, context_.gpu_id);
       this->ValidateDMatrix(m.get(), false);
       this->PredictRaw(m.get(), &predt, false, 0, 0);
 
-      auto &out = output_predictions_.Cache(m, generic_parameters_.gpu_id).predictions;
+      auto &out = output_predictions_.Cache(m, context_.gpu_id).predictions;
       out.Resize(predt.predictions.Size());
       out.Copy(predt.predictions);
 
@@ -1146,10 +1146,10 @@ class LearnerImpl : public LearnerIO {
       gbm_->PredictLeaf(data.get(), out_preds, layer_begin, layer_end);
     } else {
       auto local_cache = this->GetPredictionCache();
-      auto& prediction = local_cache->Cache(data, generic_parameters_.gpu_id);
+      auto& prediction = local_cache->Cache(data, context_.gpu_id);
       this->PredictRaw(data.get(), &prediction, training, layer_begin, layer_end);
       // Copy the prediction cache to output prediction. out_preds comes from C API
-      out_preds->SetDevice(generic_parameters_.gpu_id);
+      out_preds->SetDevice(context_.gpu_id);
       out_preds->Resize(prediction.predictions.Size());
       out_preds->Copy(prediction.predictions);
       if (!output_margin) {
@@ -1213,7 +1213,7 @@ class LearnerImpl : public LearnerIO {
 
   void ValidateDMatrix(DMatrix* p_fmat, bool is_training) const {
     MetaInfo const& info = p_fmat->Info();
-    info.Validate(generic_parameters_.gpu_id);
+    info.Validate(context_.gpu_id);
 
     auto const row_based_split = [this]() {
       return tparam_.dsplit == DataSplitMode::kRow ||
