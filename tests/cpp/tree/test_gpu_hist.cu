@@ -360,7 +360,6 @@ void UpdateTree(HostDeviceVector<GradientPair>* gpair, DMatrix* dmat,
                 HostDeviceVector<bst_float>* preds, float subsample = 1.0f,
                 const std::string& sampling_method = "uniform",
                 int max_bin = 2) {
-
   if (gpu_page_size > 0) {
     // Loop over the batches and count the records
     int64_t batch_count = 0;

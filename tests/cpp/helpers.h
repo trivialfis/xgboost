@@ -335,7 +335,7 @@ std::unique_ptr<GradientBooster> CreateTrainedGBM(
 inline GenericParameter CreateEmptyGenericParam(int gpu_id) {
   xgboost::GenericParameter tparam;
   std::vector<std::pair<std::string, std::string>> args {
-    {"gpu_id", std::to_string(gpu_id)}};
+    {"gpu_id", std::to_string(gpu_id)}, {"seed", "0"}};
   tparam.Init(args);
   return tparam;
 }

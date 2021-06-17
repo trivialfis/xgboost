@@ -35,6 +35,10 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
   bool validate_parameters {false};
   std::mt19937 mutable rng;
 
+  explicit GenericParameter() {
+    rng.seed(seed);
+  }
+
   /*!
    * \brief Configure the parameter `gpu_id'.
    *
