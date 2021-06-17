@@ -72,7 +72,7 @@ class GBLinear : public GradientBooster {
       model_.Configure(cfg);
     }
     param_.UpdateAllowUnknown(cfg);
-    updater_.reset(LinearUpdater::Create(param_.updater, generic_param_));
+    updater_.reset(LinearUpdater::Create(param_.updater, context_));
     updater_->Configure(cfg);
     monitor_.Init("GBLinear");
     if (param_.updater == "gpu_coord_descent") {
@@ -108,7 +108,7 @@ class GBLinear : public GradientBooster {
   void LoadConfig(Json const& in) override {
     CHECK_EQ(get<String>(in["name"]), "gblinear");
     FromJson(in["gblinear_train_param"], &param_);
-    updater_.reset(LinearUpdater::Create(param_.updater, generic_param_));
+    updater_.reset(LinearUpdater::Create(param_.updater, context_));
     this->updater_->LoadConfig(in["updater"]);
   }
   void SaveConfig(Json* p_out) const override {
@@ -175,11 +175,11 @@ class GBLinear : public GradientBooster {
     // make sure contributions is zeroed, we could be reusing a previously allocated one
     std::fill(contribs.begin(), contribs.end(), 0);
     // start collecting the contributions
-    for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+    for (const auto &batch : p_fmat->GetBatches<SparsePage>(context_)) {
       // parallel over local batch
       const auto nsize = static_cast<bst_omp_uint>(batch.Size());
       auto page = batch.GetView();
-      common::ParallelFor(nsize, [&](bst_omp_uint i) {
+      common::ParallelFor(nsize, context_->Threads(), [&](bst_omp_uint i) {
         auto inst = page[i];
         auto row_idx = static_cast<size_t>(batch.base_rowid + i);
         // loop over output groups

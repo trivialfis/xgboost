@@ -78,11 +78,11 @@ inline double CoordinateDeltaBias(double sum_grad, double sum_hess) {
  *
  * \return  The gradient and diagonal Hessian entry for a given feature.
  */
-inline std::pair<double, double> GetGradient(int group_idx, int num_group, int fidx,
-                                             const std::vector<GradientPair> &gpair,
-                                             DMatrix *p_fmat) {
+inline std::pair<double, double>
+GetGradient(GenericParameter const *ctx, int group_idx, int num_group, int fidx,
+            const std::vector<GradientPair> &gpair, DMatrix *p_fmat) {
   double sum_grad = 0.0, sum_hess = 0.0;
-  for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+  for (const auto &batch : p_fmat->GetBatches<CSCPage>(ctx)) {
     auto page = batch.GetView();
     auto col = page[fidx];
     const auto ndata = static_cast<bst_omp_uint>(col.size());
@@ -108,11 +108,12 @@ inline std::pair<double, double> GetGradient(int group_idx, int num_group, int f
  *
  * \return  The gradient and diagonal Hessian entry for a given feature.
  */
-inline std::pair<double, double> GetGradientParallel(int group_idx, int num_group, int fidx,
-                                                     const std::vector<GradientPair> &gpair,
-                                                     DMatrix *p_fmat) {
+inline std::pair<double, double>
+GetGradientParallel(GenericParameter const *ctx, int group_idx, int num_group,
+                    int fidx, const std::vector<GradientPair> &gpair,
+                    DMatrix *p_fmat) {
   double sum_grad = 0.0, sum_hess = 0.0;
-  for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+  for (const auto &batch : p_fmat->GetBatches<CSCPage>(ctx)) {
     auto page = batch.GetView();
     auto col = page[fidx];
     const auto ndata = static_cast<bst_omp_uint>(col.size());
@@ -172,11 +173,12 @@ inline std::pair<double, double> GetBiasGradientParallel(int group_idx, int num_
  * \param in_gpair  The gradient vector to be updated.
  * \param p_fmat    The input feature matrix.
  */
-inline void UpdateResidualParallel(int fidx, int group_idx, int num_group,
-                                   float dw, std::vector<GradientPair> *in_gpair,
+inline void UpdateResidualParallel(GenericParameter const *ctx, int fidx,
+                                   int group_idx, int num_group, float dw,
+                                   std::vector<GradientPair> *in_gpair,
                                    DMatrix *p_fmat) {
   if (dw == 0.0f) return;
-  for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+  for (const auto &batch : p_fmat->GetBatches<CSCPage>(ctx)) {
     auto page = batch.GetView();
     auto col = page[fidx];
     // update grad value
@@ -356,16 +358,18 @@ class GreedyFeatureSelector : public FeatureSelector {
     const bst_omp_uint nfeat = model.learner_model_param->num_feature;
     // Calculate univariate gradient sums
     std::fill(gpair_sums_.begin(), gpair_sums_.end(), std::make_pair(0., 0.));
-    for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+    for (const auto &batch : p_fmat->GetBatches<CSCPage>(ctx_)) {
       auto page = batch.GetView();
-      common::ParallelFor(nfeat, ctx_->nthread, [&](bst_omp_uint i) {
+      common::ParallelFor(nfeat, ctx_->Threads(), [&](bst_omp_uint i) {
         const auto col = page[i];
         const bst_uint ndata = col.size();
         auto &sums = gpair_sums_[group_idx * nfeat + i];
         for (bst_uint j = 0u; j < ndata; ++j) {
           const bst_float v = col[j].fvalue;
           auto &p = gpair[col[j].index * ngroup + group_idx];
-          if (p.GetHess() < 0.f) continue;
+          if (p.GetHess() < 0.f) {
+            continue;
+          }
           sums.first += p.GetGrad() * v;
           sums.second += p.GetHess() * v * v;
         }
@@ -422,10 +426,10 @@ class ThriftyFeatureSelector : public FeatureSelector {
     }
     // Calculate univariate gradient sums
     std::fill(gpair_sums_.begin(), gpair_sums_.end(), std::make_pair(0., 0.));
-    for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+    for (const auto &batch : p_fmat->GetBatches<CSCPage>(ctx)) {
       auto page = batch.GetView();
       // column-parallel is usually fastaer than row-parallel
-      common::ParallelFor(nfeat, ctx->nthread, [&](bst_omp_uint i) {
+      common::ParallelFor(nfeat, ctx->Threads(), [&](bst_omp_uint i) {
         const auto col = page[i];
         const bst_uint ndata = col.size();
         for (bst_uint gid = 0u; gid < ngroup; ++gid) {

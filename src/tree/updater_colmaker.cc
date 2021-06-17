@@ -76,7 +76,7 @@ class ColMaker: public TreeUpdater {
     // Finds densities if we don't already have them
     if (column_densities_.empty()) {
       std::vector<size_t> column_size(dmat->Info().num_col_);
-      for (const auto &batch : dmat->GetBatches<SortedCSCPage>()) {
+      for (const auto &batch : dmat->GetBatches<SortedCSCPage>(tparam_)) {
         auto page = batch.GetView();
         for (auto i = 0u; i < batch.Size(); i++) {
           column_size[i] += page[i].size();
@@ -106,6 +106,7 @@ class ColMaker: public TreeUpdater {
     // build tree
     for (auto tree : trees) {
       Builder builder(
+        tparam_,
         param_,
         colmaker_param_,
         interaction_constraints_, column_densities_);
@@ -150,11 +151,11 @@ class ColMaker: public TreeUpdater {
   class Builder {
    public:
     // constructor
-    explicit Builder(const TrainParam& param,
+    explicit Builder(GenericParameter const* ctx, const TrainParam& param,
                      const ColMakerTrainParam& colmaker_train_param,
                      FeatureInteractionConstraintHost _interaction_constraints,
                      const std::vector<float> &column_densities)
-        : param_(param), colmaker_train_param_{colmaker_train_param},
+        : context_{ctx}, param_(param), colmaker_train_param_{colmaker_train_param},
           nthread_(omp_get_max_threads()),
           tree_evaluator_(param_, column_densities.size(), GenericParameter::kCpuId),
           interaction_constraints_{std::move(_interaction_constraints)},
@@ -486,7 +487,7 @@ class ColMaker: public TreeUpdater {
       auto evaluator = tree_evaluator_.GetEvaluator();
 
       auto feat_set = column_sampler_.GetFeatureSet(depth);
-      for (const auto &batch : p_fmat->GetBatches<SortedCSCPage>()) {
+      for (const auto &batch : p_fmat->GetBatches<SortedCSCPage>(context_)) {
         this->UpdateSolution(batch, feat_set->HostVector(), gpair, p_fmat);
       }
       // after this each thread's stemp will get the best candidates, aggregate results
@@ -525,7 +526,7 @@ class ColMaker: public TreeUpdater {
       // so that they are ignored in future statistics collection
       const auto ndata = static_cast<bst_omp_uint>(p_fmat->Info().num_row_);
 
-      common::ParallelFor(ndata, [&](bst_omp_uint ridx) {
+      common::ParallelFor(ndata, context_->Threads(), [&](bst_omp_uint ridx) {
         CHECK_LT(ridx, position_.size())
             << "ridx exceed bound " << "ridx="<<  ridx << " pos=" << position_.size();
         const int nid = this->DecodePosition(ridx);
@@ -566,12 +567,12 @@ class ColMaker: public TreeUpdater {
       }
       std::sort(fsplits.begin(), fsplits.end());
       fsplits.resize(std::unique(fsplits.begin(), fsplits.end()) - fsplits.begin());
-      for (const auto &batch : p_fmat->GetBatches<SortedCSCPage>()) {
+      for (const auto &batch : p_fmat->GetBatches<SortedCSCPage>(context_)) {
         auto page = batch.GetView();
         for (auto fid : fsplits) {
           auto col = page[fid];
           const auto ndata = static_cast<bst_omp_uint>(col.size());
-          common::ParallelFor(ndata, [&](bst_omp_uint j) {
+          common::ParallelFor(ndata, context_->Threads(), [&](bst_omp_uint j) {
             const bst_uint ridx = col[j].index;
             const int nid = this->DecodePosition(ridx);
             const bst_float fvalue = col[j].fvalue;
@@ -602,6 +603,7 @@ class ColMaker: public TreeUpdater {
       }
     }
     //  --data fields--
+    GenericParameter const* context_;
     const TrainParam& param_;
     const ColMakerTrainParam& colmaker_train_param_;
     // number of omp thread used during training

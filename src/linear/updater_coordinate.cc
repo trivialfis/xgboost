@@ -62,7 +62,7 @@ class CoordinateUpdater : public LinearUpdater {
     // prepare for updating the weights
     selector_->Setup(*model, in_gpair->ConstHostVector(), p_fmat,
                     tparam_.reg_alpha_denorm,
-                    tparam_.reg_lambda_denorm, cparam_.top_k);
+                     tparam_.reg_lambda_denorm, cparam_.top_k, context_);
     // update weights
     for (int group_idx = 0; group_idx < ngroup; ++group_idx) {
       for (unsigned i = 0U; i < model->learner_model_param->num_feature; i++) {
@@ -81,13 +81,13 @@ class CoordinateUpdater : public LinearUpdater {
     const int ngroup = model->learner_model_param->num_output_group;
     bst_float &w = (*model)[fidx][group_idx];
     auto gradient =
-        GetGradientParallel(group_idx, ngroup, fidx, *in_gpair, p_fmat);
+        GetGradientParallel(context_, group_idx, ngroup, fidx, *in_gpair, p_fmat);
     auto dw = static_cast<float>(
         tparam_.learning_rate *
         CoordinateDelta(gradient.first, gradient.second, w, tparam_.reg_alpha_denorm,
                         tparam_.reg_lambda_denorm));
     w += dw;
-    UpdateResidualParallel(fidx, group_idx, ngroup, dw, in_gpair, p_fmat);
+    UpdateResidualParallel(context_, fidx, group_idx, ngroup, dw, in_gpair, p_fmat);
   }
 
  private:

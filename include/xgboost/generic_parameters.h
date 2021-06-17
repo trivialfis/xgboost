@@ -17,14 +17,17 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
   static int32_t constexpr kCpuId = -1;
   static int64_t constexpr kDefaultSeed = 0;
 
+ private:
+  // if equals 0, use system default
+  int nthread {0};  // NOLINT
+
  public:
   // stored random seed
   int64_t seed { kDefaultSeed };
   // whether seed the PRNG each iteration
   bool seed_per_iteration;
   // number of threads to use if OpenMP is enabled
-  // if equals 0, use system default
-  int nthread;
+
   // primary device, -1 means no gpu.
   int gpu_id;
   // fail when gpu_id is invalid
@@ -40,6 +43,14 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
    */
   void ConfigureGpuId(bool require_gpu);
 
+  int32_t Threads() const {
+    int32_t threads = nthread;
+    if (nthread <= 0) {
+      threads = omp_get_num_procs();
+    }
+    return threads;
+  }
+
   // declare parameters
   DMLC_DECLARE_PARAMETER(GenericParameter) {
     DMLC_DECLARE_FIELD(seed).set_default(kDefaultSeed).describe(
@@ -54,7 +65,6 @@ struct GenericParameter : public XGBoostParameter<GenericParameter> {
     DMLC_DECLARE_FIELD(nthread).set_default(0).describe(
         "Number of threads to use.");
     DMLC_DECLARE_ALIAS(nthread, n_jobs);
-
     DMLC_DECLARE_FIELD(gpu_id)
         .set_default(-1)
         .set_lower_bound(-1)

@@ -5,6 +5,7 @@
 
 #include <xgboost/linear_updater.h>
 #include "coordinate_common.h"
+#include "../common/threading_utils.h"
 
 namespace xgboost {
 namespace linear {
@@ -50,16 +51,14 @@ class ShotgunUpdater : public LinearUpdater {
 
     // lock-free parallel updates of weights
     selector_->Setup(*model, in_gpair->ConstHostVector(), p_fmat,
-                     param_.reg_alpha_denorm, param_.reg_lambda_denorm, 0);
-    for (const auto &batch : p_fmat->GetBatches<CSCPage>()) {
+                     param_.reg_alpha_denorm, param_.reg_lambda_denorm, 0, context_);
+    for (const auto &batch : p_fmat->GetBatches<CSCPage>(context_)) {
       auto page = batch.GetView();
       const auto nfeat = static_cast<bst_omp_uint>(batch.Size());
-      dmlc::OMPException exc;
-#pragma omp parallel for schedule(static)
-      for (bst_omp_uint i = 0; i < nfeat; ++i) {
-        exc.Run([&]() {
+
+      common::ParallelFor(nfeat, context_->Threads(), common::OmpSched::Static(), [&](omp_ulong i) {
           int ii = selector_->NextFeature
-            (i, *model, 0, in_gpair->ConstHostVector(), p_fmat, param_.reg_alpha_denorm,
+                   (i, *model, 0, in_gpair->ConstHostVector(), p_fmat, param_.reg_alpha_denorm,
             param_.reg_lambda_denorm);
           if (ii < 0) return;
           const bst_uint fid = ii;
@@ -88,8 +87,6 @@ class ShotgunUpdater : public LinearUpdater {
             }
           }
         });
-      }
-      exc.Rethrow();
     }
   }
 
