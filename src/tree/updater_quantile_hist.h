@@ -280,10 +280,11 @@ class QuantileHistMaker: public TreeUpdater {
                      GenericParameter const* ctx)
       : n_trees_(n_trees),
         param_(param),
+        column_sampler_{ctx->seed},
         tree_evaluator_(param, fmat->Info().num_col_, GenericParameter::kCpuId),
         pruner_(std::move(pruner)),
         interaction_constraints_{std::move(int_constraints_)},
-        p_last_tree_(nullptr), p_last_fmat_(fmat), column_sampler_{ctx->seed}, ctx_{ctx} {
+        p_last_tree_(nullptr), p_last_fmat_(fmat), ctx_{ctx} {
       builder_monitor_.Init("Quantile::Builder");
     }
 
@@ -407,7 +408,6 @@ class QuantileHistMaker: public TreeUpdater {
     // number of omp thread used during training
     int nthread_;
     common::ColumnSampler column_sampler_;
-    GenericParameter const* ctx_;
     // the internal row sets
     RowSetCollection row_set_collection_;
     // tree rows that were not used for current training
@@ -440,6 +440,7 @@ class QuantileHistMaker: public TreeUpdater {
     const RegTree* p_last_tree_;
     DMatrix const* const p_last_fmat_;
     DMatrix* p_last_fmat_mutable_;
+    GenericParameter const* ctx_;
 
     using ExpandQueue =
        std::priority_queue<CPUExpandEntry, std::vector<CPUExpandEntry>,
