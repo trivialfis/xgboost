@@ -21,6 +21,7 @@ template <typename GradientSumT> class ApproxHistogramBuilder {
                          GradientPairPrecise>;
 
   common::HistCollection<GradientSumT> histograms_;
+  common::HistCollection<GradientSumT> histograms_tlocal_;  // fixme: use it.
   common::ParallelGHistBuilder<GradientSumT> histogram_mapper_;
   common::GHistBuilder<GradientSumT> histogram_builder_;
   rabit::Reducer<GradientPairT, GradientPairT::Reduce> histogram_reducer_;
