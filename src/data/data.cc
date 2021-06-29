@@ -630,6 +630,99 @@ DMatrix::~DMatrix() {
   }
 }
 
+int XGBProxyDMatrixSetDataCSR(DMatrixHandle handle, char const *indptr,
+                              char const *indices, char const *data,
+                              xgboost::bst_ulong ncol,
+                              char const *c_json_config) {
+  auto p_m = static_cast<std::shared_ptr<xgboost::DMatrix> *>(handle);
+  CHECK(p_m);
+  auto m =   static_cast<xgboost::data::DMatrixProxy*>(p_m->get());
+  CHECK(m) << "Current DMatrix type does not support set data.";
+  m->SetCSRData(indptr, indices, data, ncol, true);
+  return 0;
+}
+
+template <typename T> std::string MakeArrayInterface(T const *data, size_t n) {
+  Json arr{Object{}};
+  arr["data"] = Array(std::vector<Json>{
+      Json{Integer{reinterpret_cast<int64_t>(data)}}, Json{Boolean{false}}});
+  arr["shape"] = Array{std::vector<Json>{Json{Integer{n}}, Json{Integer{1}}}};
+  arr["version"] = Integer{3};
+  std::string str;
+  Json::Dump(arr, &str);
+  return str;
+}
+
+class FileIterator {
+  std::string uri_;
+  uint32_t part_idx_;
+  uint32_t n_parts_;
+  std::string type_;
+  float missing_;
+
+  DMatrixHandle proxy_;
+
+  std::unique_ptr<dmlc::Parser<uint32_t>> parser_;
+  dmlc::RowBlock<uint32_t, float> row_block_;
+
+public:
+  FileIterator(std::string uri, unsigned part_index, unsigned num_parts,
+               std::string type, float missing)
+      : uri_{std::move(uri)}, part_idx_{part_index}, n_parts_{num_parts}, missing_{missing} {
+    XGProxyDMatrixCreate(&proxy_);
+  }
+
+  int Next() {
+    data::FileAdapter adapter(parser_.get());
+    if (parser_->Next()) {
+      row_block_ = parser_->Value();
+
+      auto indptr = MakeArrayInterface(row_block_.offset, row_block_.size + 1);
+      auto values = MakeArrayInterface(
+          row_block_.value, row_block_.offset[row_block_.size]);
+      auto index = MakeArrayInterface(
+          row_block_.index, row_block_.offset[row_block_.size]);
+
+      size_t n_columns = 0;
+      for (size_t i = 1; i < row_block_.size + 1; ++i) {
+        n_columns = std::max(n_columns, row_block_.offset[i] - row_block_.offset[i-1]);
+      }
+
+      Json args {Object{}};
+      args["missing"] = Number{missing_};
+      std::string str;
+      Json::Dump(args, &str);
+      XGBProxyDMatrixSetDataCSR(proxy_, indptr.c_str(), index.c_str(),
+                                values.c_str(), n_columns, str.c_str());
+
+      if (row_block_.qid) {
+        XGDMatrixSetDenseInfo(proxy_, "qid", row_block_.qid, row_block_.size, 1);
+      }
+      if (row_block_.weight) {
+        XGDMatrixSetDenseInfo(proxy_, "weight", row_block_.weight, row_block_.size, 1);
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  auto Proxy() -> decltype(proxy_) { return proxy_; }
+
+  void Reset() {
+    parser_.reset(dmlc::Parser<uint32_t>::Create(uri_.c_str(), part_idx_,
+                                                 n_parts_, type_.c_str()));
+  }
+};
+
+inline void Reset(DataIterHandle self) {
+  static_cast<FileIterator*>(self)->Reset();
+}
+
+inline int Next(DataIterHandle self) {
+  return static_cast<FileIterator*>(self)->Next();
+}
+
 DMatrix* DMatrix::Load(const std::string& uri,
                        bool silent,
                        bool load_row_split,
@@ -708,8 +801,16 @@ DMatrix* DMatrix::Load(const std::string& uri,
   DMatrix* dmat {nullptr};
 
   try {
-    dmat = DMatrix::Create(&adapter, std::numeric_limits<float>::quiet_NaN(), 1,
-                           cache_file, page_size);
+    FileIterator iter{fname, uint32_t(partid), uint32_t(npart), file_format,
+                      std::numeric_limits<float>::quiet_NaN()};
+    dmat = new data::IterativeDeviceDMatrix{
+        &iter,
+        iter.Proxy(),
+        Reset,
+        Next,
+        std::numeric_limits<float>::quiet_NaN(),
+        1,
+        0};
   } catch (dmlc::Error& e) {
     std::vector<std::string> splited = common::Split(fname, '#');
     std::vector<std::string> args = common::Split(splited.front(), '?');
@@ -785,6 +886,7 @@ DMatrix* DMatrix::Create(AdapterT* adapter, float missing, int nthread,
     // Data split mode is fixed to be row right now.
     return new data::SimpleDMatrix(adapter, missing, nthread);
   } else {
+    std::cout << "cache_prefix:" << cache_prefix << std::endl;
 #if DMLC_ENABLE_STD_THREAD
     return new data::SparsePageDMatrix(adapter, missing, nthread, cache_prefix,
                                        page_size);

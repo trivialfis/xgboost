@@ -29,7 +29,6 @@ class IterativeDeviceDMatrix : public DMatrix {
   MetaInfo info_;
   BatchParam batch_param_;
   std::shared_ptr<EllpackPage> ellpack_page_;
-  std::shared_ptr<SparsePage> sparse_page_;
   std::map<std::string, std::shared_ptr<Cache>> cache_info_;
 
   DMatrixHandle proxy_;

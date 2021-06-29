@@ -445,7 +445,7 @@ XGB_DLL int XGDMatrixGetStrFeatureInfo(DMatrixHandle handle, const char *field,
 }
 
 XGB_DLL int XGDMatrixSetDenseInfo(DMatrixHandle handle, const char *field,
-                                  void *data, xgboost::bst_ulong size,
+                                  void const *data, xgboost::bst_ulong size,
                                   int type) {
   API_BEGIN();
   CHECK_HANDLE();

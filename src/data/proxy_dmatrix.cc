@@ -11,7 +11,8 @@ void DMatrixProxy::SetArrayData(char const *c_interface) {
 }
 
 void DMatrixProxy::SetCSRData(char const *c_indptr, char const *c_indices,
-                              char const *c_values, bst_feature_t n_features) {
+                              char const *c_values, bst_feature_t n_features, bool on_host) {
+  CHECK(on_host) << "Not implemented on device.";
   std::shared_ptr<CSRArrayAdapter> adapter{
       new CSRArrayAdapter(StringView{c_indptr}, StringView{c_indices},
                           StringView{c_values}, n_features)};

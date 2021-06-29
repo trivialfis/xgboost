@@ -272,7 +272,6 @@ BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
   auto ptr = new IterativeDMatrixIteratorCSR(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_,
       this->n_batches_, cache_info_.at(id));
-  sparse_page_ = ptr->Page();
   ptr->Reset();
   auto begin_iter = BatchIterator<SparsePage>(ptr);
   return BatchSet<SparsePage>(BatchIterator<SparsePage>(begin_iter));
