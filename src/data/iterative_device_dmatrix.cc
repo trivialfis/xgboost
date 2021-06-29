@@ -42,11 +42,27 @@ void IterativeDeviceDMatrix::InitializeExternalMemory(DataIterHandle iter_handle
   auto num_cols = [&]() {
     return HostAdapterDispatch(proxy, [](auto const &value) { return value.NumCols(); });
   };
+  std::unique_ptr<dmlc::Stream> fo {dmlc::Stream::Create("cache.row.page", "w")};
+  auto cache_page = [&]() {
+    SparsePage page;
+    HostAdapterDispatch(
+        proxy, [&](auto const &value) { page.Push(value, missing, nthread); });
+    const auto& offset_vec = page.offset.HostVector();
+    const auto& data_vec = page.data.HostVector();
+    CHECK(page.offset.Size() != 0 && offset_vec[0] == 0);
+    CHECK_EQ(offset_vec.back(), page.data.Size());
+    fo->Write(offset_vec);
+    if (page.data.Size() != 0) {
+      fo->Write(dmlc::BeginPtr(data_vec), page.data.Size() * sizeof(Entry));
+    }
+  };
+
   while (iter.Next()) {
-    n_batches++;
     n_features = std::max(n_features, num_cols());
     n_samples += num_rows();
     this->info_.Extend(std::move(proxy->Info()), false);
+    cache_page();
+    n_batches++;
   }
   iter.Reset();
   this->n_batches_ = n_batches;
@@ -71,11 +87,16 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
       DMatrixProxy *proxy, float missing, int nthreads, bst_feature_t n_features)
       : iter_{std::move(iter)}, proxy_{proxy}, missing_{missing},
         nthreads_{nthreads}, n_features_{n_features} {
-    ++(*this);
   }
 
-  S &operator*() override { return *page_; }
-  const S &operator*() const override { return *page_; }
+  S &operator*() override {
+    CHECK(page_);
+    return *page_;
+  }
+  const S &operator*() const override {
+    CHECK(page_);
+    return *page_;
+  }
   std::shared_ptr<S> Page() const {
     return page_;
   }
@@ -140,7 +161,7 @@ BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_);
   sparse_page_ = ptr->Page();
   auto begin_iter = BatchIterator<SparsePage>(ptr);
-
+  ++begin_iter;
   return BatchSet<SparsePage>(BatchIterator<SparsePage>(begin_iter));
 }
 
@@ -153,6 +174,7 @@ BatchSet<CSCPage> IterativeDeviceDMatrix::GetColumnBatches() {
   iter.Reset();
   auto begin_iter = BatchIterator<CSCPage>(new IterativeDMatrixIteratorCSC(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_));
+  ++begin_iter;
   return BatchSet<CSCPage>(BatchIterator<CSCPage>(begin_iter));
 }
 
@@ -166,6 +188,7 @@ BatchSet<SortedCSCPage> IterativeDeviceDMatrix::GetSortedColumnBatches() {
   CHECK_NE(this->Info().num_col_, 0);
   auto begin_iter = BatchIterator<SortedCSCPage>(new IterativeDMatrixIteratorSortedCSC(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_));
+  ++begin_iter;
   return BatchSet<SortedCSCPage>(BatchIterator<SortedCSCPage>(begin_iter));
 }
 

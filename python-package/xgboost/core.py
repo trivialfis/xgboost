@@ -1119,7 +1119,9 @@ class DeviceQuantileDMatrix(DMatrix):
             self._it = SingleBatchInternalIter(data=data, **meta)
 
         self._it.enable_categorical = enable_categorical
-        self._reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(it.reset_wrapper)
+        self._reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(
+            self._it.reset_wrapper
+        )
         self._next_callback = ctypes.CFUNCTYPE(
             ctypes.c_int,
             ctypes.c_void_p,
