@@ -1,6 +1,9 @@
 import xgboost as xgb
 import numpy as np
 from sklearn.datasets import make_regression
+import dask
+from dask import dataframe as dd
+from dask_ml import datasets as dmd
 
 
 class IteratorForTest(xgb.core.DataIter):
@@ -44,3 +47,37 @@ def test_exact():
     it = IteratorForTest(16, 8, 4)
     Xy = xgb.DeviceQuantileDMatrix(it)
     from_it = xgb.train({"tree_method": "exact", "nthread": 1}, Xy)
+
+
+class DaskIterator(xgb.core.DataIter):
+    def __init__(self, X, y):
+        self.X_parts = X.to_delayed()
+
+        if isinstance(self.X_parts, np.ndarray):
+            self.X_parts = self.X_parts.flatten().tolist()
+
+        self.y_parts = y.to_delayed()
+        if isinstance(self.y_parts, np.ndarray):
+            self.y_parts = self.y_parts.flatten().tolist()
+
+        self._it = 0
+        super().__init__()
+
+    def next(self, input_data):
+        if self._it == len(self.X_parts):
+            return 0
+
+        input_data(
+            data=self.X_parts[self._it].compute(), label=self.y_parts[self._it].compute()
+        )
+        self._it += 1
+        return 1
+
+    def reset(self):
+        self._it = 0
+
+
+def test_dask():
+    dX, dy = dmd.make_regression(10000, 10, chunks=100)
+    Xy = xgb.DeviceQuantileDMatrix(DaskIterator(dX, dy))
+    from_it = xgb.train({"tree_method": "exact", "nthread": 16}, Xy)
