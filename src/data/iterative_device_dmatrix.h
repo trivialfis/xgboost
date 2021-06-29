@@ -22,7 +22,7 @@ namespace data {
 struct Cache {
   bool written;
   std::string format;
-  std::string id;
+  std::vector<std::string> id;
 };
 
 class IterativeDeviceDMatrix : public DMatrix {
@@ -77,9 +77,11 @@ class IterativeDeviceDMatrix : public DMatrix {
   }
 
   ~IterativeDeviceDMatrix() override {
-    for (auto const& kv : cache_info_) {
-      if (std::ifstream f{kv.first}) {
-        TryDeleteCacheFile(kv.first);
+    for (auto const &kv : cache_info_) {
+      for (auto const &name : kv.second->id) {
+        if (std::ifstream f{name}) {
+          TryDeleteCacheFile(name);
+        }
       }
     }
   }
