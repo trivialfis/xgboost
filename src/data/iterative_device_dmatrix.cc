@@ -1,5 +1,6 @@
 #include "iterative_device_dmatrix.h"
 #include "simple_batch_iterator.h"
+#include "sparse_page_source.h"
 
 namespace xgboost {
 namespace data {
@@ -42,26 +43,11 @@ void IterativeDeviceDMatrix::InitializeExternalMemory(DataIterHandle iter_handle
   auto num_cols = [&]() {
     return HostAdapterDispatch(proxy, [](auto const &value) { return value.NumCols(); });
   };
-  std::unique_ptr<dmlc::Stream> fo {dmlc::Stream::Create("cache.row.page", "w")};
-  auto cache_page = [&]() {
-    SparsePage page;
-    HostAdapterDispatch(
-        proxy, [&](auto const &value) { page.Push(value, missing, nthread); });
-    const auto& offset_vec = page.offset.HostVector();
-    const auto& data_vec = page.data.HostVector();
-    CHECK(page.offset.Size() != 0 && offset_vec[0] == 0);
-    CHECK_EQ(offset_vec.back(), page.data.Size());
-    fo->Write(offset_vec);
-    if (page.data.Size() != 0) {
-      fo->Write(dmlc::BeginPtr(data_vec), page.data.Size() * sizeof(Entry));
-    }
-  };
 
   while (iter.Next()) {
     n_features = std::max(n_features, num_cols());
     n_samples += num_rows();
     this->info_.Extend(std::move(proxy->Info()), false);
-    cache_page();
     n_batches++;
   }
   iter.Reset();
@@ -80,6 +66,42 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   float missing_;
   int nthreads_;
   bst_feature_t n_features_;
+
+  std::string cache_file_ {"cache"};
+  std::unique_ptr<SparsePageFormat<S>> fmt_;
+  std::unique_ptr<dmlc::SeekStream> fi_;
+  std::unique_ptr<dmlc::Stream> fo_;
+  bool written_ {false};
+  std::string cache_type_;
+
+  bool ReadCache(std::string cache_type, SparsePage* page) {
+    if (cache_type_.empty()) {
+      cache_type_ = cache_type;
+    } else {
+      CHECK_EQ(cache_type, cache_type_);
+    }
+    if (written_) {
+      if (!fi_) {
+        std::string file = cache_file_ + cache_type;
+        fi_.reset(dmlc::SeekStream::CreateForRead(file.c_str()));
+      }
+      fmt_->Read(page, fi_.get());
+      return true;
+    }
+    return false;
+  }
+
+  void WriteCache() {
+    if (!written_) {
+      if (!fmt_) {
+        auto format = DecideFormat("cache").first;
+        fmt_.reset(CreatePageFormat<S>(format));
+        std::string name_shard = cache_file_ + "." + cache_type_;
+        fo_.reset((dmlc::Stream::Create(name_shard.c_str(), "w")));
+      }
+      fmt_->Write(*page_, fo_.get());
+    }
+  }
 
  public:
   IterativeDMatrixIteratorImpl(
@@ -106,17 +128,23 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
 };
 
 class IterativeDMatrixIteratorCSR : public IterativeDMatrixIteratorImpl<SparsePage> {
+  const std::string format_ {"row.page"};
+
  public:
   using IterativeDMatrixIteratorImpl::IterativeDMatrixIteratorImpl;
   void operator++() override {
     at_end_ = !iter_.Next();
     if (at_end_) {
+      written_ = true;
       iter_.Reset();
     } else {
       page_.reset(new SparsePage{});
-      HostAdapterDispatch(proxy_, [&](auto const &value) {
-        page_->Push(value, this->missing_, this->nthreads_);
-      });
+      if (!ReadCache(format_, page_.get())) {
+        HostAdapterDispatch(proxy_, [&](auto const &value) {
+          page_->Push(value, this->missing_, this->nthreads_);
+        });
+        WriteCache();
+      }
     }
   }
 };
