@@ -75,10 +75,10 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   size_t n_batches_ {0};
 
   std::shared_ptr<Cache> cache_info_;
-  std::queue<std::future<std::shared_ptr<S>>> queue_;
+  using Queue = std::queue<std::future<std::shared_ptr<S>>>;
+  std::unique_ptr<Queue> queue_ {new Queue};
 
-  static size_t constexpr kPreFetch = 2;
-  std::vector<size_t> offset_;
+  static size_t constexpr kPreFetch = 4;  // an heuristic for number of pre-fetched batches.
 
   bool ReadCache() {
     CHECK(!at_end_);
@@ -97,13 +97,13 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
         fmt->Read(page.get(), fi.get());
         return page;
       });
-      queue_.push(std::move(future));
+      queue_->push(std::move(future));
       ++it_;
     }
 
-    CHECK(queue_.front().valid());
-    page_ = queue_.front().get();
-    queue_.pop();
+    CHECK(queue_->front().valid());
+    page_ = queue_->front().get();
+    queue_->pop();
     return true;
   }
 
@@ -129,12 +129,12 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
         cache_info_{std::move(cache)} {}
 
   ~IterativeDMatrixIteratorImpl() override {
-    while (!queue_.empty()) {
-      auto& top = queue_.front();
+    while (!queue_->empty()) {
+      auto& top = queue_->front();
       CHECK(top.valid());
       top.wait();
       top.get();
-      queue_.pop();
+      queue_->pop();
     }
   }
 
