@@ -44,4 +44,3 @@ def test_exact():
     it = IteratorForTest(16, 8, 4)
     Xy = xgb.DeviceQuantileDMatrix(it)
     from_it = xgb.train({"tree_method": "exact", "nthread": 1}, Xy)
-    assert from_it.get_dump() == from_dmat.get_dump()
