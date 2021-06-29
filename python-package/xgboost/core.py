@@ -1114,7 +1114,6 @@ class DeviceQuantileDMatrix(DMatrix):
             data = _transform_dlpack(data)
         if _is_iter(data):
             self._it = data
-            assert False
         else:
             self._it = SingleBatchInternalIter(data=data, **meta)
 
