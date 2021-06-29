@@ -320,7 +320,7 @@ class CSRArrayAdapterBatch : public detail::NoMetaInfo {
   CSRArrayAdapterBatch(ArrayInterface indptr, ArrayInterface indices,
                        ArrayInterface values, bst_feature_t n_features)
       : indptr_{std::move(indptr)}, indices_{std::move(indices)},
-        values_{std::move(values)} {
+        values_{std::move(values)}, n_features_{n_features} {
     indptr_.AsColumnVector();
     values_.AsColumnVector();
     indices_.AsColumnVector();

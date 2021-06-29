@@ -688,10 +688,9 @@ public:
       auto index = MakeArrayInterface(
           row_block_.index, row_block_.offset[row_block_.size]);
 
-      size_t n_columns = 0;
-      for (size_t i = 1; i < row_block_.size + 1; ++i) {
-        n_columns = std::max(n_columns, row_block_.offset[i] - row_block_.offset[i-1]);
-      }
+      size_t n_columns = *std::max_element(
+          row_block_.index,
+          row_block_.index + row_block_.offset[row_block_.size]);
 
       Json args {Object{}};
       args["missing"] = Number{missing_};
