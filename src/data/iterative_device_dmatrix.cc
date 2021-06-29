@@ -101,18 +101,24 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
     return page_;
   }
 
+  void operator++() override = 0;
+  bool AtEnd() const override { return at_end_; }
+};
+
+class IterativeDMatrixIteratorCSR : public IterativeDMatrixIteratorImpl<SparsePage> {
+ public:
+  using IterativeDMatrixIteratorImpl::IterativeDMatrixIteratorImpl;
   void operator++() override {
     at_end_ = !iter_.Next();
     if (at_end_) {
       iter_.Reset();
     } else {
-      page_.reset(new S{});
+      page_.reset(new SparsePage{});
       HostAdapterDispatch(proxy_, [&](auto const &value) {
         page_->Push(value, this->missing_, this->nthreads_);
       });
     }
   }
-  bool AtEnd() const override { return at_end_; }
 };
 
 class IterativeDMatrixIteratorCSC : public IterativeDMatrixIteratorImpl<CSCPage> {
@@ -150,14 +156,21 @@ class IterativeDMatrixIteratorSortedCSC : public IterativeDMatrixIteratorImpl<So
   }
 };
 
-BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
-  auto proxy_handle = static_cast<std::shared_ptr<DMatrix>*>(proxy_);
+namespace {
+DMatrixProxy *MakeProxy(DMatrixHandle proxy) {
+  auto proxy_handle = static_cast<std::shared_ptr<DMatrix> *>(proxy);
   CHECK(proxy_handle) << "[xgboost::IterativeDMatrix] Invalid proxy handle.";
-  DMatrixProxy* proxy = static_cast<DMatrixProxy*>(proxy_handle->get());
+  DMatrixProxy *typed = static_cast<DMatrixProxy *>(proxy_handle->get());
+  return typed;
+}
+} // namespace
+
+BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
+  DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
   iter.Reset();
-  auto ptr = new IterativeDMatrixIteratorImpl<SparsePage>(
+  auto ptr = new IterativeDMatrixIteratorCSR(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_);
   sparse_page_ = ptr->Page();
   auto begin_iter = BatchIterator<SparsePage>(ptr);
@@ -166,9 +179,7 @@ BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
 }
 
 BatchSet<CSCPage> IterativeDeviceDMatrix::GetColumnBatches() {
-  auto proxy_handle = static_cast<std::shared_ptr<DMatrix>*>(proxy_);
-  CHECK(proxy_handle) << "[xgboost::IterativeDMatrix] Invalid proxy handle.";
-  DMatrixProxy* proxy = static_cast<DMatrixProxy*>(proxy_handle->get());
+  DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
   iter.Reset();
@@ -179,9 +190,7 @@ BatchSet<CSCPage> IterativeDeviceDMatrix::GetColumnBatches() {
 }
 
 BatchSet<SortedCSCPage> IterativeDeviceDMatrix::GetSortedColumnBatches() {
-  auto proxy_handle = static_cast<std::shared_ptr<DMatrix>*>(proxy_);
-  CHECK(proxy_handle) << "[xgboost::IterativeDMatrix] Invalid proxy handle.";
-  DMatrixProxy* proxy = static_cast<DMatrixProxy*>(proxy_handle->get());
+  DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
   iter.Reset();
