@@ -14,16 +14,23 @@
 #include "xgboost/data.h"
 #include "xgboost/c_api.h"
 #include "proxy_dmatrix.h"
+#include "sparse_page_source.h"
 
 namespace xgboost {
 namespace data {
+
+struct Cache {
+  bool written;
+  std::string format;
+  std::string id;
+};
 
 class IterativeDeviceDMatrix : public DMatrix {
   MetaInfo info_;
   BatchParam batch_param_;
   std::shared_ptr<EllpackPage> ellpack_page_;
   std::shared_ptr<SparsePage> sparse_page_;
-  std::vector<std::string> format_shards_;
+  std::map<std::string, std::shared_ptr<Cache>> cache_info_;
 
   DMatrixHandle proxy_;
   DataIterHandle iter_;
@@ -67,6 +74,14 @@ class IterativeDeviceDMatrix : public DMatrix {
   }
   MetaInfo const& Info() const override {
     return info_;
+  }
+
+  ~IterativeDeviceDMatrix() override {
+    for (auto const& kv : cache_info_) {
+      if (std::ifstream f{kv.first}) {
+        TryDeleteCacheFile(kv.first);
+      }
+    }
   }
 };
 }  // namespace data
