@@ -25,11 +25,14 @@ struct Cache {
   std::vector<std::string> id;
 };
 
+class IterativeDMatrixIteratorCSR;
+
 class IterativeDeviceDMatrix : public DMatrix {
   MetaInfo info_;
   BatchParam batch_param_;
   std::shared_ptr<EllpackPage> ellpack_page_;
   std::map<std::string, std::shared_ptr<Cache>> cache_info_;
+  std::shared_ptr<IterativeDMatrixIteratorCSR> sparse_source_;
 
   DMatrixHandle proxy_;
   DataIterHandle iter_;
@@ -38,6 +41,7 @@ class IterativeDeviceDMatrix : public DMatrix {
   float missing_;
   int nthreads_;
   size_t n_batches_ {0};
+  bool lazy_{false};
 
  public:
   void InitializeEllpack(DataIterHandle iter, float missing, int nthread);

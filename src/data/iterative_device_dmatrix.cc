@@ -296,6 +296,9 @@ BatchSet<SortedCSCPage> IterativeDeviceDMatrix::GetSortedColumnBatches() {
       iter_, reset_, next_};
   auto id = MakeCache(this, ".sorted.col.page", this->n_batches_, &cache_info_);
   CHECK_NE(this->Info().num_col_, 0);
+  if (!lazy_) {
+    for (auto const &DMLC_ATTRIBUTE_UNUSED batch : this->GetRowBatches()) {}
+  }
   auto ptr = new IterativeDMatrixIteratorSortedCSC(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_,
       this->n_batches_, cache_info_.at(id));
