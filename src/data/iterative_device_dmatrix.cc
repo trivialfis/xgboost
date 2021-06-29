@@ -72,7 +72,7 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   std::unique_ptr<dmlc::Stream> fo_;
   std::shared_ptr<Cache> cache_info_;
 
-  bool ReadCache(SparsePage* page) {
+  bool ReadCache(S* page) {
     if (cache_info_->written) {
       if (!fi_) {
         fi_.reset(dmlc::SeekStream::CreateForRead(cache_info_->id.c_str()));
@@ -148,11 +148,18 @@ class IterativeDMatrixIteratorCSC : public IterativeDMatrixIteratorImpl<CSCPage>
     if (at_end_) {
       iter_.Reset();
     } else {
-      SparsePage page;
-      HostAdapterDispatch(proxy_, [&](auto const &value) {
-        page.Push(value, this->missing_, this->nthreads_);
-        page_.reset(new CSCPage{page.GetTranspose(this->n_features_)});
-      });
+      CSCPage csc;
+      if (!this->ReadCache(&csc)) {
+        HostAdapterDispatch(proxy_, [&](auto const &value) {
+          SparsePage page;
+          page.Push(value, this->missing_, this->nthreads_);
+          page_.reset(new CSCPage{page.GetTranspose(this->n_features_)});
+        });
+        this->WriteCache();
+      } else {
+        page_->offset = std::move(csc.offset);
+        page_->data = std::move(csc.data);
+      }
     }
   }
 };
@@ -164,13 +171,20 @@ class IterativeDMatrixIteratorSortedCSC : public IterativeDMatrixIteratorImpl<So
     if (at_end_) {
       iter_.Reset();
     } else {
-      SparsePage page;
-      HostAdapterDispatch(proxy_, [&](auto const &value) {
-        page.Push(value, this->missing_, this->nthreads_);
-        page = page.GetTranspose(this->n_features_);
-        page.SortRows();
-        page_.reset(new SortedCSCPage{std::move(page)});
-      });
+      SortedCSCPage sorted;
+      if (!this->ReadCache(&sorted)) {
+        HostAdapterDispatch(proxy_, [&](auto const &value) {
+          SparsePage page;
+          page.Push(value, this->missing_, this->nthreads_);
+          page = page.GetTranspose(this->n_features_);
+          page.SortRows();
+          page_.reset(new SortedCSCPage{std::move(page)});
+        });
+        this->WriteCache();
+      } else {
+        page_->offset = std::move(sorted.offset);
+        page_->data = std::move(sorted.data);
+      }
     }
   }
 };
