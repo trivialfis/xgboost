@@ -505,8 +505,7 @@ void MetaInfo::Extend(MetaInfo const& that, bool accumulate_rows) {
     this->num_row_ += that.num_row_;
   }
   if (this->num_col_ != 0) {
-    CHECK_EQ(this->num_col_, that.num_col_)
-        << "Number of columns must be consistent across batches.";
+    this->num_col_ = std::max(this->num_col_, that.num_col_);
   }
   this->num_col_ = that.num_col_;
 
@@ -647,6 +646,11 @@ template <typename T> std::string MakeArrayInterface(T const *data, size_t n) {
   arr["data"] = Array(std::vector<Json>{
       Json{Integer{reinterpret_cast<int64_t>(data)}}, Json{Boolean{false}}});
   arr["shape"] = Array{std::vector<Json>{Json{Integer{n}}, Json{Integer{1}}}};
+  if (DMLC_LITTLE_ENDIAN) {
+    arr["typestr"] = String("<f4");
+  } else {
+    arr["typestr"] = String(">f4");
+  }
   arr["version"] = Integer{3};
   std::string str;
   Json::Dump(arr, &str);
@@ -668,12 +672,13 @@ class FileIterator {
 public:
   FileIterator(std::string uri, unsigned part_index, unsigned num_parts,
                std::string type, float missing)
-      : uri_{std::move(uri)}, part_idx_{part_index}, n_parts_{num_parts}, missing_{missing} {
+      : uri_{std::move(uri)}, part_idx_{part_index}, n_parts_{num_parts},
+        type_{std::move(type)}, missing_{missing} {
     XGProxyDMatrixCreate(&proxy_);
   }
 
   int Next() {
-    data::FileAdapter adapter(parser_.get());
+    CHECK(parser_);
     if (parser_->Next()) {
       row_block_ = parser_->Value();
 
@@ -695,6 +700,9 @@ public:
       XGBProxyDMatrixSetDataCSR(proxy_, indptr.c_str(), index.c_str(),
                                 values.c_str(), n_columns, str.c_str());
 
+      if (row_block_.label) {
+        XGDMatrixSetDenseInfo(proxy_, "label", row_block_.label, row_block_.size, 1);
+      }
       if (row_block_.qid) {
         XGDMatrixSetDenseInfo(proxy_, "qid", row_block_.qid, row_block_.size, 1);
       }
@@ -795,11 +803,7 @@ DMatrix* DMatrix::Load(const std::string& uri,
     }
   }
 
-  std::unique_ptr<dmlc::Parser<uint32_t> > parser(
-      dmlc::Parser<uint32_t>::Create(fname.c_str(), partid, npart, file_format.c_str()));
-  data::FileAdapter adapter(parser.get());
   DMatrix* dmat {nullptr};
-
   try {
     FileIterator iter{fname, uint32_t(partid), uint32_t(npart), file_format,
                       std::numeric_limits<float>::quiet_NaN()};

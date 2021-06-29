@@ -35,6 +35,7 @@ void IterativeDeviceDMatrix::InitializeExternalMemory(DataIterHandle iter_handle
   DMatrixProxy* proxy = static_cast<DMatrixProxy*>(proxy_handle->get());
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_handle, reset_, next_};
+  iter.Reset();
 
   size_t n_batches = 0;
   size_t n_features = 0;
@@ -71,7 +72,8 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   int nthreads_;
   bst_feature_t n_features_;
 
-  size_t it_ {0};
+  size_t fetch_it_ {0};
+  size_t it_{0};
   size_t n_batches_ {0};
 
   std::shared_ptr<Cache> cache_info_;
@@ -82,12 +84,13 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
 
   bool ReadCache() {
     CHECK(!at_end_);
+    CHECK_LT(it_, n_batches_);
     if (!cache_info_->written) {
       return false;
     }
 
-    for (size_t i = 0; i < kPreFetch && it_ < n_batches_; ++i) {
-      auto tloc_it = it_;
+    for (size_t i = 0; i < kPreFetch && fetch_it_ < n_batches_; ++i) {
+      auto tloc_it = fetch_it_;
       auto future = std::async(std::launch::async, [this, tloc_it]() {
         std::unique_ptr<SparsePageFormat<S>> fmt{
             CreatePageFormat<S>(cache_info_->format)};
@@ -98,9 +101,10 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
         return page;
       });
       queue_->push(std::move(future));
-      ++it_;
+      ++fetch_it_;
     }
 
+    CHECK(!queue_->empty()) << ", it:" << fetch_it_;
     CHECK(queue_->front().valid());
     page_ = queue_->front().get();
     queue_->pop();
@@ -112,11 +116,11 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
       std::unique_ptr<SparsePageFormat<S>> fmt{
           CreatePageFormat<S>(cache_info_->format)};
       std::unique_ptr<dmlc::Stream> fo_{
-          dmlc::Stream::Create(cache_info_->id.at(it_).c_str(), "w")};
+          dmlc::Stream::Create(cache_info_->id.at(fetch_it_).c_str(), "w")};
       fmt->Write(*page_, fo_.get());
     }
-    it_++;
-    CHECK_LE(it_, n_batches_);
+    fetch_it_++;
+    CHECK_LE(fetch_it_, n_batches_);
   }
 
  public:
@@ -153,7 +157,7 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   void operator++() override = 0;
   bool AtEnd() const override {
     if (at_end_ && cache_info_->written) {
-      CHECK_EQ(n_batches_, it_);
+      CHECK_EQ(n_batches_, fetch_it_);
     }
     return at_end_;
   }
@@ -161,6 +165,8 @@ class IterativeDMatrixIteratorImpl : public BatchIteratorImpl<S> {
   void Reset() {
     iter_.Reset();
     ++(*this);
+    fetch_it_ = 0;
+    it_ = 0;
   }
 };
 
@@ -168,10 +174,11 @@ class IterativeDMatrixIteratorCSR : public IterativeDMatrixIteratorImpl<SparsePa
  public:
   using IterativeDMatrixIteratorImpl::IterativeDMatrixIteratorImpl;
   void operator++() override {
-    at_end_ = !iter_.Next();
+    at_end_ = !iter_.Next() || it_ == n_batches_;
     if (at_end_) {
       cache_info_->written = true;
     } else {
+      CHECK_LT(it_, n_batches_);
       page_.reset(new SparsePage{});
       if (!this->ReadCache()) {
         HostAdapterDispatch(proxy_, [&](auto const &value) {
@@ -179,47 +186,99 @@ class IterativeDMatrixIteratorCSR : public IterativeDMatrixIteratorImpl<SparsePa
         });
         this->WriteCache();
       }
+      it_ ++;
     }
   }
 };
 
 class IterativeDMatrixIteratorCSC : public IterativeDMatrixIteratorImpl<CSCPage> {
+  std::shared_ptr<IterativeDMatrixIteratorCSR> csr_;
+
  public:
-  using IterativeDMatrixIteratorImpl::IterativeDMatrixIteratorImpl;
+  IterativeDMatrixIteratorCSC(
+      DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext> iter,
+      DMatrixProxy *proxy, float missing, int nthreads,
+      bst_feature_t n_features, size_t n_batches, std::shared_ptr<Cache> cache,
+      std::shared_ptr<IterativeDMatrixIteratorCSR> csr)
+      : IterativeDMatrixIteratorImpl(iter, proxy, missing, nthreads, n_features,
+                                     n_batches, cache),
+        csr_{std::move(csr)} {}
+
   void operator++() override {
-    at_end_ = !iter_.Next();
+    if (csr_) {
+      ++(*csr_);
+      at_end_ = csr_->AtEnd();
+    } else {
+      at_end_ = !iter_.Next();
+    }
+    at_end_ = at_end_ || it_ == n_batches_;
+
     if (at_end_) {
       cache_info_->written = true;
     } else {
       if (!this->ReadCache()) {
-        HostAdapterDispatch(proxy_, [&](auto const &value) {
-          SparsePage page;
-          page.Push(value, this->missing_, this->nthreads_);
-          page_.reset(new CSCPage{page.GetTranspose(this->n_features_)});
-        });
+        if (csr_) {
+          auto page = csr_->Page();
+          CSCPage sorted{page->GetTranspose(this->n_features_)};
+          page_.reset(new CSCPage(std::move(sorted)));
+        } else {
+          HostAdapterDispatch(proxy_, [&](auto const &value) {
+            SparsePage page;
+            page.Push(value, this->missing_, this->nthreads_);
+            page_.reset(new CSCPage{page.GetTranspose(this->n_features_)});
+          });
+        }
         this->WriteCache();
       }
+      it_++;
     }
   }
 };
 
-class IterativeDMatrixIteratorSortedCSC : public IterativeDMatrixIteratorImpl<SortedCSCPage> {
-  using IterativeDMatrixIteratorImpl::IterativeDMatrixIteratorImpl;
+class IterativeDMatrixIteratorSortedCSC
+    : public IterativeDMatrixIteratorImpl<SortedCSCPage> {
+  std::shared_ptr<IterativeDMatrixIteratorCSR> csr_;
+
+ public:
+  IterativeDMatrixIteratorSortedCSC(
+      DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext> iter,
+      DMatrixProxy *proxy, float missing, int nthreads,
+      bst_feature_t n_features, size_t n_batches, std::shared_ptr<Cache> cache,
+      std::shared_ptr<IterativeDMatrixIteratorCSR> csr)
+      : IterativeDMatrixIteratorImpl(iter, proxy, missing, nthreads, n_features,
+                                     n_batches, cache),
+        csr_{std::move(csr)} {}
+
   void operator++() override {
-    at_end_ = !iter_.Next();
+    if (csr_) {
+      at_end_ = csr_->AtEnd();
+    } else {
+      at_end_ = !iter_.Next();
+    }
+    at_end_ = at_end_ || it_ == n_batches_;
+
     if (at_end_) {
       cache_info_->written = true;
     } else {
       if (!this->ReadCache()) {
-        HostAdapterDispatch(proxy_, [&](auto const &value) {
-          SparsePage page;
-          page.Push(value, this->missing_, this->nthreads_);
-          page = page.GetTranspose(this->n_features_);
-          page.SortRows();
-          page_.reset(new SortedCSCPage{std::move(page)});
-        });
+        if (csr_) {
+          ++(*csr_);
+          auto page = csr_->Page();
+          SortedCSCPage sorted{page->GetTranspose(this->n_features_)};
+          sorted.SortRows();
+          page_.reset(new SortedCSCPage(std::move(sorted)));
+        } else {
+          HostAdapterDispatch(proxy_, [&](auto const &value) {
+            SparsePage page;
+            page.Push(value, this->missing_, this->nthreads_);
+            page = page.GetTranspose(this->n_features_);
+            page.SortRows();
+            page_.reset(new SortedCSCPage{std::move(page)});
+          });
+        }
         this->WriteCache();
       }
+      it_++;
     }
   }
 };
@@ -232,28 +291,31 @@ DMatrixProxy *MakeProxy(DMatrixHandle proxy) {
   return typed;
 }
 
-std::string MakeId(IterativeDeviceDMatrix* ptr, std::string format) {
+[[nodiscard]] std::string MakeId(IterativeDeviceDMatrix *ptr,
+                                 std::string format) {
   std::stringstream ss;
   ss << ptr;
   auto id = ss.str() + format;
   return id;
 }
 
-std::string MakeShardName(IterativeDeviceDMatrix* ptr, size_t i, std::string format) {
+[[nodiscard]] std::string MakeShardName(IterativeDeviceDMatrix *ptr, size_t i,
+                                        std::string format) {
   std::stringstream ss;
   ss << ptr << "-" << i;
   auto id = ss.str() + format;
   return id;
 }
 
-std::string MakeCache(IterativeDeviceDMatrix *ptr, std::string format,
-                      size_t n_batches,
-                      std::map<std::string, std::shared_ptr<Cache>> *out) {
+[[nodiscard]] std::string
+MakeCache(IterativeDeviceDMatrix *ptr, std::string format, size_t n_batches,
+          std::map<std::string, std::shared_ptr<Cache>> *out) {
   auto& cache_info = *out;
   auto id = MakeId(ptr, format);
   auto it = cache_info.find(id);
   CHECK_GT(n_batches, 0);
   if (it == cache_info.cend()) {
+    CHECK(!CheckCacheFileExists(id));
     std::vector<std::string> names;
     for (size_t i = 0; i < n_batches; ++i) {
       names.emplace_back(MakeShardName(ptr, i, format));
@@ -264,16 +326,21 @@ std::string MakeCache(IterativeDeviceDMatrix *ptr, std::string format,
 }
 } // namespace
 
-BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
+void IterativeDeviceDMatrix::InitSparseSource() {
   DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
+  iter.Reset();
   auto id = MakeCache(this, ".row.page", this->n_batches_, &cache_info_);
-  auto ptr = new IterativeDMatrixIteratorCSR(
+  sparse_source_.reset(new IterativeDMatrixIteratorCSR(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_,
-      this->n_batches_, cache_info_.at(id));
-  ptr->Reset();
-  auto begin_iter = BatchIterator<SparsePage>(ptr);
+      this->n_batches_, cache_info_.at(id)));
+  sparse_source_->Reset();
+}
+
+BatchSet<SparsePage> IterativeDeviceDMatrix::GetRowBatches() {
+  this->InitSparseSource();
+  auto begin_iter = BatchIterator<SparsePage>(sparse_source_);
   return BatchSet<SparsePage>(BatchIterator<SparsePage>(begin_iter));
 }
 
@@ -281,11 +348,15 @@ BatchSet<CSCPage> IterativeDeviceDMatrix::GetColumnBatches() {
   DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
+  iter.Reset();
   auto id = MakeCache(this, ".col.page", this->n_batches_, &cache_info_);
   CHECK_NE(this->Info().num_col_, 0);
-  auto ptr = new IterativeDMatrixIteratorCSC(
+  if (!lazy_) { this->InitSparseSource(); }
+
+  auto ptr = std::make_shared<IterativeDMatrixIteratorCSC>(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_,
-      this->n_batches_, cache_info_.at(id));
+      this->n_batches_, cache_info_.at(id), sparse_source_);
+  ptr->Reset();
   auto begin_iter = BatchIterator<CSCPage>(ptr);
   return BatchSet<CSCPage>(BatchIterator<CSCPage>(begin_iter));
 }
@@ -294,15 +365,13 @@ BatchSet<SortedCSCPage> IterativeDeviceDMatrix::GetSortedColumnBatches() {
   DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
+  iter.Reset();
   auto id = MakeCache(this, ".sorted.col.page", this->n_batches_, &cache_info_);
   CHECK_NE(this->Info().num_col_, 0);
-  // TODO: Use sparse page as a source instead of iterator.
-  if (!lazy_) {
-    for (auto const &DMLC_ATTRIBUTE_UNUSED batch : this->GetRowBatches()) {}
-  }
-  auto ptr = new IterativeDMatrixIteratorSortedCSC(
+  if (!lazy_) { this->InitSparseSource(); }
+  auto ptr = std::make_shared<IterativeDMatrixIteratorSortedCSC>(
       iter, proxy, this->missing_, this->nthreads_, this->Info().num_col_,
-      this->n_batches_, cache_info_.at(id));
+      this->n_batches_, cache_info_.at(id), sparse_source_);
   ptr->Reset();
   auto begin_iter = BatchIterator<SortedCSCPage>(ptr);
   return BatchSet<SortedCSCPage>(BatchIterator<SortedCSCPage>(begin_iter));

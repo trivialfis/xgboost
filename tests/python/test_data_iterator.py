@@ -36,7 +36,6 @@ def test_exact():
     X, y = load_breast_cancer(return_X_y=True)
     X = X[:20].copy()
     y = y[:20].copy()
-    print("x.shape:", X.shape)
     Xy = xgb.DeviceQuantileDMatrix(X, y)
     from_it = xgb.train({"tree_method": "exact", "nthread": 1}, Xy)
 
@@ -67,13 +66,15 @@ class DaskIterator(xgb.core.DataIter):
         if self._it == len(self.X_parts):
             return 0
 
-        input_data(
-            data=self.X_parts[self._it].compute(), label=self.y_parts[self._it].compute()
-        )
+        self.x = self.X_parts[self._it].compute()
+        self.y = self.y_parts[self._it].compute()
+        input_data(data=self.x, label=self.y)
         self._it += 1
         return 1
 
     def reset(self):
+        self.x = None
+        self.y = None
         self._it = 0
 
 
