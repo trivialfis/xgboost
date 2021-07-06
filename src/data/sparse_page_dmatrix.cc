@@ -52,10 +52,10 @@ SparsePageDMatrix::SparsePageDMatrix(DataIterHandle iter_handle, DMatrixHandle p
   this->n_batches_ = n_batches;
   this->info_.num_row_ = n_samples;
   this->info_.num_col_ = n_features;
-  CHECK_NE(n_features, 0);
   this->info_.num_nonzero_ = nnz;
 
   rabit::Allreduce<rabit::op::Max>(&info_.num_col_, 1);
+  CHECK_NE(info_.num_col_, 0);
 }
 
 void SparsePageDMatrix::InitializeSparsePage() {
