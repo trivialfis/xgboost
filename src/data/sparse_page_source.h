@@ -156,9 +156,8 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
 
     size_t n_prefetch_batches = std::min(kPreFetch, n_batches_);
     CHECK_GT(n_prefetch_batches, 0) << n_batches_;
-
     size_t fetch_it = count_;
-    for (size_t i = 0; i < n_prefetch_batches; ++i) {
+    for (size_t i = 0; i < n_prefetch_batches; ++i, ++fetch_it) {
       fetch_it %= n_batches_;
       if (ring_->at(fetch_it).valid()) { continue; }
       auto const *self = this;  // make sure it's const
@@ -175,7 +174,6 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
         CHECK(fmt->Read(page.get(), fi.get()));
         return page;
       });
-      fetch_it++;
     }
     page_ = (*ring_)[count_].get();
     return true;
