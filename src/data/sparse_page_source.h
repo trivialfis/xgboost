@@ -53,8 +53,6 @@ GetCacheShards(const std::string& cache_info) {
 
 namespace xgboost {
 namespace data {
-/*! \brief magic number used to identify Page */
-static const int kMagic = 0xffffab02;
 /*!
  * \brief decide the format from cache prefix.
  * \return pair of row format, column format type of the cache prefix.

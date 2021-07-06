@@ -31,8 +31,6 @@ class SparsePageDMatrix : public DMatrix {
   DataIterResetCallback *reset_;
   XGDMatrixCallbackNext *next_;
 
-  std::mutex single_threaded_;
-
   float missing_;
   int nthreads_;
   std::string cache_prefix_;
