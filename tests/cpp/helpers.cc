@@ -15,9 +15,11 @@
 #include <cinttypes>
 
 #include "helpers.h"
+#include "data_iterator_for_test.h"
 #include "xgboost/c_api.h"
 #include "../../src/data/adapter.h"
 #include "../../src/data/simple_dmatrix.h"
+#include "../../src/data/iterative_device_dmatrix.h"
 #include "../../src/gbm/gbtree_model.h"
 #include "xgboost/predictor.h"
 
@@ -45,12 +47,25 @@ void CreateSimpleTestData(const std::string& filename) {
   CreateBigTestData(filename, 6);
 }
 
-void CreateBigTestData(const std::string& filename, size_t n_entries) {
+void CreateBigTestData(const std::string& filename, size_t n_entries, bool zero_based) {
   std::ofstream fo(filename.c_str());
   const size_t entries_per_row = 3;
+  std::string odd_row;
+  if (zero_based) {
+    odd_row = " 0:0 3:30 4:40\n";
+  } else {
+    odd_row = " 1:0 4:30 5:40\n";
+  }
+  std::string even_row;
+  if (zero_based) {
+    even_row = " 0:0 1:10 2:20\n";
+  } else {
+    even_row = " 1:0 2:10 3:20\n";
+  }
+
   size_t n_rows = (n_entries + entries_per_row - 1) / entries_per_row;
   for (size_t i = 0; i < n_rows; ++i) {
-    const char* row = i % 2 == 0 ? " 0:0 1:10 2:20\n" : " 0:0 3:30 4:40\n";
+    auto row = i % 2 == 0 ? even_row : odd_row;
     fo << i << row;
   }
 }
@@ -339,6 +354,16 @@ RandomDataGenerator::GenerateDMatrix(bool with_label, bool float_label,
     }
   }
   return out;
+}
+
+std::shared_ptr<DMatrix> RandomDataGenerator::GenerateDeviceDMatrix(bool with_label,
+                                                                    bool float_label,
+                                                                    size_t classes) {
+  CudaArrayIterForTest iter{this->sparsity_, this->rows_, this->cols_, 1};
+  auto m = std::make_shared<data::IterativeDeviceDMatrix>(
+      &iter, iter.Proxy(), Reset, Next, std::numeric_limits<float>::quiet_NaN(),
+      0, bins_);
+  return m;
 }
 
 std::shared_ptr<DMatrix>

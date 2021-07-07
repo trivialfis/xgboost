@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "../helpers.h"
+#include "../data_iterator_for_test.h"
 #include "../../../src/data/iterative_device_dmatrix.h"
 #include "../../../src/data/ellpack_page.cuh"
 #include "../../../src/data/device_adapter.cuh"
