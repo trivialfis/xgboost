@@ -6,6 +6,15 @@
 namespace xgboost {
 namespace data {
 class GHistIndexSource : public PageSourceIncMixIn<GHistIndexMatrix> {
+  BatchParam param_;
+
+  void Fetch() final {
+    if (!this->ReadCache()) {
+      auto const &csr = source_->Page();
+      this->page_.reset(new GHistIndexMatrix{*csr});
+      this->WriteCache();
+    }
+  }
 
  public:
   GHistIndexSource(float missing, int nthreads, bst_feature_t n_features,
