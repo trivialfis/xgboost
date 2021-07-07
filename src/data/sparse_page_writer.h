@@ -98,7 +98,11 @@ struct SparsePageFormatReg
 
 #define EllpackPageFmt SparsePageFormat<EllpackPage>
 #define XGBOOST_REGISTER_ELLPACK_PAGE_FORMAT(Name)                       \
-  DMLC_REGISTRY_REGISTER(SparsePageFormatReg<EllpackPage>, EllpackPageFm, Name)
+  DMLC_REGISTRY_REGISTER(SparsePageFormatReg<EllpackPage>, EllpackPageFmt, Name)
+
+#define GHistIndexPageFmt SparsePageFormat<GHistIndexPageFormat>
+#define XGBOOST_REGISTER_GHIST_INDEX_PAGE_FORMAT(Name)  \
+  DMLC_REGISTRY_REGISTER(SparsePageFormatReg<GHistIndexMatrix>, GHistIndexPageFmt, Name)
 
 }  // namespace data
 }  // namespace xgboost

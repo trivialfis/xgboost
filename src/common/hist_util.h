@@ -200,11 +200,21 @@ struct Index {
     p_ = nDisps;
   }
   std::vector<uint8_t>::const_iterator begin() const {  // NOLINT
-    return data_.begin();
+    return data_.cbegin();
   }
   std::vector<uint8_t>::const_iterator end() const {  // NOLINT
+    return data_.cend();
+  }
+  std::vector<uint8_t>::iterator begin() {  // NOLINT
+    return data_.begin();
+  }
+  std::vector<uint8_t>::iterator end() {  // NOLINT
     return data_.end();
   }
+
+  std::vector<uint8_t> const& RawData() const { return data_; }
+  std::vector<uint32_t> const& RawOffset() const { return offset_; }
+  BinTypeSize TypeSize() const { return binTypeSize_; }
 
  private:
   static uint32_t GetValueFromUint8(void *t, size_t i) {
