@@ -104,7 +104,7 @@ def run_data_iterator(
 
 
 @given(
-    strategies.integers(0, 1024), strategies.integers(1, 7), strategies.integers(1, 13)
+    strategies.integers(0, 1024), strategies.integers(1, 7), strategies.integers(0, 13)
 )
 @settings(deadline=None)
 def test_data_iterator(
