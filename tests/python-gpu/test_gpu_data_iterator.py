@@ -18,7 +18,7 @@ def test_gpu_single_batch() -> None:
 @given(
     strategies.integers(0, 1024), strategies.integers(1, 7), strategies.integers(0, 13)
 )
-@settings(deadline=False)
+@settings(deadline=None)
 def test_data_iterator(
     n_samples_per_batch: int, n_features: int, n_batches: int
 ) -> None:
