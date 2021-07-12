@@ -40,14 +40,27 @@ class SingleBatch(xgb.core.DataIter):
 def test_single_batch(tree_method: str = "approx") -> None:
     from sklearn.datasets import load_breast_cancer
 
+    n_rounds = 10
     X, y = load_breast_cancer(return_X_y=True)
+    X = X.astype(np.float32)
+    y = y.astype(np.float32)
 
     Xy = xgb.DMatrix(SingleBatch(data=X, label=y))
-    from_it = xgb.train({"tree_method": tree_method}, Xy)
+    from_it = xgb.train({"tree_method": tree_method}, Xy, num_boost_round=n_rounds)
 
     Xy = xgb.DMatrix(X, y)
-    from_dmat = xgb.train({"tree_method": tree_method}, Xy)
+    from_dmat = xgb.train({"tree_method": tree_method}, Xy, num_boost_round=n_rounds)
     assert from_it.get_dump() == from_dmat.get_dump()
+
+    X, y = load_breast_cancer(return_X_y=True, as_frame=True)
+    X = X.astype(np.float32)
+    Xy = xgb.DMatrix(SingleBatch(data=X, label=y))
+    from_pd = xgb.train({"tree_method": tree_method}, Xy, num_boost_round=n_rounds)
+    # remove feature info to generate exact same text representation.
+    from_pd.feature_names = None
+    from_pd.feature_types = None
+
+    assert from_pd.get_dump() == from_it.get_dump()
 
 
 def run_data_iterator(

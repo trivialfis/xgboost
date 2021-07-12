@@ -324,6 +324,9 @@ class DataIter:
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
+        # Stage transformed data in Python until iterator goes out of scope to avoid being
+        # free.
+        self._temporary_data = None
 
     def _get_callbacks(self, allow_host: bool, enable_categorical: bool):
         self._reset_callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(
@@ -344,7 +347,12 @@ class DataIter:
 
     def _reset_wrapper(self, this):  # pylint: disable=unused-argument
         '''A wrapper for user defined `reset` function.'''
+        if self._temporary_data is not None:
+            self._temporary_data = None
         self.reset()
+
+    def __del__(self):
+        assert self._temporary_data is None, self._temporary_data
 
     def _next_wrapper(self, this):  # pylint: disable=unused-argument
         '''A wrapper for user defined `next` function.
@@ -365,10 +373,14 @@ class DataIter:
         ):
             from .data import dispatch_proxy_set_data
             from .data import _proxy_transform
-            data, feature_names, feature_types = _proxy_transform(
+            transformed, feature_names, feature_types = _proxy_transform(
                 data, feature_names, feature_types, self.enable_categorical,
             )
-            dispatch_proxy_set_data(self.proxy, data, self._allow_host)
+            if transformed is not data:
+                # We should not transforme numpy array since the transform is a no-op.
+                assert not isinstance(data, np.ndarray)
+                self._temporary_data = transformed
+            dispatch_proxy_set_data(self.proxy, transformed, self._allow_host)
             self.proxy.set_info(
                 feature_names=feature_names,
                 feature_types=feature_types,
