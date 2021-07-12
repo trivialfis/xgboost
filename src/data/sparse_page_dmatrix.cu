@@ -21,11 +21,15 @@ BatchSet<EllpackPage> SparsePageDMatrix::GetEllpackBatches(const BatchParam& par
     std::unique_ptr<common::HistogramCuts> cuts;
     cuts.reset(new common::HistogramCuts{
         common::DeviceSketch(param.gpu_id, this, param.max_bin, 0)});
+    this->InitializeSparsePage();  // reset after use.
+
     row_stride = GetRowStride(this);
+    this->InitializeSparsePage();  // reset after use.
+    CHECK_NE(row_stride, 0);
     batch_param_ = param;
 
     auto ft = this->info_.feature_types.ConstDeviceSpan();
-    this->InitializeSparsePage();
+    ellpack_page_source_.reset();  // release resources.
     ellpack_page_source_.reset(new EllpackPageSource(
         this->missing_, this->nthreads_, this->Info().num_col_,
         this->n_batches_, cache_info_.at(id), param, std::move(cuts),

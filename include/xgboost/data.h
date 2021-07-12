@@ -169,6 +169,12 @@ class MetaInfo {
    * \brief Extend with other MetaInfo.
    *
    * \param that The other MetaInfo object.
+   *
+   * \param accumulate_rows Whether rows need to be accumulated in this function.  If
+   *                        client code knows number of rows in advance, set this
+   *                        parameter to false.
+   * \param check_column Whether the extend method should check the consistency of
+   *                     columns.
    */
   void Extend(MetaInfo const& that, bool accumulate_rows, bool check_column);
 
@@ -385,11 +391,12 @@ class GHistIndexMatrix;
 template<typename T>
 class BatchIteratorImpl {
  public:
+  using iterator_category = std::forward_iterator_tag;  // NOLINT
   virtual ~BatchIteratorImpl() = default;
-  virtual T& operator*() = 0;
   virtual const T& operator*() const = 0;
-  virtual void operator++() = 0;
+  virtual BatchIteratorImpl& operator++() = 0;
   virtual bool AtEnd() const = 0;
+  virtual std::shared_ptr<T const> Page() const = 0;
 };
 
 template<typename T>
@@ -399,14 +406,10 @@ class BatchIterator {
   explicit BatchIterator(BatchIteratorImpl<T>* impl) { impl_.reset(impl); }
   explicit BatchIterator(std::shared_ptr<BatchIteratorImpl<T>> impl) { impl_ = impl; }
 
-  void operator++() {
+  BatchIterator &operator++() {
     CHECK(impl_ != nullptr);
     ++(*impl_);
-  }
-
-  T& operator*() {
-    CHECK(impl_ != nullptr);
-    return *(*impl_);
+    return *this;
   }
 
   const T& operator*() const {
@@ -422,6 +425,10 @@ class BatchIterator {
   bool AtEnd() const {
     CHECK(impl_ != nullptr);
     return impl_->AtEnd();
+  }
+
+  std::shared_ptr<T const> Page() const {
+    return impl_->Page();
   }
 
  private:
@@ -495,8 +502,7 @@ class DMatrix {
   static DMatrix* Load(const std::string& uri,
                        bool silent,
                        bool load_row_split,
-                       const std::string& file_format = "auto",
-                       size_t page_size = kPageSize);
+                       const std::string& file_format = "auto");
 
   /**
    * \brief Creates a new DMatrix from an external data adapter.
@@ -512,8 +518,7 @@ class DMatrix {
    */
   template <typename AdapterT>
   static DMatrix* Create(AdapterT* adapter, float missing, int nthread,
-                         const std::string& cache_prefix = "",
-                         size_t page_size = kPageSize);
+                         const std::string& cache_prefix = "");
 
   /**
    * \brief Create a new Quantile based DMatrix used for histogram based algorithm.

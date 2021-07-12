@@ -6,13 +6,15 @@
 #include <future>
 #include "../../../src/common/io.h"
 #include "../../../src/data/adapter.h"
+#include "../../../src/data/simple_dmatrix.h"
 #include "../../../src/data/sparse_page_dmatrix.h"
 #include "../../../src/data/file_iterator.h"
 #include "../helpers.h"
 
 using namespace xgboost;  // NOLINT
 
-TEST(SparsePageDMatrix, LoadFile) {
+template <typename Page>
+void TestSparseDMatrixLoadFile() {
   dmlc::TemporaryDirectory tmpdir;
   auto opath = tmpdir.path + "/1-based.svm";
   CreateBigTestData(opath, 3 * 64, false);
@@ -27,6 +29,75 @@ TEST(SparsePageDMatrix, LoadFile) {
                             "cache"};
   ASSERT_EQ(m.Info().num_col_, 5);
   ASSERT_EQ(m.Info().num_row_, 64);
+
+  std::unique_ptr<dmlc::Parser<uint32_t>> parser(
+      dmlc::Parser<uint32_t>::Create(opath.c_str(), 0, 1, "auto"));
+  auto adapter = data::FileAdapter{parser.get()};
+
+  data::SimpleDMatrix simple{&adapter, std::numeric_limits<float>::quiet_NaN(),
+                             1};
+  Page out;
+  for (auto const& page : m.GetBatches<Page>()) {
+    if (std::is_same<Page, SparsePage>::value) {
+      out.Push(page);
+    } else {
+      out.PushCSC(page);
+    }
+  }
+  ASSERT_EQ(m.Info().num_col_, simple.Info().num_col_);
+  ASSERT_EQ(m.Info().num_row_, simple.Info().num_row_);
+
+  for (auto const& page : simple.GetBatches<Page>()) {
+    ASSERT_EQ(page.offset.HostVector(), out.offset.HostVector());
+    for (size_t i = 0; i < page.data.Size(); ++i) {
+      ASSERT_EQ(page.data.HostVector()[i].fvalue, out.data.HostVector()[i].fvalue);
+    }
+  }
+}
+
+TEST(SparsePageDMatrix, LoadFile) {
+  TestSparseDMatrixLoadFile<SparsePage>();
+  TestSparseDMatrixLoadFile<CSCPage>();
+  TestSparseDMatrixLoadFile<SortedCSCPage>();
+}
+
+// allow caller to retain pages so they can process multiple pages at the same time.
+template <typename Page>
+void TestRetainPage() {
+  auto m = CreateSparsePageDMatrix(10000);
+  auto batches = m->GetBatches<Page>();
+  auto begin = batches.begin();
+  auto end = batches.end();
+
+  std::vector<Page> pages;
+  std::vector<std::shared_ptr<Page const>> iterators;
+  for (auto it = begin; it != end; ++it) {
+    iterators.push_back(it.Page());
+    pages.emplace_back(Page{});
+    if (std::is_same<Page, SparsePage>::value) {
+      pages.back().Push(*it);
+    } else {
+      pages.back().PushCSC(*it);
+    }
+    ASSERT_EQ(pages.back().Size(), (*it).Size());
+  }
+  ASSERT_GE(iterators.size(), 2);
+
+  for (size_t i = 0; i < iterators.size(); ++i) {
+    ASSERT_EQ((*iterators[i]).Size(), pages.at(i).Size());
+    ASSERT_EQ((*iterators[i]).data.HostVector(), pages.at(i).data.HostVector());
+  }
+
+  // make sure it's const and the caller can not modify the content of page.
+  for (auto& page : m->GetBatches<Page>()) {
+    static_assert(std::is_const<std::remove_reference_t<decltype(page)>>::value, "");
+  }
+}
+
+TEST(SparsePageDMatrix, RetainSparsePage) {
+  TestRetainPage<SparsePage>();
+  TestRetainPage<CSCPage>();
+  TestRetainPage<SortedCSCPage>();
 }
 
 TEST(SparsePageDMatrix, MetaInfo) {
@@ -48,10 +119,7 @@ TEST(SparsePageDMatrix, MetaInfo) {
 }
 
 TEST(SparsePageDMatrix, RowAccess) {
-  dmlc::TemporaryDirectory tmpdir;
-  std::string filename = tmpdir.path + "/big.libsvm";
-  std::unique_ptr<xgboost::DMatrix> dmat =
-      xgboost::CreateSparsePageDMatrix(24, 4, filename);
+  std::unique_ptr<xgboost::DMatrix> dmat = xgboost::CreateSparsePageDMatrix(24);
 
   // Test the data read into the first row
   auto &batch = *dmat->GetBatches<xgboost::SparsePage>().begin();
@@ -105,13 +173,11 @@ TEST(SparsePageDMatrix, ColAccess) {
 }
 
 TEST(SparsePageDMatrix, ThreadSafetyException) {
-  dmlc::TemporaryDirectory tmpdir;
-  std::string filename = tmpdir.path + "/test";
-  size_t constexpr kPageSize = 64, kEntriesPerCol = 3;
-  size_t constexpr kEntries = kPageSize * kEntriesPerCol * 2;
+  size_t constexpr kEntriesPerCol = 3;
+  size_t constexpr kEntries = 64 * kEntriesPerCol * 2;
 
   std::unique_ptr<xgboost::DMatrix> dmat =
-      xgboost::CreateSparsePageDMatrix(kEntries, kPageSize, filename);
+      xgboost::CreateSparsePageDMatrix(kEntries);
 
   int threads = 1000;
 
@@ -143,13 +209,10 @@ TEST(SparsePageDMatrix, ThreadSafetyException) {
 
 // Multi-batches access
 TEST(SparsePageDMatrix, ColAccessBatches) {
-  dmlc::TemporaryDirectory tmpdir;
-  std::string filename = tmpdir.path + "/big.libsvm";
   size_t constexpr kPageSize = 1024, kEntriesPerCol = 3;
   size_t constexpr kEntries = kPageSize * kEntriesPerCol * 2;
   // Create multiple sparse pages
-  std::unique_ptr<xgboost::DMatrix> dmat{
-      xgboost::CreateSparsePageDMatrix(kEntries, kPageSize, filename)};
+  std::unique_ptr<xgboost::DMatrix> dmat{xgboost::CreateSparsePageDMatrix(kEntries)};
   auto n_threads = omp_get_max_threads();
   omp_set_num_threads(16);
   for (auto const &page : dmat->GetBatches<xgboost::CSCPage>()) {

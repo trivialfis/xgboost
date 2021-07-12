@@ -14,11 +14,6 @@
 #include <map>
 #include <memory>
 
-#if (defined _WIN32) || (defined __CYGWIN__)
-#include <locale>  // std::local
-#include <cctype>  // std::isalpha
-#endif  // (defined _WIN32) || (defined __CYGWIN__)
-
 #include "rabit/rabit.h"
 #include "xgboost/base.h"
 #include "xgboost/data.h"
@@ -29,51 +24,8 @@
 
 #include "../common/common.h"
 
-
-namespace detail {
-
-// Split a cache info string with delimiter ':'
-// If cache info string contains drive letter (e.g. C:), exclude it before splitting
-inline std::vector<std::string>
-GetCacheShards(const std::string& cache_info) {
-#if (defined _WIN32) || (defined __CYGWIN__)
-  if (cache_info.length() >= 2
-      && std::isalpha(cache_info[0], std::locale::classic())
-      && cache_info[1] == ':') {
-    std::vector<std::string> cache_shards
-      = xgboost::common::Split(cache_info.substr(2), ':');
-    cache_shards[0] = cache_info.substr(0, 2) + cache_shards[0];
-    return cache_shards;
-  }
-#endif  // (defined _WIN32) || (defined __CYGWIN__)
-  return xgboost::common::Split(cache_info, ':');
-}
-
-}  // namespace detail
-
 namespace xgboost {
 namespace data {
-/*!
- * \brief decide the format from cache prefix.
- * \return pair of row format, column format type of the cache prefix.
- */
-inline std::pair<std::string, std::string> DecideFormat(const std::string& cache_prefix) {
-  size_t pos = cache_prefix.rfind(".fmt-");
-
-  if (pos != std::string::npos) {
-    std::string fmt = cache_prefix.substr(pos + 5, cache_prefix.length());
-    size_t cpos = fmt.rfind('-');
-    if (cpos != std::string::npos) {
-      return std::make_pair(fmt.substr(0, cpos), fmt.substr(cpos + 1, fmt.length()));
-    } else {
-      return std::make_pair(fmt, fmt);
-    }
-  } else {
-    std::string raw = "raw";
-    return std::make_pair(raw, raw);
-  }
-}
-
 inline void TryDeleteCacheFile(const std::string& file) {
   if (std::remove(file.c_str()) != 0) {
     LOG(WARNING) << "Couldn't remove external memory cache file " << file
@@ -156,7 +108,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
       return false;
     }
     if (fo_) {
-      fo_.reset();
+      fo_.reset();  // flush the data to disk.
       ring_->resize(n_batches_);
     }
     // An heuristic for number of pre-fetched batches.  We can make it part of BatchParam
@@ -164,7 +116,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
     size_t constexpr kPreFetch = 4;
 
     size_t n_prefetch_batches = std::min(kPreFetch, n_batches_);
-    CHECK_GT(n_prefetch_batches, 0) << n_batches_;
+    CHECK_GT(n_prefetch_batches, 0) << "total batches:" << n_batches_;
     size_t fetch_it = count_;
     for (size_t i = 0; i < n_prefetch_batches; ++i, ++fetch_it) {
       fetch_it %= n_batches_;  // ring
@@ -184,20 +136,23 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
         return page;
       });
     }
+    CHECK_EQ(std::count_if(ring_->cbegin(), ring_->cend(),
+                           [](auto const &f) { return f.valid(); }),
+             n_prefetch_batches)
+        << "Sparse DMatrix assumes forward iteration.";
     page_ = (*ring_)[count_].get();
     return true;
   }
 
   void WriteCache() {
-    if (!cache_info_->written) {
-      std::unique_ptr<SparsePageFormat<S>> fmt{CreatePageFormat<S>("raw")};
-      if (!fo_) {
-        auto n = cache_info_->ShardName();
-        fo_.reset(dmlc::Stream::Create(n.c_str(), "w"));
-      }
-      auto bytes = fmt->Write(*page_, fo_.get());
-      cache_info_->offset.push_back(bytes);
+    CHECK(!cache_info_->written);
+    std::unique_ptr<SparsePageFormat<S>> fmt{CreatePageFormat<S>("raw")};
+    if (!fo_) {
+      auto n = cache_info_->ShardName();
+      fo_.reset(dmlc::Stream::Create(n.c_str(), "w"));
     }
+    auto bytes = fmt->Write(*page_, fo_.get());
+    cache_info_->offset.push_back(bytes);
   }
 
   virtual void Fetch() = 0;
@@ -220,15 +175,12 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S> {
 
   uint32_t Iter() const { return count_; }
 
-  S &operator*() override {
-    CHECK(page_);
-    return *page_;
-  }
   const S &operator*() const override {
     CHECK(page_);
     return *page_;
   }
-  std::shared_ptr<S> Page() const {
+
+  std::shared_ptr<S const> Page() const override {
     return page_;
   }
 
@@ -258,7 +210,7 @@ class SparsePageSource : public SparsePageSourceImpl<SparsePage> {
   size_t base_row_id_ {0};
 
   void Fetch() final {
-    page_.reset(new SparsePage{});
+    page_ = std::make_shared<SparsePage>();
     if (!this->ReadCache()) {
       bool type_error { false };
       CHECK(proxy_);
@@ -289,7 +241,7 @@ class SparsePageSource : public SparsePageSourceImpl<SparsePage> {
     this->Fetch();
   }
 
-  void operator++() final {
+  SparsePageSource& operator++() final {
     TryLockGuard guard{single_threaded_};
     count_++;
     if (cache_info_->written) {
@@ -308,6 +260,7 @@ class SparsePageSource : public SparsePageSourceImpl<SparsePage> {
     } else {
       this->Fetch();
     }
+    return *this;
   }
 
   void Reset() override {
@@ -330,7 +283,7 @@ class PageSourceIncMixIn : public SparsePageSourceImpl<S> {
 
  public:
   using SparsePageSourceImpl<S>::SparsePageSourceImpl;
-  void operator++() final {
+  PageSourceIncMixIn& operator++() final {
     TryLockGuard guard{this->single_threaded_};
     ++(*source_);
 
@@ -347,6 +300,7 @@ class PageSourceIncMixIn : public SparsePageSourceImpl<S> {
       this->Fetch();
     }
     CHECK_EQ(source_->Iter(), this->count_);
+    return *this;
   }
 };
 
@@ -356,6 +310,7 @@ class CSCPageSource : public PageSourceIncMixIn<CSCPage> {
     if (!this->ReadCache()) {
       auto const &csr = source_->Page();
       this->page_.reset(new CSCPage{});
+      // we might be able to optimize this by merging transpose and pushcsc
       this->page_->PushCSC(csr->GetTranspose(n_features_));
       page_->SetBaseRowId(csr->base_rowid);
       this->WriteCache();
@@ -380,6 +335,7 @@ class SortedCSCPageSource : public PageSourceIncMixIn<SortedCSCPage> {
     if (!this->ReadCache()) {
       auto const &csr = this->source_->Page();
       this->page_.reset(new SortedCSCPage{});
+      // we might be able to optimize this by merging transpose and pushcsc
       this->page_->PushCSC(csr->GetTranspose(n_features_));
       CHECK_EQ(this->page_->Size(), n_features_);
       CHECK_EQ(this->page_->data.Size(), csr->data.Size());

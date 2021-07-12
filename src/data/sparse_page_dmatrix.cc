@@ -21,6 +21,10 @@ SparsePageDMatrix::SparsePageDMatrix(DataIterHandle iter_handle, DMatrixHandle p
                                      int32_t nthreads, std::string cache_prefix)
     : proxy_{proxy_handle}, iter_{iter_handle}, reset_{reset}, next_{next}, missing_{missing},
       nthreads_{nthreads}, cache_prefix_{std::move(cache_prefix)} {
+  cache_prefix_ = cache_prefix_.empty() ? "DMatrix" : cache_prefix_;
+  if (rabit::IsDistributed()) {
+    cache_prefix_ += ("-r" + std::to_string(rabit::GetRank()));
+  }
   DMatrixProxy *proxy = MakeProxy(proxy_);
   auto iter = DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>{
       iter_, reset_, next_};
@@ -120,14 +124,15 @@ BatchSet<SortedCSCPage> SparsePageDMatrix::GetSortedColumnBatches() {
 
 BatchSet<GHistIndexMatrix> SparsePageDMatrix::GetGradientIndex(const BatchParam& param) {
   CHECK_GE(param.max_bin, 2);
-  LOG(WARNING) << "External memory support for hist is working in progress.";
   // External memory is not support
   if (!ghist_index_source_ || (param != batch_param_ && param != BatchParam{})) {
+    this->InitializeSparsePage();
     ghist_index_source_.reset(new GHistIndexMatrix{this, param.max_bin});
     batch_param_ = param;
   }
+  this->InitializeSparsePage();
   auto begin_iter = BatchIterator<GHistIndexMatrix>(
-      new SimpleBatchIteratorImpl<GHistIndexMatrix>(ghist_index_source_.get()));
+      new SimpleBatchIteratorImpl<GHistIndexMatrix>(ghist_index_source_));
   return BatchSet<GHistIndexMatrix>(begin_iter);
 }
 
