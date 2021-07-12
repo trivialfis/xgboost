@@ -313,7 +313,7 @@ def _prediction_output(shape, dims, predts, is_cuda):
     return arr_predict
 
 
-class DataIter:
+class DataIter:                 # pylint: disable=too-many-instance-attributes
     '''The interface for user defined data iterator. Currently is only supported by Device
     DMatrix.
 
@@ -324,8 +324,7 @@ class DataIter:
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
-        # Stage transformed data in Python until iterator goes out of scope to avoid being
-        # free.
+        # Stage transformed data in Python until reset to avoid data being free.
         self._temporary_data = None
 
     def _get_callbacks(self, allow_host: bool, enable_categorical: bool):
