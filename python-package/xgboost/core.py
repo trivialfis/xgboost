@@ -669,7 +669,6 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
         if label_upper_bound is not None:
             self.set_float_info('label_upper_bound', label_upper_bound)
         if feature_names is not None:
-            print("self", self.feature_names, len(feature_names))
             self.feature_names = feature_names
         if feature_types is not None:
             self.feature_types = feature_types
