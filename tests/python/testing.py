@@ -145,9 +145,9 @@ def skip_s390x():
 
 class IteratorForTest(xgb.core.DataIter):
     def __init__(self, X, y):
+        assert len(X) == len(y)
         self.X = X
         self.y = y
-        assert len(X) == len(y)
         self.it = 0
         super().__init__("./")
 
