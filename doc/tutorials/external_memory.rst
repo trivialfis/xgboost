@@ -4,48 +4,9 @@ Using XGBoost External Memory Version
 
 XGBoost supports loading data from external memory using builtin data parser.  And
 starting from version 1.5, users can also define a custom iterator to load data in chunks.
-In this tutorial we will introduce both methods.  Please note that training on data from
-external memory is not supported by ``exact`` tree method.
-
-****************
-Text File Inputs
-****************
-
-There is no big difference between using external memory version and in-memory version.
-The only difference is the filename format.
-
-The external memory version takes in the following `URI <https://en.wikipedia.org/wiki/Uniform_Resource_Identifier>`_ format:
-
-.. code-block:: none
-
-  filename#cacheprefix
-
-The ``filename`` is the normal path to LIBSVM format file you want to load in, and
-``cacheprefix`` is a path to a cache file that XGBoost will use for caching preprocessed
-data in binary form.
-
-To load from csv files, use the following syntax:
-
-.. code-block:: none
-
-  filename.csv?format=csv&label_column=0#cacheprefix
-
-where ``label_column`` should point to the csv column acting as the label.
-
-To provide a simple example for illustration, extracting the code from
-`demo/guide-python/external_memory.py <https://github.com/dmlc/xgboost/blob/master/demo/guide-python/external_memory.py>`_. If
-you have a dataset stored in a file similar to ``agaricus.txt.train`` with LIBSVM format, the external memory support can be enabled by:
-
-.. code-block:: python
-
-  dtrain = DMatrix('../data/agaricus.txt.train#dtrain.cache')
-
-XGBoost will first load ``agaricus.txt.train`` in, preprocess it, then write to a new file named
-``dtrain.cache`` as an on disk cache for storing preprocessed data in an internal binary format.  For
-more notes about text input formats, see :doc:`/tutorials/input_format`.
-
-For CLI version, simply add the cache suffix, e.g. ``"../data/agaricus.txt.train#dtrain.cache"``.
-
+The feature is still experimental.  In this tutorial we will introduce both methods.
+Please note that training on data from external memory is not supported by ``exact`` tree
+method.
 
 *************
 Data Iterator
@@ -102,7 +63,48 @@ constructor.
   booster = xgboost.train({"tree_method": "approx"}, Xy)
 
 
-For an example in C, please see ``demo/c-api/external-memory/``.
+The above snippet is a simplifed version of ``demo/guide-python/external_memory.py``.  For
+an example in C, please see ``demo/c-api/external-memory/``.
+
+****************
+Text File Inputs
+****************
+
+There is no big difference between using external memory version and in-memory version.
+The only difference is the filename format.
+
+The external memory version takes in the following `URI <https://en.wikipedia.org/wiki/Uniform_Resource_Identifier>`_ format:
+
+.. code-block:: none
+
+  filename#cacheprefix
+
+The ``filename`` is the normal path to LIBSVM format file you want to load in, and
+``cacheprefix`` is a path to a cache file that XGBoost will use for caching preprocessed
+data in binary form.
+
+To load from csv files, use the following syntax:
+
+.. code-block:: none
+
+  filename.csv?format=csv&label_column=0#cacheprefix
+
+where ``label_column`` should point to the csv column acting as the label.
+
+To provide a simple example for illustration, extracting the code from
+`demo/guide-python/external_memory.py <https://github.com/dmlc/xgboost/blob/master/demo/guide-python/external_memory.py>`_. If
+you have a dataset stored in a file similar to ``agaricus.txt.train`` with LIBSVM format, the external memory support can be enabled by:
+
+.. code-block:: python
+
+  dtrain = DMatrix('../data/agaricus.txt.train#dtrain.cache')
+
+XGBoost will first load ``agaricus.txt.train`` in, preprocess it, then write to a new file named
+``dtrain.cache`` as an on disk cache for storing preprocessed data in an internal binary format.  For
+more notes about text input formats, see :doc:`/tutorials/input_format`.
+
+For CLI version, simply add the cache suffix, e.g. ``"../data/agaricus.txt.train#dtrain.cache"``.
+
 
 **********************************
 GPU Version (GPU Hist tree method)
