@@ -326,7 +326,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
 
     def __init__(self, cache_prefix: Optional[str] = None) -> None:
         self._handle = _ProxyDMatrix()
-        self.exception = Optional[Exception]
+        self._exception: Optional[Exception] = None
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
@@ -350,15 +350,21 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
         """Handle of DMatrix proxy."""
         return self._handle
 
+    def _rethrow(self) -> None:
+        if self._exception is not None:
+            #  pylint 2.7.0 believes `self._exception` can be None even with `assert
+            #  isinstace`
+            raise self._exception  # pylint: disable=raising-bad-type
+
+    def __del__(self) -> None:
+        assert self._temporary_data is None, self._temporary_data
+
     def _reset_wrapper(self, this):  # pylint: disable=unused-argument
         """A wrapper for user defined `reset` function."""
         if self._temporary_data is not None:
             # free the data
             self._temporary_data = None
         self.reset()
-
-    def __del__(self) -> None:
-        assert self._temporary_data is None, self._temporary_data
 
     def _next_wrapper(self, this):  # pylint: disable=unused-argument
         """A wrapper for user defined `next` function.
@@ -368,7 +374,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
         pointer.
 
         """
-        if self.exception is not None:
+        if self._exception is not None:
             return 0
 
         @_deprecate_positional_args
@@ -400,7 +406,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
             tb = sys.exc_info()[2]
             # On dask, the worker is restarted and somehow the information is
             # lost.
-            self.exception = e.with_traceback(tb)
+            self._exception = e.with_traceback(tb)
             return 0
         return ret
 
@@ -610,30 +616,28 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
             self.feature_types = feature_types
 
     def _init_from_iter(self, iterator: DataIter, enable_categorical: bool):
-        self._it = iterator
+        it = iterator
         args = {
             "missing": self.missing,
             "nthread": self.nthread,
-            "cache_prefix": self._it.cache_prefix,
+            "cache_prefix": it.cache_prefix,
         }
         args = from_pystr_to_cstr(json.dumps(args))
         handle = ctypes.c_void_p()
         # pylint: disable=protected-access
-        reset_callback, next_callback = self._it._get_callbacks(
+        reset_callback, next_callback = it._get_callbacks(
             True, enable_categorical
         )
         ret = _LIB.XGDMatrixCreateFromCallback(
             None,
-            self._it.proxy.handle,
+            it.proxy.handle,
             reset_callback,
             next_callback,
             args,
             ctypes.byref(handle),
         )
-        if self._it.exception:
-            #  pylint 2.7.0 believes `it.exception` can be None even with `assert
-            #  isinstace`
-            raise self._it.exception  # pylint: disable=raising-bad-type
+        # pylint: disable=protected-access
+        it._rethrow()
         # delay check_call to throw intermediate exception first
         _check_call(ret)
         self.handle = handle
@@ -1206,10 +1210,8 @@ class DeviceQuantileDMatrix(DMatrix):
             ctypes.c_int(self.max_bin),
             ctypes.byref(handle),
         )
-        if it.exception is not None:
-            #  pylint 2.7.0 believes `it.exception` can be None even with `assert
-            #  isinstace`
-            raise it.exception  # pylint: disable=raising-bad-type
+        # pylint: disable=protected-access
+        it._rethrow()
         # delay check_call to throw intermediate exception first
         _check_call(ret)
         self.handle = handle
@@ -2320,8 +2322,8 @@ class Booster(object):
         # pylint: disable=too-many-locals
         fmap = os.fspath(os.path.expanduser(fmap))
         if not PANDAS_INSTALLED:
-            raise Exception(('pandas must be available to use this method.'
-                             'Install pandas before calling again.'))
+            raise ImportError(('pandas must be available to use this method.'
+                               'Install pandas before calling again.'))
 
         if getattr(self, 'booster', None) is not None and self.booster not in {'gbtree', 'dart'}:
             raise ValueError('This method is not defined for Booster type {}'
