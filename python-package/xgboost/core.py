@@ -324,7 +324,7 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
-        # Stage transformed data in Python until reset to avoid data being free.
+        # Stage data in Python until reset or next batch to avoid data being free.
         self._temporary_data = None
 
     def _get_callbacks(self, allow_host: bool, enable_categorical: bool):
@@ -347,6 +347,7 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
     def _reset_wrapper(self, this):  # pylint: disable=unused-argument
         '''A wrapper for user defined `reset` function.'''
         if self._temporary_data is not None:
+            # free the data
             self._temporary_data = None
         self.reset()
 
@@ -375,10 +376,7 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
             transformed, feature_names, feature_types = _proxy_transform(
                 data, feature_names, feature_types, self.enable_categorical,
             )
-            if transformed is not data:
-                # We should not transforme numpy array since the transform is a no-op.
-                assert not isinstance(data, np.ndarray)
-                self._temporary_data = transformed
+            self._temporary_data = transformed
             dispatch_proxy_set_data(self.proxy, transformed, self._allow_host)
             self.proxy.set_info(
                 feature_names=feature_names,

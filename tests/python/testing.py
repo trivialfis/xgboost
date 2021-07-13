@@ -8,7 +8,7 @@ from io import StringIO
 from xgboost.compat import SKLEARN_INSTALLED, PANDAS_INSTALLED
 from xgboost.compat import DASK_INSTALLED
 import pytest
-import tempfile
+import gc
 import xgboost as xgb
 import numpy as np
 import platform
@@ -154,8 +154,9 @@ class IteratorForTest(xgb.core.DataIter):
     def next(self, input_data):
         if self.it == len(self.X):
             return 0
-
-        input_data(data=self.X[self.it], label=self.y[self.it])
+        # Use copy to make sure the iterator doesn't hold a reference to the data.
+        input_data(data=self.X[self.it].copy(), label=self.y[self.it].copy())
+        gc.collect()            # clear up the copy, see if XGBoost access freed memory.
         self.it += 1
         return 1
 

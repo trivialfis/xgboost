@@ -116,6 +116,8 @@ int DataIterator_Next(DataIterHandle handle) {
           self->lengths[self->cur_it]);
 
   safe_xgboost(XGProxyDMatrixSetDataDense(self->_proxy, self->_array));
+  /* The data passed in the iterator must remain valid (not being freed until the next
+   * iteration or reset) */
   safe_xgboost(XGDMatrixSetDenseInfo(self->_proxy, "label",
                                      self->labels[self->cur_it],
                                      self->lengths[self->cur_it], 1));
