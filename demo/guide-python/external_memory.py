@@ -1,5 +1,5 @@
 """Experimental support for external memory.  This is similar to the one in
-`device_data_iterator.py`, but for external memory instead of Quantile DMatrix.
+`quantile_data_iterator.py`, but for external memory instead of Quantile DMatrix.
 
     .. versionadded:: 1.5.0
 
