@@ -70,7 +70,7 @@ def run_data_iterator(
 
     it = IteratorForTest(*make_batches(n_samples_per_batch, n_features, n_batches))
     if n_batches == 0:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="1 batch"):
             Xy = xgb.DMatrix(it)
         return
 
@@ -106,13 +106,15 @@ def run_data_iterator(
     arr_predt = from_arrays.predict(Xy)
 
     if tree_method != "gpu_hist":
-        rtol = 1e-1             # flaky
+        rtol = 1e-1  # flaky
     else:
         rtol = 1e-6
         np.testing.assert_allclose(it_predt, arr_predt)
 
     np.testing.assert_allclose(
-        results_from_it["Train"]["rmse"], results_from_arrays["Train"]["rmse"], rtol=rtol
+        results_from_it["Train"]["rmse"],
+        results_from_arrays["Train"]["rmse"],
+        rtol=rtol,
     )
 
 

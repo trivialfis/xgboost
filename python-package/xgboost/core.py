@@ -313,11 +313,12 @@ def _prediction_output(shape, dims, predts, is_cuda):
     return arr_predict
 
 
-class DataIter:                 # pylint: disable=too-many-instance-attributes
-    '''The interface for user defined data iterator. Currently is only supported by Device
+class DataIter:  # pylint: disable=too-many-instance-attributes
+    """The interface for user defined data iterator. Currently is only supported by Device
     DMatrix.
 
-    '''
+    """
+
     def __init__(self, cache_prefix: Optional[str] = None) -> None:
         self._handle = _ProxyDMatrix()
         self.exception = None
@@ -341,11 +342,11 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
 
     @property
     def proxy(self):
-        '''Handler of DMatrix proxy.'''
+        """Handler of DMatrix proxy."""
         return self._handle
 
     def _reset_wrapper(self, this):  # pylint: disable=unused-argument
-        '''A wrapper for user defined `reset` function.'''
+        """A wrapper for user defined `reset` function."""
         if self._temporary_data is not None:
             # free the data
             self._temporary_data = None
@@ -355,28 +356,26 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
         assert self._temporary_data is None, self._temporary_data
 
     def _next_wrapper(self, this):  # pylint: disable=unused-argument
-        '''A wrapper for user defined `next` function.
+        """A wrapper for user defined `next` function.
 
         `this` is not used in Python.  ctypes can handle `self` of a Python
         member function automatically when converting it to c function
         pointer.
 
-        '''
+        """
         if self.exception is not None:
             return 0
 
         @_deprecate_positional_args
-        def data_handle(
-            data,
-            *,
-            feature_names=None,
-            feature_types=None,
-            **kwargs
-        ):
+        def data_handle(data, *, feature_names=None, feature_types=None, **kwargs):
             from .data import dispatch_proxy_set_data
             from .data import _proxy_transform
+
             transformed, feature_names, feature_types = _proxy_transform(
-                data, feature_names, feature_types, self.enable_categorical,
+                data,
+                feature_names,
+                feature_types,
+                self.enable_categorical,
             )
             self._temporary_data = transformed
             dispatch_proxy_set_data(self.proxy, transformed, self._allow_host)
@@ -385,12 +384,13 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
                 feature_types=feature_types,
                 **kwargs,
             )
+
         try:
             # Differ the exception in order to return 0 and stop the iteration.
             # Exception inside a ctype callback function has no effect except
             # for printing to stderr (doesn't stop the execution).
             ret = self.next(data_handle)  # pylint: disable=not-callable
-        except Exception as e:            # pylint: disable=broad-except
+        except Exception as e:  # pylint: disable=broad-except
             tb = sys.exc_info()[2]
             # On dask the worker is restarted and somehow the information is
             # lost.
@@ -399,11 +399,11 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
         return ret
 
     def reset(self):
-        '''Reset the data iterator.  Prototype for user defined function.'''
+        """Reset the data iterator.  Prototype for user defined function."""
         raise NotImplementedError()
 
     def next(self, input_data):
-        '''Set the next batch of data.
+        """Set the next batch of data.
 
         Parameters
         ----------
@@ -416,7 +416,7 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
         -------
         0 if there's no more batch, otherwise 1.
 
-        '''
+        """
         raise NotImplementedError()
 
 
@@ -470,7 +470,6 @@ def _deprecate_positional_args(f):
         return f(**kwargs)
 
     return inner_f
-
 
 class DMatrix:  # pylint: disable=too-many-instance-attributes
     """Data Matrix used in XGBoost.
@@ -609,12 +608,14 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
         args = {
             "missing": self.missing,
             "nthread": self.nthread,
-            "cache_prefix": self._it.cache_prefix
+            "cache_prefix": self._it.cache_prefix,
         }
         args = from_pystr_to_cstr(json.dumps(args))
         handle = ctypes.c_void_p()
         # pylint: disable=protected-access
-        reset_callback, next_callback = self._it._get_callbacks(True, enable_categorical)
+        reset_callback, next_callback = self._it._get_callbacks(
+            True, enable_categorical
+        )
         ret = _LIB.XGDMatrixCreateFromCallback(
             None,
             self._it.proxy.handle,
@@ -1058,44 +1059,38 @@ class _ProxyDMatrix(DMatrix):
     inplace_predict).
 
     """
+
     def __init__(self):  # pylint: disable=super-init-not-called
         self.handle = ctypes.c_void_p()
         _check_call(_LIB.XGProxyDMatrixCreate(ctypes.byref(self.handle)))
 
     def _set_data_from_cuda_interface(self, data):
-        '''Set data from CUDA array interface.'''
+        """Set data from CUDA array interface."""
         interface = data.__cuda_array_interface__
-        interface_str = bytes(json.dumps(interface, indent=2), 'utf-8')
+        interface_str = bytes(json.dumps(interface, indent=2), "utf-8")
         _check_call(
-            _LIB.XGProxyDMatrixSetDataCudaArrayInterface(
-                self.handle,
-                interface_str
-            )
+            _LIB.XGProxyDMatrixSetDataCudaArrayInterface(self.handle, interface_str)
         )
 
     def _set_data_from_cuda_columnar(self, data):
-        '''Set data from CUDA columnar format.'''
+        """Set data from CUDA columnar format."""
         from .data import _cudf_array_interfaces
+
         _, interfaces_str = _cudf_array_interfaces(data)
-        _check_call(
-            _LIB.XGProxyDMatrixSetDataCudaColumnar(
-                self.handle,
-                interfaces_str
-            )
-        )
+        _check_call(_LIB.XGProxyDMatrixSetDataCudaColumnar(self.handle, interfaces_str))
 
     def _set_data_from_array(self, data: np.ndarray):
         """Set data from numpy array."""
         from .data import _array_interface
+
         _check_call(
-            _LIB.XGProxyDMatrixSetDataDense(
-                self.handle, _array_interface(data)
-            )
+            _LIB.XGProxyDMatrixSetDataDense(self.handle, _array_interface(data))
         )
 
     def _set_data_from_csr(self, csr):
         """Set data from scipy csr"""
         from .data import _array_interface
+
         _LIB.XGProxyDMatrixSetDataCSR(
             self.handle,
             _array_interface(csr.indptr),
