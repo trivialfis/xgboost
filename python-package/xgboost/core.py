@@ -365,8 +365,10 @@ class DataIter:                 # pylint: disable=too-many-instance-attributes
         if self.exception is not None:
             return 0
 
+        @_deprecate_positional_args
         def data_handle(
             data,
+            *,
             feature_names=None,
             feature_types=None,
             **kwargs
@@ -667,6 +669,7 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
         if label_upper_bound is not None:
             self.set_float_info('label_upper_bound', label_upper_bound)
         if feature_names is not None:
+            print("self", self.feature_names, len(feature_names))
             self.feature_names = feature_names
         if feature_types is not None:
             self.feature_types = feature_types
@@ -961,7 +964,8 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes
             if len(feature_names) != len(set(feature_names)):
                 raise ValueError('feature_names must be unique')
             if len(feature_names) != self.num_col() and self.num_col() != 0:
-                msg = 'feature_names must have the same length as data'
+                msg = ("feature_names must have the same length as data, ",
+                       f"expected {self.num_col()}, got {len(feature_names)}")
                 raise ValueError(msg)
             # prohibit to use symbols may affect to parse. e.g. []<
             if not all(isinstance(f, str) and

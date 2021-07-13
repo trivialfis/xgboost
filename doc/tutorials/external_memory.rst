@@ -71,7 +71,7 @@ constructor.
       self._it = 0
       # XGBoost will generate some cache files under current directory with the prefix
       # "cache"
-      super.__init__(cache_prefix=os.path.join(".", "cache"))
+      super().__init__(cache_prefix=os.path.join(".", "cache"))
 
     def next(self, input_data: Callable):
       """Advance the iterator by 1 step and pass the data to XGBoost.  This function is
