@@ -14,6 +14,7 @@ import numpy as np
 def make_batches(
     n_samples_per_batch: int, n_features: int, n_batches: int
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+    """Generate random batches."""
     X = []
     y = []
     rng = np.random.RandomState(1994)
@@ -26,6 +27,7 @@ def make_batches(
 
 
 class Iterator(xgboost.DataIter):
+    """A custom iterator for loading files in batches."""
     def __init__(self, file_paths: List[Tuple[str, str]]):
         self._file_paths = file_paths
         self._it = 0
@@ -76,7 +78,7 @@ def main(tmpdir: str) -> xgboost.Booster:
     Xy = xgboost.DMatrix(it)
 
     # Other tree methods including ``hist`` and ``gpu_hist`` also work, but has some
-    # caveats as noted in following sections.  This is still an experimental feature.
+    # caveats.  This is still an experimental feature.
     booster = xgboost.train({"tree_method": "approx"}, Xy)
     return booster
 
