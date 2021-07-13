@@ -314,8 +314,7 @@ def _prediction_output(shape, dims, predts, is_cuda):
 
 
 class DataIter:  # pylint: disable=too-many-instance-attributes
-    """The interface for user defined data iterator. Currently is only supported by Device
-    DMatrix.
+    """The interface for user defined data iterator.
 
     """
 
@@ -325,7 +324,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
-        # Stage data in Python until reset or next batch to avoid data being free.
+        # Stage data in Python until reset or next is called to avoid data being free.
         self._temporary_data = None
 
     def _get_callbacks(self, allow_host: bool, enable_categorical: bool):
@@ -377,6 +376,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
                 feature_types,
                 self.enable_categorical,
             )
+            # Stage the data, meta info are copied inside C++ MetaInfo.
             self._temporary_data = transformed
             dispatch_proxy_set_data(self.proxy, transformed, self._allow_host)
             self.proxy.set_info(
@@ -386,13 +386,13 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
             )
 
         try:
-            # Differ the exception in order to return 0 and stop the iteration.
+            # Defer the exception in order to return 0 and stop the iteration.
             # Exception inside a ctype callback function has no effect except
             # for printing to stderr (doesn't stop the execution).
             ret = self.next(data_handle)  # pylint: disable=not-callable
         except Exception as e:  # pylint: disable=broad-except
             tb = sys.exc_info()[2]
-            # On dask the worker is restarted and somehow the information is
+            # On dask, the worker is restarted and somehow the information is
             # lost.
             self.exception = e.with_traceback(tb)
             return 0
