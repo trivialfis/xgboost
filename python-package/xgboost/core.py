@@ -316,11 +316,17 @@ def _prediction_output(shape, dims, predts, is_cuda):
 class DataIter:  # pylint: disable=too-many-instance-attributes
     """The interface for user defined data iterator.
 
+    Parameters
+    ----------
+    cache_prefix:
+        Prefix to the cache files, only used in external memory.  It can be either an URI
+        or a file path.
+
     """
 
     def __init__(self, cache_prefix: Optional[str] = None) -> None:
         self._handle = _ProxyDMatrix()
-        self.exception = None
+        self.exception = Optional[Exception]
         self.enable_categorical = False
         self.cache_prefix = cache_prefix
         self._allow_host = True
@@ -340,8 +346,8 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
         return self._reset_callback, self._next_callback
 
     @property
-    def proxy(self):
-        """Handler of DMatrix proxy."""
+    def proxy(self) -> "_ProxyDMatrix":
+        """Handle of DMatrix proxy."""
         return self._handle
 
     def _reset_wrapper(self, this):  # pylint: disable=unused-argument
@@ -351,7 +357,7 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
             self._temporary_data = None
         self.reset()
 
-    def __del__(self):
+    def __del__(self) -> None:
         assert self._temporary_data is None, self._temporary_data
 
     def _next_wrapper(self, this):  # pylint: disable=unused-argument
@@ -398,17 +404,17 @@ class DataIter:  # pylint: disable=too-many-instance-attributes
             return 0
         return ret
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset the data iterator.  Prototype for user defined function."""
         raise NotImplementedError()
 
-    def next(self, input_data):
+    def next(self, input_data: Callable) -> int:
         """Set the next batch of data.
 
         Parameters
         ----------
 
-        data_handle: callable
+        data_handle:
             A function with same data fields like `data`, `label` with
             `xgboost.DMatrix`.
 
@@ -1185,6 +1191,11 @@ class DeviceQuantileDMatrix(DMatrix):
         handle = ctypes.c_void_p()
         # pylint: disable=protected-access
         reset_callback, next_callback = it._get_callbacks(False, enable_categorical)
+        if it.cache_prefix is not None:
+            raise ValueError(
+                "DeviceQuantileDMatrix doesn't cache data, remove the cache_prefix "
+                "in iterator to fix this error."
+            )
         ret = _LIB.XGDeviceQuantileDMatrixCreateFromCallback(
             None,
             it.proxy.handle,
