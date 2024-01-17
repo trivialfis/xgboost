@@ -69,15 +69,15 @@ def using_quantile_device_dmatrix(client: Client, X: da.Array, y: da.Array) -> d
 if __name__ == "__main__":
     # `LocalCUDACluster` is used for assigning GPU to XGBoost processes.  Here
     # `n_workers` represents the number of GPUs since we use one GPU per worker process.
-    with LocalCUDACluster(n_workers=2, threads_per_worker=4) as cluster:
-        with Client(cluster) as client:
-            # generate some random data for demonstration
-            m = 100000
-            n = 100
-            X = da.random.random(size=(m, n), chunks=10000)
-            y = da.random.random(size=(m,), chunks=10000)
+    # with LocalCUDACluster(n_workers=2, threads_per_worker=4) as cluster:
+    with Client(scheduler_file="sched.json") as client:
+        # generate some random data for demonstration
+        m = 100000
+        n = 100
+        X = da.random.random(size=(m, n), chunks=10000)
+        y = da.random.random(size=(m,), chunks=10000)
 
-            print("Using DaskQuantileDMatrix")
-            from_ddqdm = using_quantile_device_dmatrix(client, X, y)
-            print("Using DMatrix")
-            from_dmatrix = using_dask_matrix(client, X, y)
+        print("Using DaskQuantileDMatrix")
+        from_ddqdm = using_quantile_device_dmatrix(client, X, y)
+        print("Using DMatrix")
+        from_dmatrix = using_dask_matrix(client, X, y)

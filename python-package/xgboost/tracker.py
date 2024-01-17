@@ -90,7 +90,7 @@ class WorkerEntry:
         if use_logger:
             logging.info(msg.strip())
         else:
-            print(msg.strip(), flush=True)
+            print("P:", msg.strip(), flush=True)
 
     def decide_rank(self, job_map: Dict[str, int]) -> int:
         """Get the rank of current entry."""
@@ -329,6 +329,7 @@ class RabitTracker:
             fd, s_addr = self.sock.accept()
             s = WorkerEntry(fd, s_addr)
             if s.cmd == "print":
+                print("self.use_logger:", self._use_logger)
                 s.print(self._use_logger)
                 continue
             if s.cmd == "shutdown":

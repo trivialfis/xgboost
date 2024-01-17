@@ -43,6 +43,10 @@ def main(client):
 
 if __name__ == "__main__":
     # or use other clusters for scaling
-    with LocalCluster(n_workers=7, threads_per_worker=4) as cluster:
-        with Client(cluster) as client:
-            main(client)
+    with Client(scheduler_file="sched.json") as client:
+        main(client)
+        xgb_events = client.get_events("xgboost")
+        print(xgb_events)
+    # with LocalCluster(n_workers=7, threads_per_worker=4) as cluster:
+    #     with Client(cluster) as client:
+    #         main(client)

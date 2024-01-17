@@ -2,8 +2,8 @@
 </python/callbacks>` for a quick introduction.
 
 """
-
 import collections
+import logging
 import os
 import pickle
 from abc import ABC
@@ -508,11 +508,23 @@ class EvaluationMonitor(TrainingCallback):
         Used in cv to show standard deviation.  Users should not specify it.
     """
 
-    def __init__(self, rank: int = 0, period: int = 1, show_stdv: bool = False) -> None:
+    def __init__(
+        self,
+        rank: int = 0,
+        period: int = 1,
+        logger_name: Optional[str] = None,
+        show_stdv: bool = False,
+    ) -> None:
         self.printer_rank = rank
         self.show_stdv = show_stdv
         self.period = period
         assert period > 0
+
+        if logger_name is not None:
+            self._logger: Optional[logging.Logger] = logging.getLogger(logger_name)
+        else:
+            self._logger = None
+
         # last error message, useful when early stopping and period are used together.
         self._latest: Optional[str] = None
         super().__init__()
@@ -533,7 +545,7 @@ class EvaluationMonitor(TrainingCallback):
             return False
 
         msg: str = f"[{epoch}]"
-        if collective.get_rank() == self.printer_rank:
+        if self.printer_rank == collective.get_rank():
             for data, metric in evals_log.items():
                 for metric_name, log in metric.items():
                     stdv: Optional[float] = None
@@ -546,7 +558,26 @@ class EvaluationMonitor(TrainingCallback):
             msg += "\n"
 
             if (epoch % self.period) == 0 or self.period == 1:
-                collective.communicator_print(msg)
+                if self._logger is not None:
+                    self._logger.setLevel(logging.INFO)
+                    if not self._logger.hasHandlers():
+                        handler = logging.StreamHandler()
+                        self._logger.addHandler(handler)
+                    self._logger.info(msg)
+                else:
+                    collective.communicator_print(msg)
+
+                from distributed import get_client
+
+                logger = logging.getLogger("[xgboost.dask]")
+                logger.setLevel(logging.INFO)
+                # get_client().log_event("xgboost", msg)
+
+                if not logger.hasHandlers():
+                    handler = logging.StreamHandler()
+                    logger.addHandler(handler)
+                logger.info(msg)
+
                 self._latest = None
             else:
                 # There is skipped message

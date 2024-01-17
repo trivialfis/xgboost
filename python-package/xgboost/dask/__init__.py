@@ -169,14 +169,14 @@ def _try_start_tracker(
                 host_ip=get_host_ip(host_ip),
                 n_workers=n_workers,
                 port=port,
-                use_logger=False,
+                use_logger=True,
             )
         else:
             addr = addrs[0]
             assert isinstance(addr, str) or addr is None
             host_ip = get_host_ip(addr)
             rabit_tracker = RabitTracker(
-                host_ip=host_ip, n_workers=n_workers, use_logger=False, sortby="task"
+                host_ip=host_ip, n_workers=n_workers, use_logger=True, sortby="task"
             )
         env.update(rabit_tracker.worker_envs())
         rabit_tracker.start(n_workers)
@@ -973,6 +973,15 @@ async def _train_async(
         local_param.update({"nthread": n_threads, "n_jobs": n_threads})
 
         local_history: TrainingCallback.EvalsLog = {}
+        nonlocal verbose_eval, callbacks
+
+        if verbose_eval is not False:
+            import copy
+
+            from ..callback import EvaluationMonitor
+            verbose_eval = 1 if verbose_eval is True else verbose_eval
+            callbacks = [] if callbacks is None else copy.copy(list(callbacks))
+            callbacks.append(EvaluationMonitor(period=verbose_eval))
 
         with CommunicatorContext(**rabit_args), config.config_context(**global_config):
             Xy, evals = _get_dmatrices(
@@ -1084,6 +1093,12 @@ def train(  # pylint: disable=unused-argument
     _assert_dask_support()
     client = _xgb_get_client(client)
     args = locals()
+
+    LOGGER.setLevel(logging.INFO)
+    if not LOGGER.hasHandlers():
+        LOGGER.addHandler(logging.StreamHandler())
+    client.forward_logging("[xgboost.dask]")
+
     return client.sync(
         _train_async,
         global_config=config.get_config(),
