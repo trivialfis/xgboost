@@ -261,6 +261,7 @@ macro(xgboost_target_link_libraries target)
   if(PLUGIN_RMM)
     target_link_libraries(${target} PRIVATE rmm::rmm)
   endif()
+  target_link_libraries(${target} PRIVATE nvcomp::nvcomp)
 
   if(USE_NCCL)
     xgboost_link_nccl(${target})

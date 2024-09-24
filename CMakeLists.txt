@@ -232,6 +232,11 @@ if(USE_CUDA)
   endif()
 
   find_package(CUDAToolkit REQUIRED)
+  find_package(nvcomp REQUIRED)
+  # Define guard macros to prevent windows.h from conflicting with winsock2.h
+  if(WIN32)
+    target_compile_definitions(CCCL::CCCL INTERFACE NOMINMAX WIN32_LEAN_AND_MEAN _WINSOCKAPI_)
+  endif()
 endif()
 
 if(FORCE_COLORED_OUTPUT AND (CMAKE_GENERATOR STREQUAL "Ninja") AND

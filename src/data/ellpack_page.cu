@@ -16,6 +16,7 @@
 #include "../common/cuda_context.cuh"       // for CUDAContext
 #include "../common/cuda_rt_utils.h"        // for SetDevice
 #include "../common/hist_util.cuh"          // for HistogramCuts
+#include "../common/nvcomp_format.h"        // for
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
 #include "../common/transform_iterator.h"   // for MakeIndexTransformIter
 #include "device_adapter.cuh"               // for NoInfInData
@@ -381,6 +382,8 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, AdapterBatch batch, float m
     CopyDataToEllpack<false>(ctx, batch, feature_types, this, missing);
     WriteNullValues(ctx, this, row_counts);
   }
+  common::DecompCompressedWithManagerFactoryExample(ctx, this->gidx_buffer.data(),
+                                                    this->gidx_buffer.size());
 }
 
 #define ELLPACK_BATCH_SPECIALIZE(__BATCH_T)                                                  \
@@ -481,6 +484,8 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, GHistIndexMatrix const& pag
                           d_compressed_buffer);
   });
   this->monitor_.Stop("CopyGHistToEllpack");
+  common::DecompCompressedWithManagerFactoryExample(ctx, this->gidx_buffer.data(),
+                                                    this->gidx_buffer.size());
 }
 
 EllpackPageImpl::~EllpackPageImpl() noexcept(false) {
