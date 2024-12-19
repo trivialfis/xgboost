@@ -9,6 +9,7 @@
 #include "../../../../src/common/cuda_pinned_allocator.h"
 #include "../../../../src/common/device_vector.cuh"  // for device_vector
 #include "../../../../src/common/io.h"
+#include "../../../../src/c_api/c_api_error.h"  // for XGBAPIHandleException
 #include "../../../../src/data/array_interface.h"
 #include "../../../../src/data/sparse_page_source.h"  // for Cache
 #include "jvm_utils.h"
@@ -46,12 +47,12 @@ T CheckJvmCall(T const &v, JNIEnv *jenv) {
 void CheckXgbCall(JNIEnv *, std::int32_t ret) {
   if (ret != 0) {
     auto const *msg = XGBGetLastError();
-    std::cerr << msg << std::endl;  // TODO Raise error.
+    LOG(FATAL) << msg;
   }
 }
 
 template <typename T>
-void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, cudaStream_t stream) {
+void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out) {
   auto &j_interface = *p_interface;
   CHECK_EQ(get<Array const>(j_interface).size(), 1);
   auto object = get<Object>(get<Array>(j_interface)[0]);
@@ -59,8 +60,7 @@ void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, cudaStream_t str
   out->resize(interface.Shape<0>());
   size_t element_size = interface.ElementSize();
   size_t size = element_size * interface.n;
-  dh::safe_cuda(
-      cudaMemcpyAsync(RawPtr(*out), interface.data, size, cudaMemcpyDeviceToDevice, stream));
+  dh::safe_cuda(cudaMemcpyAsync(RawPtr(*out), interface.data, size, cudaMemcpyDeviceToDevice));
   j_interface[0]["data"][0] = reinterpret_cast<Integer::Int>(RawPtr(*out));
 }
 
@@ -241,8 +241,6 @@ class DataIteratorProxy {
   // Temp buffer on device for set data calls.
   DataFrame<ColumnBuf, ColumnMaskBuf> out_df_;
 
-  cudaStream_t copy_stream_;
-
   std::unique_ptr<JvmCacheFormat> cache_{std::make_unique<JvmCacheFormat>()};
   std::string host_buf_;
   std::size_t host_buf_offset_{0};  // for stream write offset
@@ -255,12 +253,8 @@ class DataIteratorProxy {
     CheckXgbCall(jenv_, XGProxyDMatrixCreate(&proxy_));
     jni_status_ = GlobalJvm()->GetEnv(reinterpret_cast<void **>(&jenv_), JNI_VERSION_1_6);
     this->Reset();
-    dh::safe_cuda(cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking));
   }
-  ~DataIteratorProxy() {
-    CheckXgbCall(jenv_, XGDMatrixFree(proxy_));
-    dh::safe_cuda(cudaStreamDestroy(copy_stream_));
-  }
+  ~DataIteratorProxy() { CheckXgbCall(jenv_, XGDMatrixFree(proxy_)); }
 
   DMatrixHandle GetDMatrixHandle() const { return proxy_; }
 
@@ -275,7 +269,7 @@ class DataIteratorProxy {
     Json label = json_interface["label"];
     CHECK(!IsA<Null>(label));
     labels_.emplace_back(new dh::device_vector<float>);
-    CopyMetaInfo(&label, labels_.back().get(), copy_stream_);
+    CopyMetaInfo(&label, labels_.back().get());
     label_interfaces_.emplace_back(label);
 
     std::string str;
@@ -287,7 +281,7 @@ class DataIteratorProxy {
       Json weight = it->second;
       CHECK(!IsA<Null>(weight));
       weights_.emplace_back(new dh::device_vector<float>);
-      CopyMetaInfo(&weight, weights_.back().get(), copy_stream_);
+      CopyMetaInfo(&weight, weights_.back().get());
       weight_interfaces_.emplace_back(weight);
 
       Json::Dump(weight, &str);
@@ -298,7 +292,7 @@ class DataIteratorProxy {
     if (it != json_map.cend()) {
       Json basemargin = it->second;
       base_margins_.emplace_back(new dh::device_vector<float>);
-      CopyMetaInfo(&basemargin, base_margins_.back().get(), copy_stream_);
+      CopyMetaInfo(&basemargin, base_margins_.back().get());
       margin_interfaces_.emplace_back(basemargin);
 
       Json::Dump(basemargin, &str);
@@ -309,7 +303,7 @@ class DataIteratorProxy {
     if (it != json_map.cend()) {
       Json qid = it->second;
       qids_.emplace_back(new dh::device_vector<int>);
-      CopyMetaInfo(&qid, qids_.back().get(), copy_stream_);
+      CopyMetaInfo(&qid, qids_.back().get());
       qid_interfaces_.emplace_back(qid);
 
       Json::Dump(qid, &str);
@@ -399,7 +393,6 @@ class DataIteratorProxy {
 
   int NextFirstLoop() {
     try {
-      dh::safe_cuda(cudaStreamSynchronize(copy_stream_));
       if (this->PullIterFromJVM()) {
         return 1;
       } else {
@@ -410,7 +403,8 @@ class DataIteratorProxy {
       if (jni_status_ == JNI_EDETACHED) {
         GlobalJvm()->DetachCurrentThread();
       }
-      LOG(FATAL) << e.what();
+      XGBAPIHandleException(e);
+      return 0;
     }
     LOG(FATAL) << "Unreachable";
     return 1;
@@ -421,24 +415,24 @@ class DataIteratorProxy {
     // Meta
     auto const &label = this->label_interfaces_.at(it_);
     Json::Dump(label, &str);
-    XGDMatrixSetInfoFromInterface(proxy_, "label", str.c_str());
+    CheckXgbCall(jenv_, XGDMatrixSetInfoFromInterface(proxy_, "label", str.c_str()));
 
     if (n_batches_ == this->weight_interfaces_.size()) {
       auto const &weight = this->weight_interfaces_.at(it_);
       Json::Dump(weight, &str);
-      XGDMatrixSetInfoFromInterface(proxy_, "weight", str.c_str());
+      CheckXgbCall(jenv_, XGDMatrixSetInfoFromInterface(proxy_, "weight", str.c_str()));
     }
 
     if (n_batches_ == this->margin_interfaces_.size()) {
       auto const &base_margin = this->margin_interfaces_.at(it_);
       Json::Dump(base_margin, &str);
-      XGDMatrixSetInfoFromInterface(proxy_, "base_margin", str.c_str());
+      CheckXgbCall(jenv_, XGDMatrixSetInfoFromInterface(proxy_, "base_margin", str.c_str()));
     }
 
     if (n_batches_ == this->qid_interfaces_.size()) {
       auto const &qid = this->qid_interfaces_.at(it_);
       Json::Dump(qid, &str);
-      XGDMatrixSetInfoFromInterface(proxy_, "qid", str.c_str());
+      CheckXgbCall(jenv_, XGDMatrixSetInfoFromInterface(proxy_, "qid", str.c_str()));
     }
 
     // Data
@@ -469,7 +463,15 @@ class DataIteratorProxy {
       if (it_ == n_batches_) {
         return 0;
       }
-      return NextSecondLoop();
+      try {
+        return NextSecondLoop();
+      } catch (dmlc::Error const &e) {
+        if (jni_status_ == JNI_EDETACHED) {
+          GlobalJvm()->DetachCurrentThread();
+        }
+        XGBAPIHandleException(e);
+        return 0;
+      }
     }
   };
 };
