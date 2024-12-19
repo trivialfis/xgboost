@@ -397,6 +397,7 @@ class DataIteratorProxy {
         return 1;
       } else {
         initialized_ = true;
+        this->cache_->Commit();
         return 0;
       }
     } catch (dmlc::Error const &e) {
