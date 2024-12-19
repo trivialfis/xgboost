@@ -8,8 +8,6 @@
 #include <dmlc/thread_local.h>
 
 #include "xgboost/c_api.h"
-#include "../collective/comm.h"
-#include "../collective/comm_group.h"
 
 struct XGBAPIErrorEntry {
   std::string last_error;
