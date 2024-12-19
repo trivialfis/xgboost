@@ -305,11 +305,11 @@ struct GPUHistMakerDevice {
       max_active_features =
           std::max(max_active_features, static_cast<bst_feature_t>(input.feature_set.size()));
     }
-    dh::safe_cuda(cudaMemcpyAsync(
-        d_node_inputs.data().get(), h_node_inputs.data(),
-        h_node_inputs.size() * sizeof(EvaluateSplitInputs), cudaMemcpyDefault));
+    // dh::safe_cuda(cudaMemcpyAsync(
+    //     d_node_inputs.data().get(), h_node_inputs.data(),
+    //     h_node_inputs.size() * sizeof(EvaluateSplitInputs), cudaMemcpyDefault));
 
-    this->evaluator_.EvaluateSplits(ctx_, nidx, max_active_features, dh::ToSpan(d_node_inputs),
+    this->evaluator_.EvaluateSplits(ctx_, nidx, max_active_features, common::Span{h_node_inputs},
                                     shared_inputs, dh::ToSpan(entries));
     dh::safe_cuda(cudaMemcpyAsync(pinned_candidates_out.data(),
                                   entries.data().get(), sizeof(GPUExpandEntry) * entries.size(),
