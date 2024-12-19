@@ -84,7 +84,7 @@ class JvmCacheFormat {
   struct ColumnInfo {
     bool masked{false};
     std::size_t n_samples{0};
-    char c{0};
+    char typechar{0};
   };
   std::vector<std::vector<ColumnInfo>> column_info_;
 
@@ -116,7 +116,7 @@ class JvmCacheFormat {
       DispatchDType(col.type, [&](auto t) {
         using T = decltype(t);
         auto c = linalg::detail::ArrayInterfaceHandler::TypeChar<T>();
-        cinfo.c = c;
+        cinfo.typechar = c;
       });
 
       if (col.valid.Data()) {
@@ -176,7 +176,7 @@ class JvmCacheFormat {
           Array{std::vector<Json>{Json{Integer{static_cast<Integer::Int>(cinfo.n_samples)}}}};
       CHECK_EQ(n_bytes % cinfo.n_samples, 0);
       std::size_t elem_bytes = n_bytes / cinfo.n_samples;
-      jcol["typestr"] = String{"<" + (cinfo.c + std::to_string(elem_bytes))};
+      jcol["typestr"] = String{"<" + (cinfo.typechar + std::to_string(elem_bytes))};
       jcol["version"] = Integer{3};
       jcol["stream"] = Integer{2};
 
@@ -373,10 +373,10 @@ class DataIteratorProxy {
 
     // Stage the data
     for (auto &json_col : json_columns) {
-      auto column = ArrayInterface<1>(get<Object const>(json_col));
+      auto column = ArrayInterface<1>{get<Object const>(json_col)};
       interfaces.emplace_back(column);
     }
-    Json::Dump(features, &interface_str);
+    interface_str = Json::Dump(features);  // reuse
 
     if (this->cache_on_host_) {
       auto fo = std::make_unique<common::AlignedMemWriteStream>(&host_buf_, host_buf_offset_);
@@ -386,8 +386,8 @@ class DataIteratorProxy {
       auto fo = std::make_unique<common::AlignedFileWriteStream>(path.string(), "ab");
       host_buf_offset_ += this->cache_->Write(fo.get(), interfaces);
     }
-
     CheckXgbCall(jenv_, XGProxyDMatrixSetDataCudaColumnar(proxy_, interface_str.c_str()));
+
     it_++;
   }
 
