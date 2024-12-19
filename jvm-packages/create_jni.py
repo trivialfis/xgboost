@@ -24,6 +24,7 @@ CONFIG = {
     "JVM_BINDINGS": "ON",
     "LOG_CAPI_INVOCATION": "OFF",
     "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+    "CMAKE_BUILD_TYPE": "Debug",
 }
 
 
@@ -129,7 +130,7 @@ def native_build(args):
                             maybe_makedirs(build_dir)
             else:
                 run("cmake .. " + " ".join(args))
-            run("cmake --build . --config Release" + maybe_parallel_build)
+            run("time ninja")
 
 
     print("copying native library", flush=True)

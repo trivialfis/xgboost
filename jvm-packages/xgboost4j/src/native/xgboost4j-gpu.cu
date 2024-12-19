@@ -6,10 +6,9 @@
 
 #include <filesystem>
 
-#include "../../../../src/common/cuda_pinned_allocator.h"
+#include "../../../../src/c_api/c_api_error.h"       // for XGBAPIHandleException
 #include "../../../../src/common/device_vector.cuh"  // for device_vector
 #include "../../../../src/common/io.h"
-#include "../../../../src/c_api/c_api_error.h"  // for XGBAPIHandleException
 #include "../../../../src/data/array_interface.h"
 #include "../../../../src/data/sparse_page_source.h"  // for Cache
 #include "jvm_utils.h"
@@ -69,6 +68,11 @@ struct DataFrame {
   std::vector<DCont> data;
   std::vector<VCont> valid;
   std::vector<Json> interfaces;
+  void Clear() {
+    data.clear();
+    valid.clear();
+    interfaces.clear();
+  }
 };
 
 namespace fs = std::filesystem;
@@ -95,7 +99,6 @@ class JvmCacheFormat {
    * @brief Write a device dataframe to the disk.
    */
   std::size_t Write(common::AlignedWriteStream *fo, std::vector<ArrayInterface<1>> const &df) {
-    // auto path = this->root_ / "X";
     std::uint64_t n_total_bytes{0};
     std::size_t n_columns{0};
     std::vector<ColumnInfo> info;
@@ -105,11 +108,12 @@ class JvmCacheFormat {
       if (device_.IsCPU()) {
         device_ = DeviceOrd::CUDA(dh::CudaGetPointerDevice(col.data));
       }
+      std::cerr << "write: n_bytes" << n_bytes << std::endl;
       dh::safe_cuda(cudaMemcpy(h_bytes.data(), col.data, n_bytes, cudaMemcpyDefault));
 
-      n_bytes += fo->Write(&n_bytes, sizeof(n_bytes));  // write the size
-      auto written = fo->Write(col.data, n_bytes);      // write the data
-      CHECK_EQ(n_bytes, written + sizeof(n_bytes));
+      auto written = fo->Write(&n_bytes, sizeof(n_bytes));  // write the size
+      written += fo->Write(h_bytes.data(), n_bytes);        // write the data
+      n_bytes = written;
 
       ColumnInfo cinfo;
       cinfo.n_samples = col.Shape<0>();
@@ -133,6 +137,7 @@ class JvmCacheFormat {
       n_columns++;
 
       info.emplace_back(cinfo);
+      std::cerr << "column:" << n_columns << std::endl;
     }
 
     if (this->n_columns_ == 0) {
@@ -152,6 +157,7 @@ class JvmCacheFormat {
    */
   void Read(std::int32_t iter, common::AlignedResourceReadStream *fi,
             DataFrame<ColumnBuf, ColumnMaskBuf> *p_out) const {
+    p_out->Clear();
     auto info = this->cache_info_.View(iter);
     auto const &binfo = this->column_info_.at(iter);
 
@@ -170,7 +176,7 @@ class JvmCacheFormat {
       ColumnInfo const &cinfo = binfo.at(i);
       Json jcol{Object{}};
       jcol["data"] = Array{std::vector<Json>{
-          Json{Integer{reinterpret_cast<Integer::Int>(p_data->ConstDevicePointer())}},
+          Json{Integer{reinterpret_cast<Integer::Int>(p_out->data.back()->ConstDevicePointer())}},
           Json{Boolean{true}}}};
       jcol["shape"] =
           Array{std::vector<Json>{Json{Integer{static_cast<Integer::Int>(cinfo.n_samples)}}}};
@@ -207,7 +213,7 @@ class JvmCacheFormat {
         p_out->valid.emplace_back(nullptr);
       }
 
-      p_out->interfaces.emplace_back(Json::Dump(jcol));
+      p_out->interfaces.emplace_back(jcol);
     }
   }
 
@@ -246,9 +252,8 @@ class DataIteratorProxy {
   std::size_t host_buf_offset_{0};  // for stream write offset
 
  public:
-  explicit DataIteratorProxy(jobject jiter, bool cache_on_host = true,
-                             fs::path root = fs::current_path())
-      : jiter_{jiter}, cache_on_host_{cache_on_host}, root_{std::move(root)} {
+  explicit DataIteratorProxy(jobject jiter, fs::path root)
+      : jiter_{jiter}, cache_on_host_{root.empty()}, root_{std::move(root)} {
     CHECK(fs::exists(root_)) << "Directory `" << root_.string() << "` not found.";
     CheckXgbCall(jenv_, XGProxyDMatrixCreate(&proxy_));
     jni_status_ = GlobalJvm()->GetEnv(reinterpret_cast<void **>(&jenv_), JNI_VERSION_1_6);
@@ -491,7 +496,13 @@ using Deleter = std::function<void(T *)>;
 XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_iter,
                                                     jlongArray jref, char const *config,
                                                     jlongArray jout) {
-  xgboost::jni::DataIteratorProxy proxy(jdata_iter);
+  xgboost_CHECK_C_ARG_PTR(config);
+  auto jconfig = Json::Load(StringView{config});
+  auto ext_mem_path = OptionalArg<String>(jconfig, "external_memory_path", std::string(""));
+  std::cerr << "XGQuantileDMatrixCreateFromCallbackImpl external_memory_path " << ext_mem_path
+            << std::endl;
+
+  xgboost::jni::DataIteratorProxy proxy{jdata_iter, fs::path{ext_mem_path}};
   DMatrixHandle result;
   DMatrixHandle ref{nullptr};
 
