@@ -4,13 +4,13 @@
 #include <jni.h>
 #include <xgboost/c_api.h>
 
+#include <fstream>
+
+#include "../../../../src/c_api/c_api_error.h"
 #include "../../../../src/common/cuda_pinned_allocator.h"
 #include "../../../../src/common/device_vector.cuh"  // for device_vector
 #include "../../../../src/data/array_interface.h"
-#include "../../../../src/c_api/c_api_error.h"
 #include "jvm_utils.h"
-#include <fstream>
-
 
 namespace xgboost {
 namespace jni {
@@ -20,19 +20,23 @@ T const *RawPtr(std::vector<T, Alloc> const &data) {
   return data.data();
 }
 
-template <typename T, typename Alloc> T *RawPtr(std::vector<T, Alloc> &data) {
+template <typename T, typename Alloc>
+T *RawPtr(std::vector<T, Alloc> &data) {
   return data.data();
 }
 
-template <typename T> T const *RawPtr(dh::device_vector<T> const &data) {
+template <typename T>
+T const *RawPtr(dh::device_vector<T> const &data) {
   return data.data().get();
 }
 
-template <typename T> T *RawPtr(dh::device_vector<T> &data) {
+template <typename T>
+T *RawPtr(dh::device_vector<T> &data) {
   return data.data().get();
 }
 
-template <typename T> T CheckJvmCall(T const &v, JNIEnv *jenv) {
+template <typename T>
+T CheckJvmCall(T const &v, JNIEnv *jenv) {
   if (!v) {
     CHECK(jenv->ExceptionOccurred());
     jenv->ExceptionDescribe();
@@ -41,32 +45,29 @@ template <typename T> T CheckJvmCall(T const &v, JNIEnv *jenv) {
 }
 
 template <typename VCont>
-void CopyColumnMask(xgboost::ArrayInterface<1> const &interface,
-                    std::vector<Json> const &columns, cudaMemcpyKind kind,
-                    size_t c, VCont *p_mask, Json *p_out, cudaStream_t stream) {
+void CopyColumnMask(xgboost::ArrayInterface<1> const &interface, std::vector<Json> const &columns,
+                    cudaMemcpyKind kind, size_t c, VCont *p_mask, Json *p_out,
+                    cudaStream_t stream) {
   auto &mask = *p_mask;
   auto &out = *p_out;
-  auto size = sizeof(typename VCont::value_type) * interface.n;
-  mask.resize(size);
+  // fixme: mask is compressed, do we need this many bytes?
+  auto n_bytes = sizeof(typename VCont::value_type) * interface.n;
+  mask.resize(n_bytes);
   CHECK(RawPtr(mask));
-  CHECK(size);
+  CHECK(n_bytes);
   CHECK(interface.valid.Data());
-  dh::safe_cuda(
-      cudaMemcpyAsync(RawPtr(mask), interface.valid.Data(), size, kind, stream));
+  dh::safe_cuda(cudaMemcpyAsync(RawPtr(mask), interface.valid.Data(), n_bytes, kind, stream));
   auto const &mask_column = columns[c]["mask"];
   out["mask"] = Object();
-  std::vector<Json> mask_data{
-      Json{reinterpret_cast<Integer::Int>(RawPtr(mask))},
-      Json{get<Boolean const>(mask_column["data"][1])}};
+  std::vector<Json> mask_data{Json{reinterpret_cast<Integer::Int>(RawPtr(mask))},
+                              Json{get<Boolean const>(mask_column["data"][1])}};
   out["mask"]["data"] = Array(std::move(mask_data));
   if (get<Array const>(mask_column["shape"]).size() == 2) {
-    std::vector<Json> mask_shape{
-        Json{get<Integer const>(mask_column["shape"][0])},
-        Json{get<Integer const>(mask_column["shape"][1])}};
+    std::vector<Json> mask_shape{Json{get<Integer const>(mask_column["shape"][0])},
+                                 Json{get<Integer const>(mask_column["shape"][1])}};
     out["mask"]["shape"] = Array(std::move(mask_shape));
   } else if (get<Array const>(mask_column["shape"]).size() == 1) {
-    std::vector<Json> mask_shape{
-        Json{get<Integer const>(mask_column["shape"][0])}};
+    std::vector<Json> mask_shape{Json{get<Integer const>(mask_column["shape"][0])}};
     out["mask"]["shape"] = Array(std::move(mask_shape));
   } else {
     LOG(FATAL) << "Invalid shape of mask";
@@ -95,9 +96,8 @@ void CopyInterface(std::vector<xgboost::ArrayInterface<1>> &interface_arr,
 
     auto &out = (*p_out)[c];
     out = Object();
-    std::vector<Json> j_data{
-        Json{Integer(reinterpret_cast<Integer::Int>(RawPtr(data)))},
-        Json{Boolean{false}}};
+    std::vector<Json> j_data{Json{Integer(reinterpret_cast<Integer::Int>(RawPtr(data)))},
+                             Json{Boolean{false}}};
 
     out["data"] = Array(std::move(j_data));
     out["shape"] = Array(std::vector<Json>{Json(Integer(interface.Shape<0>()))});
@@ -111,7 +111,7 @@ void CopyInterface(std::vector<xgboost::ArrayInterface<1>> &interface_arr,
 }
 
 template <typename T>
-void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, cudaStream_t stream) {
+void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, dh::CUDAStreamView stream) {
   auto &j_interface = *p_interface;
   CHECK_EQ(get<Array const>(j_interface).size(), 1);
   auto object = get<Object>(get<Array>(j_interface)[0]);
@@ -119,8 +119,8 @@ void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, cudaStream_t str
   out->resize(interface.Shape<0>());
   size_t element_size = interface.ElementSize();
   size_t size = element_size * interface.n;
-  dh::safe_cuda(cudaMemcpyAsync(RawPtr(*out), interface.data, size,
-                                cudaMemcpyDeviceToDevice, stream));
+  dh::safe_cuda(
+      cudaMemcpyAsync(RawPtr(*out), interface.data, size, cudaMemcpyDeviceToDevice, stream));
   j_interface[0]["data"][0] = reinterpret_cast<Integer::Int>(RawPtr(*out));
 }
 
@@ -135,15 +135,12 @@ struct DataFrame {
 class ExternalMemory {
  public:
   // Load data from the exact external memory to the GPU
-  virtual void LoadData(size_t batch_number,
-                        std::vector<xgboost::Json> *p_out,
+  virtual void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
                         cudaStream_t stream) = 0;
 
   // Stage data into the exact external memory from GPU.
-  virtual void StageData(
-      std::vector<xgboost::ArrayInterface<1>> &interface_arr,
-      std::vector<Json> const &columns,
-      cudaStream_t stream) = 0;
+  virtual void StageData(std::vector<xgboost::ArrayInterface<1>> &interface_arr,
+                         std::vector<Json> const &columns, dh::CUDAStreamView stream) = 0;
 
   virtual ~ExternalMemory() = default;
 
@@ -154,11 +151,10 @@ class ExternalMemory {
 };
 
 // The data will be stored on CPU memory
-class HostExternalMemory: public ExternalMemory {
+class HostExternalMemory : public ExternalMemory {
  public:
   void StageData(std::vector<xgboost::ArrayInterface<1>> &interfaces,
-                 std::vector<Json> const &columns,
-                 cudaStream_t stream) override {
+                 std::vector<Json> const &columns, dh::CUDAStreamView stream) override {
     std::cerr << "HostExternalMemory StageData batch number: " << std::endl;
     // DataFrame
     using T = decltype(host_columns_)::value_type::element_type;
@@ -168,8 +164,7 @@ class HostExternalMemory: public ExternalMemory {
                   &host_columns_.back()->valid, &host_columns_.back()->interfaces, stream);
   }
 
-  void LoadData(size_t batch_number,
-                std::vector<xgboost::Json> *p_out,
+  void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
                 cudaStream_t stream) override {
     std::cerr << "HostExternalMemory LoadData batch number: " << batch_number << std::endl;
     // Data
@@ -179,19 +174,18 @@ class HostExternalMemory: public ExternalMemory {
       auto column = ArrayInterface<1>(get<Object const>(interface));
       in.emplace_back(column);
     }
-    CopyInterface(in, json_interface, cudaMemcpyHostToDevice, &staging_data_,
-                  &staging_mask_, p_out, nullptr);
+    CopyInterface(in, json_interface, cudaMemcpyHostToDevice, &staging_data_, &staging_mask_, p_out,
+                  nullptr);
   }
 
  private:
-    template <typename T>
-    using Alloc = xgboost::common::cuda_impl::SamAllocator<T>;
-    template <typename U>
-    using HostVector = std::vector<U, Alloc<U>>;
-    // This vector is created for staging device data on host to save GPU memory.
-    // When space is not of concern, we can stage them on device memory directly.
-    std::vector<std::unique_ptr<DataFrame<HostVector<char>, HostVector<std::uint8_t>>>>
-        host_columns_;
+  template <typename T>
+  using Alloc = xgboost::common::cuda_impl::SamAllocator<T>;
+  template <typename U>
+  using HostVector = std::vector<U, Alloc<U>>;
+  // This vector is created for staging device data on host to save GPU memory.
+  // When space is not of concern, we can stage them on device memory directly.
+  std::vector<std::unique_ptr<DataFrame<HostVector<char>, HostVector<std::uint8_t>>>> host_columns_;
 };
 
 struct DataFile {
@@ -206,9 +200,9 @@ struct FilesDataFrame {
 };
 
 // The data will be cached into local disk.
-class DiskExternalMemory: public ExternalMemory {
+class DiskExternalMemory : public ExternalMemory {
  public:
-  DiskExternalMemory(std::string root): root_(root) {}
+  explicit DiskExternalMemory(std::string root) : root_(std::move(root)) {}
 
   void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
                 cudaStream_t stream) override {
@@ -261,8 +255,8 @@ class DiskExternalMemory: public ExternalMemory {
 
       std::vector<char> tmp;
       tmp.resize(size);
-      dh::safe_cuda(cudaMemcpyAsync(RawPtr(tmp), interface.data, size,
-                                    cudaMemcpyDeviceToHost, stream));
+      dh::safe_cuda(
+          cudaMemcpyAsync(RawPtr(tmp), interface.data, size, cudaMemcpyDeviceToHost, stream));
 
       std::string file_name = GenerateFileName(n_batches_, c, "data");
       WriteDataToFile(file_name, RawPtr(tmp), size);
@@ -278,22 +272,22 @@ class DiskExternalMemory: public ExternalMemory {
   }
 
   ~DiskExternalMemory() override {
-    for (auto cached_files: staged_files_) {
-        for (auto data_file : cached_files.data_files) {
-            std::cerr << "removing " << data_file.path.c_str() << std::endl;
-            std::remove(data_file.path.c_str());
-        }
-        for (auto data_file : cached_files.valid_files) {
-            std::remove(data_file.path.c_str());
-        }
+    for (auto cached_files : staged_files_) {
+      for (auto data_file : cached_files.data_files) {
+        std::cerr << "removing " << data_file.path.c_str() << std::endl;
+        std::remove(data_file.path.c_str());
+      }
+      for (auto data_file : cached_files.valid_files) {
+        std::remove(data_file.path.c_str());
+      }
     }
   };
 
  private:
   std::string GenerateFileName(size_t batch_number, size_t column, std::string type) const {
-      std::stringstream ss;
-      ss << root_ << "/" << batch_number << "_" << column << "_" << type << ".bin";
-      return ss.str();
+    std::stringstream ss;
+    ss << root_ << "/" << batch_number << "_" << column << "_" << type << ".bin";
+    return ss.str();
   }
 
   void WriteDataToFile(std::string path, char *data, size_t size) const {
@@ -307,7 +301,7 @@ class DiskExternalMemory: public ExternalMemory {
   }
 
   std::vector<FilesDataFrame> staged_files_;
-  const std::string root_; // the root path of external memory
+  const std::string root_;  // the root path of external memory
   size_t n_batches_ = 0;
 };
 
@@ -332,27 +326,22 @@ class DataIteratorProxy {
   size_t it_{0};
   size_t n_batches_{0};
   bool initialized_{false};
-  jobject last_batch_ {nullptr};
+  jobject last_batch_{nullptr};
 
-  cudaStream_t copy_stream_;
+  dh::CUDAStream copy_stream_;
 
  public:
-  explicit DataIteratorProxy(jobject jiter, std::string external_path): jiter_{jiter} {
+  explicit DataIteratorProxy(jobject jiter, std::string external_path) : jiter_{jiter} {
     if (!external_path.empty()) {
       ext_memory_ = std::make_unique<DiskExternalMemory>(external_path);
     } else {
       ext_memory_ = std::make_unique<HostExternalMemory>();
     }
     XGProxyDMatrixCreate(&proxy_);
-    jni_status_ =
-        GlobalJvm()->GetEnv(reinterpret_cast<void **>(&jenv_), JNI_VERSION_1_6);
+    jni_status_ = GlobalJvm()->GetEnv(reinterpret_cast<void **>(&jenv_), JNI_VERSION_1_6);
     this->Reset();
-    dh::safe_cuda(cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking));
   }
-  ~DataIteratorProxy() {
-    XGDMatrixFree(proxy_);
-    dh::safe_cuda(cudaStreamDestroy(copy_stream_));
-  }
+  ~DataIteratorProxy() { XGDMatrixFree(proxy_); }
 
   DMatrixHandle GetDMatrixHandle() const { return proxy_; }
 
@@ -367,7 +356,7 @@ class DataIteratorProxy {
     Json label = json_interface["label"];
     CHECK(!IsA<Null>(label));
     labels_.emplace_back(new dh::device_vector<float>);
-    CopyMetaInfo(&label, labels_.back().get(), copy_stream_);
+    CopyMetaInfo(&label, labels_.back().get(), copy_stream_.View());
     label_interfaces_.emplace_back(label);
 
     std::string str;
@@ -378,7 +367,7 @@ class DataIteratorProxy {
       Json weight = json_interface["weight"];
       CHECK(!IsA<Null>(weight));
       weights_.emplace_back(new dh::device_vector<float>);
-      CopyMetaInfo(&weight, weights_.back().get(), copy_stream_);
+      CopyMetaInfo(&weight, weights_.back().get(), copy_stream_.View());
       weight_interfaces_.emplace_back(weight);
 
       Json::Dump(weight, &str);
@@ -388,7 +377,7 @@ class DataIteratorProxy {
     if (json_map.find("baseMargin") != json_map.cend()) {
       Json basemargin = json_interface["baseMargin"];
       base_margins_.emplace_back(new dh::device_vector<float>);
-      CopyMetaInfo(&basemargin, base_margins_.back().get(), copy_stream_);
+      CopyMetaInfo(&basemargin, base_margins_.back().get(), copy_stream_.View());
       margin_interfaces_.emplace_back(basemargin);
 
       Json::Dump(basemargin, &str);
@@ -398,7 +387,7 @@ class DataIteratorProxy {
     if (json_map.find("qid") != json_map.cend()) {
       Json qid = json_interface["qid"];
       qids_.emplace_back(new dh::device_vector<int>);
-      CopyMetaInfo(&qid, qids_.back().get(), copy_stream_);
+      CopyMetaInfo(&qid, qids_.back().get(), copy_stream_.View());
       qid_interfaces_.emplace_back(qid);
 
       Json::Dump(qid, &str);
@@ -455,8 +444,7 @@ class DataIteratorProxy {
     ++n_batches_;
 
     // Stage the meta info.
-    auto json_interface =
-        Json::Load({interface_str.c_str(), interface_str.size()});
+    auto json_interface = Json::Load({interface_str.c_str(), interface_str.size()});
     CHECK(!IsA<Null>(json_interface));
     StageMetaInfo(json_interface);
 
@@ -469,7 +457,7 @@ class DataIteratorProxy {
       auto column = ArrayInterface<1>(get<Object const>(json_col));
       interfaces.emplace_back(column);
     }
-    ext_memory_->StageData(interfaces, json_columns, copy_stream_);
+    ext_memory_->StageData(interfaces, json_columns, copy_stream_.View());
 
     Json::Dump(features, &interface_str);
     XGProxyDMatrixSetDataCudaColumnar(proxy_, interface_str.c_str());
@@ -478,7 +466,7 @@ class DataIteratorProxy {
 
   int NextFirstLoop() {
     try {
-      dh::safe_cuda(cudaStreamSynchronize(copy_stream_));
+      copy_stream_.Sync();
       if (this->PullIterFromJVM()) {
         return 1;
       } else {
@@ -545,9 +533,7 @@ class DataIteratorProxy {
 };
 
 namespace {
-void Reset(DataIterHandle self) {
-  static_cast<xgboost::jni::DataIteratorProxy *>(self)->Reset();
-}
+void Reset(DataIterHandle self) { static_cast<xgboost::jni::DataIteratorProxy *>(self)->Reset(); }
 
 int Next(DataIterHandle self) {
   return static_cast<xgboost::jni::DataIteratorProxy *>(self)->Next();
@@ -555,7 +541,7 @@ int Next(DataIterHandle self) {
 
 template <typename T>
 using Deleter = std::function<void(T *)>;
-} // anonymous namespace
+}  // anonymous namespace
 
 XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_iter,
                                                     jlongArray jref, char const *config,
@@ -563,7 +549,8 @@ XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobjec
   xgboost_CHECK_C_ARG_PTR(config);
   auto jconfig = Json::Load(StringView{config});
   auto ext_mem_path = OptionalArg<String>(jconfig, "external_memory_path", std::string(""));
-  std::cerr << "XGQuantileDMatrixCreateFromCallbackImpl external_memory_path " << ext_mem_path << std::endl;
+  std::cerr << "XGQuantileDMatrixCreateFromCallbackImpl external_memory_path " << ext_mem_path
+            << std::endl;
 
   xgboost::jni::DataIteratorProxy proxy(jdata_iter, ext_mem_path);
   DMatrixHandle result;
@@ -583,5 +570,5 @@ XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobjec
   setHandle(jenv, jout, result);
   return ret;
 }
-} // namespace jni
-} // namespace xgboost
+}  // namespace jni
+}  // namespace xgboost
