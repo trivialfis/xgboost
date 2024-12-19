@@ -136,7 +136,7 @@ class ExternalMemory {
  public:
   // Load data from the exact external memory to the GPU
   virtual void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
-                        cudaStream_t stream) = 0;
+                        dh::CUDAStreamView stream) = 0;
 
   // Stage data into the exact external memory from GPU.
   virtual void StageData(std::vector<xgboost::ArrayInterface<1>> &interface_arr,
@@ -165,7 +165,7 @@ class HostExternalMemory : public ExternalMemory {
   }
 
   void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
-                cudaStream_t stream) override {
+                dh::CUDAStreamView stream) override {
     std::cerr << "HostExternalMemory LoadData batch number: " << batch_number << std::endl;
     // Data
     auto const &json_interface = host_columns_.at(batch_number)->interfaces;
@@ -205,7 +205,7 @@ class DiskExternalMemory : public ExternalMemory {
   explicit DiskExternalMemory(std::string root) : root_(std::move(root)) {}
 
   void LoadData(size_t batch_number, std::vector<xgboost::Json> *p_out,
-                cudaStream_t stream) override {
+                dh::CUDAStreamView stream) override {
     std::cerr << " DiskExternalMemory LoadData " << std::endl;
     auto files_data_frame = staged_files_.at(batch_number);
     auto col_number = files_data_frame.data_files.size();
@@ -244,7 +244,7 @@ class DiskExternalMemory : public ExternalMemory {
   }
 
   void StageData(std::vector<xgboost::ArrayInterface<1>> &interface_arr,
-                 const std::vector<Json> &columns, cudaStream_t stream) override {
+                 const std::vector<Json> &columns, dh::CUDAStreamView stream) override {
     std::cerr << " DiskExternalMemory StageData " << std::endl;
     ++n_batches_;
     FilesDataFrame files_data_frame;
@@ -509,7 +509,7 @@ class DataIteratorProxy {
     }
 
     std::vector<Json> out;
-    ext_memory_->LoadData(it_, &out, copy_stream_);
+    ext_memory_->LoadData(it_, &out, copy_stream_.View());
 
     Json temp{Array(std::move(out))};
     std::string interface_str;
