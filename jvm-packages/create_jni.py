@@ -21,9 +21,11 @@ CONFIG = {
     "USE_S3": "OFF",
     "USE_CUDA": "OFF",
     "USE_NCCL": "OFF",
+    "BUILD_WITH_SHARED_NCCL": "ON",
     "JVM_BINDINGS": "ON",
     "LOG_CAPI_INVOCATION": "OFF",
     "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+    "CMAKE_CUDA_ARCHITECTURES": "75",
 }
 
 
@@ -99,6 +101,7 @@ def native_build(args):
             CONFIG["USE_DLOPEN_NCCL"] = "OFF"
 
         args = ["-D{0}:BOOL={1}".format(k, v) for k, v in CONFIG.items()]
+        args.append("-GNinja")
 
         # if enviorment set GPU_ARCH_FLAG
         gpu_arch_flag = os.getenv("GPU_ARCH_FLAG", None)
@@ -129,6 +132,7 @@ def native_build(args):
                             maybe_makedirs(build_dir)
             else:
                 run("cmake .. " + " ".join(args))
+            # run()
             run("cmake --build . --config Release" + maybe_parallel_build)
 
 

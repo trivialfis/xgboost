@@ -124,7 +124,8 @@ void CopyMetaInfo(Json *p_interface, dh::device_vector<T> *out, cudaStream_t str
   j_interface[0]["data"][0] = reinterpret_cast<Integer::Int>(RawPtr(*out));
 }
 
-template <typename DCont, typename VCont> struct DataFrame {
+template <typename DCont, typename VCont>
+struct DataFrame {
   std::vector<DCont> data;
   std::vector<VCont> valid;
   std::vector<Json> interfaces;
@@ -184,13 +185,12 @@ class HostExternalMemory: public ExternalMemory {
 
  private:
     template <typename T>
-    using Alloc = xgboost::common::cuda_impl::PinnedAllocator<T>;
+    using Alloc = xgboost::common::cuda_impl::SamAllocator<T>;
     template <typename U>
     using HostVector = std::vector<U, Alloc<U>>;
     // This vector is created for staging device data on host to save GPU memory.
     // When space is not of concern, we can stage them on device memory directly.
-    std::vector<
-        std::unique_ptr<DataFrame<HostVector<char>, HostVector<std::uint8_t>>>>
+    std::vector<std::unique_ptr<DataFrame<HostVector<char>, HostVector<std::uint8_t>>>>
         host_columns_;
 };
 
@@ -424,20 +424,18 @@ class DataIteratorProxy {
     jclass iterClass = jenv_->FindClass("java/util/Iterator");
     this->CloseJvmBatch();
 
-    jmethodID has_next =
-        CheckJvmCall(jenv_->GetMethodID(iterClass, "hasNext", "()Z"), jenv_);
-    jmethodID next = CheckJvmCall(
-        jenv_->GetMethodID(iterClass, "next", "()Ljava/lang/Object;"), jenv_);
+    jmethodID has_next = CheckJvmCall(jenv_->GetMethodID(iterClass, "hasNext", "()Z"), jenv_);
+    jmethodID next =
+        CheckJvmCall(jenv_->GetMethodID(iterClass, "next", "()Ljava/lang/Object;"), jenv_);
 
     if (jenv_->CallBooleanMethod(jiter_, has_next)) {
       // batch should be ColumnBatch from jvm
       jobject batch = CheckJvmCall(jenv_->CallObjectMethod(jiter_, next), jenv_);
       jclass batch_class = CheckJvmCall(jenv_->GetObjectClass(batch), jenv_);
-      jmethodID toJson = CheckJvmCall(jenv_->GetMethodID(
-        batch_class, "toJson", "()Ljava/lang/String;"), jenv_);
+      jmethodID toJson =
+          CheckJvmCall(jenv_->GetMethodID(batch_class, "toJson", "()Ljava/lang/String;"), jenv_);
 
-      auto jinterface =
-        static_cast<jstring>(jenv_->CallObjectMethod(batch, toJson));
+      auto jinterface = static_cast<jstring>(jenv_->CallObjectMethod(batch, toJson));
       CheckJvmCall(jinterface, jenv_);
       char const *c_interface_str =
           CheckJvmCall(jenv_->GetStringUTFChars(jinterface, nullptr), jenv_);
