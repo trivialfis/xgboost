@@ -1,5 +1,5 @@
 /**
- * Copyright 2014-2024, XGBoost Contributors
+ * Copyright 2014-2025, XGBoost Contributors
  */
 #include <dmlc/common.h>
 #include <dmlc/omp.h>
@@ -13,23 +13,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "../../src/c_api/c_api_error.h"
-#include "../../src/c_api/c_api_utils.h"  // MakeSparseFromPtr
-#include "../../src/common/threading_utils.h"
+#include "../../src/c_api/c_api_utils.h"     // for MakeSparseFromPtr
 #include "../../src/data/array_interface.h"  // for ArrayInterface
-
-#include "./xgboost_R.h"  // Must follow other includes.
 
 #ifdef _MSC_VER
 #error "Compilation of R package with MSVC is not supported due to issues handling R headers"
 #endif
+
+#include "./xgboost_R.h"  // Must follow other includes.
 
 namespace {
 
@@ -171,7 +169,7 @@ SEXP SafeAllocInteger(size_t size, SEXP continuation_token) {
   return "";
 }
 
-[[nodiscard]] std::string MakeArrayInterfaceFromRDataFrame(SEXP R_df) {
+[[nodiscard]] std::pair<std::string, SEXP> MakeArrayInterfaceFromRDataFrame(SEXP R_df) {
   auto make_vec = [&](auto const *ptr, std::size_t len) {
     auto v = xgboost::linalg::MakeVec(ptr, len);
     return xgboost::linalg::ArrayInterface(v);
@@ -182,11 +180,14 @@ SEXP SafeAllocInteger(size_t size, SEXP continuation_token) {
   CHECK_GT(n_features, 0);
   std::size_t len = Rf_xlength(VECTOR_ELT(R_df, 0));
 
+  SEXP cats_cache = Rf_protect(Rf_allocVector(VECSXP, n_features));
+
   // The `data.frame` in R actually converts all data into numeric. The other type
   // handlers here are not used. At the moment they are kept as a reference for when we
   // can avoid making data copies during transformation.
   for (R_xlen_t i = 0; i < n_features; ++i) {
-    switch (TYPEOF(VECTOR_ELT(R_df, i))) {
+    auto t = TYPEOF(VECTOR_ELT(R_df, i));
+    switch (t) {
       case INTSXP: {
         auto const *ptr = INTEGER(VECTOR_ELT(R_df, i));
         array[i] = make_vec(ptr, len);
@@ -202,14 +203,61 @@ SEXP SafeAllocInteger(size_t size, SEXP continuation_token) {
         array[i] = make_vec(ptr, len);
         break;
       }
+      case VECSXP: {
+        auto v = VECTOR_ELT(R_df, i);
+        auto scodes = VECTOR_ELT(v, 0);
+        auto scats = VECTOR_ELT(v, 1);
+
+        CHECK_EQ(TYPEOF(scodes), REALSXP);
+        CHECK_EQ(TYPEOF(scats), STRSXP);
+
+        // Handle names
+        auto n_cats = Rf_xlength(scats);
+        std::vector<char> cats;               // concat into a single string
+        std::vector<std::size_t> offsets{0};  // offset of that string
+        for (decltype(n_cats) j = 0; j < n_cats; ++j) {
+          auto len = Rf_xlength(STRING_ELT(scats, j));
+          offsets.push_back(len);
+          auto const *ptr = CHAR(STRING_ELT(scats, j));
+          std::copy_n(ptr, len, std::back_inserter(cats));
+        }
+        std::partial_sum(offsets.cbegin(), offsets.cend(), offsets.begin());
+
+        CHECK_EQ(offsets.back(), cats.size());
+        auto r_cats = Rf_protect(Rf_allocVector(STRSXP, 1));
+        SET_STRING_ELT(r_cats, 0, Rf_mkChar(cats.data()));
+        auto r_offsets = Rf_protect(Rf_allocVector(INTSXP, offsets.size()));
+        std::copy(offsets.cbegin(), offsets.cend(), INTEGER(r_offsets));
+
+        auto col = xgboost::Array{};
+        auto jcats = xgboost::Object{};
+        jcats["values"] = make_vec(CHAR(STRING_ELT(r_cats, 0)), cats.size());
+        jcats["offsets"] = make_vec(INTEGER(r_offsets), Rf_xlength(r_offsets));
+        col.GetArray().emplace_back(std::move(jcats));
+
+        // Handle codes
+        auto const *codes = REAL(scodes);
+        col.GetArray().emplace_back(make_vec(codes, Rf_xlength(scodes)));
+        array[i] = std::move(col);
+
+        SEXP cell = Rf_protect(Rf_allocVector(VECSXP, 2));
+        SET_VECTOR_ELT(cell, 0, r_cats);
+        SET_VECTOR_ELT(cell, 1, r_offsets);
+        SET_VECTOR_ELT(cats_cache, i, cell);
+
+        Rf_unprotect(3);
+        break;
+      }
       default: {
-        LOG(FATAL) << "data.frame has unsupported type.";
+        LOG(FATAL) << "data.frame has unsupported type:" << t;
       }
     }
   }
 
+  Rf_unprotect(1);
+
   xgboost::Json jinterface{std::move(array)};
-  return xgboost::Json::Dump(jinterface);
+  return {xgboost::Json::Dump(jinterface), cats_cache};
 }
 
 void AddMissingToJson(xgboost::Json *jconfig, SEXP missing, SEXPTYPE arr_type) {
@@ -415,13 +463,14 @@ XGB_DLL SEXP XGDMatrixCreateFromDF_R(SEXP df, SEXP missing, SEXP n_threads) {
   DMatrixHandle handle;
   std::int32_t rc{0};
   {
-    const std::string sinterface = MakeArrayInterfaceFromRDataFrame(df);
+    // no need to return cache to R as DMatrix ctor is eager.
+    auto [ainf, _] = MakeArrayInterfaceFromRDataFrame(df);
     xgboost::Json jconfig{xgboost::Object{}};
     jconfig["missing"] = Rf_asReal(missing);
     jconfig["nthread"] = Rf_asInteger(n_threads);
     std::string sconfig = xgboost::Json::Dump(jconfig);
 
-    rc = XGDMatrixCreateFromColumnar(sinterface.c_str(), sconfig.c_str(), &handle);
+    rc = XGDMatrixCreateFromColumnar(ainf.c_str(), sconfig.c_str(), &handle);
   }
 
   CHECK_CALL(rc);
@@ -722,7 +771,7 @@ XGB_DLL SEXP XGProxyDMatrixSetDataColumnar_R(SEXP handle, SEXP lst) {
   DMatrixHandle proxy_dmat = R_ExternalPtrAddr(handle);
   int res_code;
   {
-    std::string sinterface = MakeArrayInterfaceFromRDataFrame(lst);
+    auto [sinterface, cats_cache] = MakeArrayInterfaceFromRDataFrame(lst);
     res_code = XGProxyDMatrixSetDataColumnar(proxy_dmat, sinterface.c_str());
   }
   CHECK_CALL(res_code);
@@ -1300,7 +1349,7 @@ std::unique_ptr<ProxyDmatrixWrapper> GetProxyDMatrixWithBaseMargin(SEXP base_mar
   }
 }
 
-enum class PredictionInputType {DMatrix, DenseMatrix, CSRMatrix, DataFrame};
+enum class PredictionInputType { kDMatrix, kDenseMatrix, kCSRMatrix, kDataFrame };
 
 SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
                                     PredictionInputType input_type, SEXP missing,
@@ -1317,14 +1366,14 @@ SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
   int res_code;
   {
     switch (input_type) {
-      case PredictionInputType::DMatrix: {
+      case PredictionInputType::kDMatrix: {
         res_code = XGBoosterPredictFromDMatrix(R_ExternalPtrAddr(handle),
                                                R_ExternalPtrAddr(input_data), c_json_config,
                                                &out_shape, &out_dim, &out_result);
         break;
       }
 
-      case PredictionInputType::CSRMatrix: {
+      case PredictionInputType::kCSRMatrix: {
         std::unique_ptr<ProxyDmatrixWrapper> proxy_dmat = GetProxyDMatrixWithBaseMargin(
           base_margin);
         DMatrixHandle proxy_dmat_handle = proxy_dmat.get()? proxy_dmat->get_handle() : nullptr;
@@ -1349,7 +1398,7 @@ SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
         break;
       }
 
-      case PredictionInputType::DenseMatrix: {
+      case PredictionInputType::kDenseMatrix: {
         std::unique_ptr<ProxyDmatrixWrapper> proxy_dmat = GetProxyDMatrixWithBaseMargin(
           base_margin);
         DMatrixHandle proxy_dmat_handle = proxy_dmat.get()? proxy_dmat->get_handle() : nullptr;
@@ -1366,12 +1415,12 @@ SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
         break;
       }
 
-      case PredictionInputType::DataFrame: {
+      case PredictionInputType::kDataFrame: {
         std::unique_ptr<ProxyDmatrixWrapper> proxy_dmat = GetProxyDMatrixWithBaseMargin(
           base_margin);
         DMatrixHandle proxy_dmat_handle = proxy_dmat.get()? proxy_dmat->get_handle() : nullptr;
 
-        const std::string df_str = MakeArrayInterfaceFromRDataFrame(input_data);
+        auto [df_str, cats_cache] = MakeArrayInterfaceFromRDataFrame(input_data);
 
         xgboost::StringView json_str(c_json_config);
         xgboost::Json new_json = xgboost::Json::Load(json_str);
@@ -1411,25 +1460,25 @@ SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
 
 XGB_DLL SEXP XGBoosterPredictFromDMatrix_R(SEXP handle, SEXP dmat, SEXP json_config)  {
   return XGBoosterPredictGeneric(handle, dmat, json_config,
-                                 PredictionInputType::DMatrix, R_NilValue, R_NilValue);
+                                 PredictionInputType::kDMatrix, R_NilValue, R_NilValue);
 }
 
 XGB_DLL SEXP XGBoosterPredictFromDense_R(SEXP handle, SEXP R_mat, SEXP missing,
                                          SEXP json_config, SEXP base_margin) {
   return XGBoosterPredictGeneric(handle, R_mat, json_config,
-                                 PredictionInputType::DenseMatrix, missing, base_margin);
+                                 PredictionInputType::kDenseMatrix, missing, base_margin);
 }
 
 XGB_DLL SEXP XGBoosterPredictFromCSR_R(SEXP handle, SEXP lst, SEXP missing,
                                        SEXP json_config, SEXP base_margin) {
   return XGBoosterPredictGeneric(handle, lst, json_config,
-                                 PredictionInputType::CSRMatrix, missing, base_margin);
+                                 PredictionInputType::kCSRMatrix, missing, base_margin);
 }
 
 XGB_DLL SEXP XGBoosterPredictFromColumnar_R(SEXP handle, SEXP R_df, SEXP missing,
                                             SEXP json_config, SEXP base_margin) {
   return XGBoosterPredictGeneric(handle, R_df, json_config,
-                                 PredictionInputType::DataFrame, missing, base_margin);
+                                 PredictionInputType::kDataFrame, missing, base_margin);
 }
 
 XGB_DLL SEXP XGBoosterLoadModel_R(SEXP handle, SEXP fname) {

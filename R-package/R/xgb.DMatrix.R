@@ -180,9 +180,7 @@ xgb.DMatrix <- function(
   } else if (is.data.frame(data)) {
     tmp <- .process.df.for.dmatrix(data, feature_types)
     feature_types <- tmp$feature_types
-    handle <- .Call(
-      XGDMatrixCreateFromDF_R, tmp$lst, missing, nthread
-    )
+    res <- .Call(XGDMatrixCreateFromDF_R, tmp$lst, missing, nthread)
     rm(tmp)
   } else {
     stop("xgb.DMatrix does not support construction from ", typeof(data))
@@ -238,10 +236,13 @@ xgb.DMatrix <- function(
   }
 
   lst <- lapply(df, function(col) {
-    is_factor <- is.factor(col)
-    col <- as.numeric(col)
-    if (is_factor) {
-      col <- col - 1
+    if (is.factor(col)) {
+      cat("isfac col:", col, levels(col), "\n")
+      levs <- levels(col)
+      col <- list(data=as.numeric(col) - 1, levels=levs)
+    } else {
+      cat("col:", col, "\n")
+      col <- as.numeric(col)
     }
     return(col)
   })
