@@ -8,7 +8,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 
 import java.util.Iterator;
 
-public class ExtMemQuantileDMatrix extends DMatrix {
+public class ExtMemQuantileDMatrix extends QuantileDMatrix {
   public ExtMemQuantileDMatrix(Iterator<ColumnBatch> iter,
       float missing,
       int maxBin,
@@ -16,26 +16,30 @@ public class ExtMemQuantileDMatrix extends DMatrix {
       int nthread,
       int max_num_device_pages,
       int max_quantile_batches,
-      int min_cache_page_bytes) {
-    super(0);
+      int min_cache_page_bytes) throws XGBoostError {
     long[] out = new long[1];
     long[] ref_handle = null;
     if (ref != null) {
       ref_handle = new long[1];
       ref_handle[0] = ref.getHandle();
     }
-    String conf = getConfig(missing, maxBin, nthread);
-    XGBoostJNI.checkCall(XGBoostJNI.XGQuantileDMatrixCreateFromCallback(
-        iter, ref, conf, out));
+    String conf = this.getConfig(missing, maxBin, nthread, max_num_device_pages, max_quantile_batches,
+        min_cache_page_bytes);
+    XGBoostJNI.checkCall(XGBoostJNI.XGExtMemQuantileDMatrixCreateFromCallback(
+        iter, ref_handle, conf, out));
     handle = out[0];
   }
 
-  private String getConfig(float missing, int maxBin, int nthread) {
+  private String getConfig(float missing, int maxBin, int nthread, int max_num_device_pages,
+      int max_quantile_batches,
+      int min_cache_page_bytes) {
     Map<String, Object> conf = new java.util.HashMap<>();
     conf.put("missing", missing);
     conf.put("max_bin", maxBin);
     conf.put("nthread", nthread);
-    conf.put("use_ext_mem", true);
+    conf.put("max_num_device_pages", max_num_device_pages);
+    conf.put("max_quantile_batches", max_quantile_batches);
+    conf.put("min_cache_page_bytes", min_cache_page_bytes);
     ObjectMapper mapper = new ObjectMapper();
 
     // Handle NaN values. Jackson by default serializes NaN values into strings.

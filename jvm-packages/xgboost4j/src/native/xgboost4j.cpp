@@ -1298,9 +1298,11 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_CommunicatorAllred
 }
 
 namespace xgboost::jni {
-XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass jcls, jobject jdata_iter,
-                                                    jobject jref_iter, char const *config,
-                                                    jlongArray jout);
+int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass jcls, jobject jdata_iter,
+                                            jobject jref_iter, char const *config, jlongArray jout);
+
+int XGExtMemQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jobject jdata_iter, jlongArray jref,
+                                                  char const *config, jlongArray jout);
 }  // namespace xgboost::jni
 
 /*
@@ -1332,6 +1334,8 @@ Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGExtMemQuantileDMatrixCreateFromCallback
                                                         [&](char const *ptr) {
                                                           jenv->ReleaseStringUTFChars(jconf, ptr);
                                                         }};
+  return xgboost::jni::XGExtMemQuantileDMatrixCreateFromCallbackImpl(jenv, jdata_iter, jref,
+                                                                     conf.get(), jout);
 }
 
 /*

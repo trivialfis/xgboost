@@ -4,6 +4,7 @@
 #include <jni.h>
 #include <xgboost/c_api.h>
 
+#include "../../../../src/common/common.h"
 #include "../../../../src/common/cuda_pinned_allocator.h"
 #include "../../../../src/common/device_vector.cuh"  // for device_vector
 #include "../../../../src/common/json_utils.h"
@@ -484,9 +485,32 @@ template <typename T>
 using Deleter = std::function<void(T *)>;
 }  // anonymous namespace
 
-XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_iter,
-                                                    jlongArray jref, char const *config,
-                                                    jlongArray jout) {
+int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_iter,
+                                            jlongArray jref, char const *config, jlongArray jout) {
+  DMatrixHandle result;
+  DMatrixHandle ref{nullptr};
+
+  if (jref != nullptr) {
+    std::unique_ptr<jlong, Deleter<jlong>> refptr{jenv->GetLongArrayElements(jref, nullptr),
+                                                  [&](jlong *ptr) {
+                                                    jenv->ReleaseLongArrayElements(jref, ptr, 0);
+                                                    jenv->DeleteLocalRef(jref);
+                                                  }};
+    ref = reinterpret_cast<DMatrixHandle>(refptr.get()[0]);
+  }
+
+  int ret = 0;
+  xgboost::jni::DataIteratorProxy proxy(jdata_iter);
+  ret = XGQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref, Reset, Next,
+                                            config, &result);
+
+  JVM_CHECK_CALL(ret);
+  setHandle(jenv, jout, result);
+  return ret;
+}
+
+int XGExtMemQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jobject jdata_iter, jlongArray jref,
+                                                  char const *config, jlongArray jout) {
   DMatrixHandle result;
   DMatrixHandle ref{nullptr};
 
@@ -500,21 +524,12 @@ XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobjec
   }
 
   auto jconfig = Json::Load(StringView{config});
-  auto use_ext_mem = OptionalArg<Boolean>(jconfig, "use_ext_mem", false);
-  jconfig["on_host"] = true;
-  jconfig["cache_prefix"] = String{"."};
 
   int ret = 0;
-  if (use_ext_mem) {
-    xgboost::jni::ExtMemIteratorProxy proxy(jdata_iter);
-    ret = XGExtMemQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref,
-                                                    ExternalMemoryReset, ExternalMemoryNext, config,
-                                                    &result);
-  } else {
-    xgboost::jni::DataIteratorProxy proxy(jdata_iter);
-    ret = XGQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref, Reset, Next,
-                                              config, &result);
-  }
+  xgboost::jni::ExtMemIteratorProxy proxy{jdata_iter};
+  ret = XGExtMemQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref,
+                                                  ExternalMemoryReset, ExternalMemoryNext, config,
+                                                  &result);
   JVM_CHECK_CALL(ret);
   setHandle(jenv, jout, result);
   return ret;
