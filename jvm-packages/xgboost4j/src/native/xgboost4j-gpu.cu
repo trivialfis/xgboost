@@ -501,6 +501,9 @@ XGB_DLL int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobjec
 
   auto jconfig = Json::Load(StringView{config});
   auto use_ext_mem = OptionalArg<Boolean>(jconfig, "use_ext_mem", false);
+  jconfig["on_host"] = true;
+  jconfig["cache_prefix"] = String{"."};
+
   int ret = 0;
   if (use_ext_mem) {
     xgboost::jni::ExtMemIteratorProxy proxy(jdata_iter);

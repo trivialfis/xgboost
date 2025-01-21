@@ -17,8 +17,8 @@ package ml.dmlc.xgboost4j.java;
 
 import java.nio.ByteBuffer;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+// import org.apache.commons.logging.Log;
+// import org.apache.commons.logging.LogFactory;
 
 /**
  * xgboost JNI functions
@@ -27,13 +27,13 @@ import org.apache.commons.logging.LogFactory;
  * @author hzx
  */
 class XGBoostJNI {
-  private static final Log logger = LogFactory.getLog(DMatrix.class);
+  // private static final Log logger = LogFactory.getLog(DMatrix.class);
 
   static {
     try {
       NativeLibLoader.initXGBoost();
     } catch (Exception ex) {
-      logger.error("Failed to load native library", ex);
+      // logger.error("Failed to load native library", ex);
       throw new RuntimeException(ex);
     }
   }
@@ -172,7 +172,10 @@ class XGBoostJNI {
     long handle, String field, String json);
 
   public final static native int XGQuantileDMatrixCreateFromCallback(
-    java.util.Iterator<ColumnBatch> iter, long[] ref, String config, long[] out);
+      java.util.Iterator<ColumnBatch> iter, long[] ref, String config, long[] out);
+
+  public final static native int XGExtMemQuantileDMatrixCreateFromCallback(
+      java.util.Iterator<ColumnBatch> iter, long[] ref, String config, long[] out);
 
   public final static native int XGDMatrixCreateFromArrayInterfaceColumns(
     String featureJson, float missing, int nthread, long[] out);

@@ -1321,6 +1321,21 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGQuantileDMatrixC
 
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
+ * Method:    XGExtMemQuantileDMatrixCreateFromCallback
+ * Signature: (Ljava/util/Iterator;[JLjava/lang/String;[J)I
+ */
+JNIEXPORT jint JNICALL
+Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGExtMemQuantileDMatrixCreateFromCallback(
+    JNIEnv *jenv, jclass jcls, jobject jdata_iter, jlongArray jref, jstring jconf,
+    jlongArray jout) {
+  std::unique_ptr<char const, Deleter<char const>> conf{jenv->GetStringUTFChars(jconf, nullptr),
+                                                        [&](char const *ptr) {
+                                                          jenv->ReleaseStringUTFChars(jconf, ptr);
+                                                        }};
+}
+
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixSetInfoFromInterface
  * Signature: (JLjava/lang/String;Ljava/lang/String;)I
  */
