@@ -9,6 +9,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import java.util.Iterator;
 
 public class ExtMemQuantileDMatrix extends QuantileDMatrix {
+  // on_host is set to true by default as we only support GPU at the moment
+  // cache_prefix is not used yet since we have on_host=true.
   public ExtMemQuantileDMatrix(Iterator<ColumnBatch> iter,
       float missing,
       int maxBin,
@@ -40,6 +42,8 @@ public class ExtMemQuantileDMatrix extends QuantileDMatrix {
     conf.put("max_num_device_pages", max_num_device_pages);
     conf.put("max_quantile_batches", max_quantile_batches);
     conf.put("min_cache_page_bytes", min_cache_page_bytes);
+    conf.put("on_host", true);
+    conf.put("cache_prefix", ".");
     ObjectMapper mapper = new ObjectMapper();
 
     // Handle NaN values. Jackson by default serializes NaN values into strings.

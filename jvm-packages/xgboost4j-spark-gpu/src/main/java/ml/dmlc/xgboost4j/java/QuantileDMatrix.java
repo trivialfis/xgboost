@@ -54,6 +54,10 @@ class F32NaNSerializer extends JsonSerializer<Float> {
  * QuantileDMatrix will only be used to train
  */
 public class QuantileDMatrix extends DMatrix {
+  // implicit constructor for the ext mem version of the QDM.
+  protected QuantileDMatrix() {
+  }
+
   /**
    * Create QuantileDMatrix from iterator based on the cuda array interface
    *

@@ -485,8 +485,8 @@ template <typename T>
 using Deleter = std::function<void(T *)>;
 }  // anonymous namespace
 
-int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_iter,
-                                            jlongArray jref, char const *config, jlongArray jout) {
+int QdmFromCallback(JNIEnv *jenv, jobject jdata_iter, jlongArray jref, char const *config,
+                    bool is_extmem, jlongArray jout) {
   DMatrixHandle result;
   DMatrixHandle ref{nullptr};
 
@@ -501,35 +501,14 @@ int XGQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jclass, jobject jdata_
 
   int ret = 0;
   xgboost::jni::DataIteratorProxy proxy(jdata_iter);
-  ret = XGQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref, Reset, Next,
-                                            config, &result);
-
-  JVM_CHECK_CALL(ret);
-  setHandle(jenv, jout, result);
-  return ret;
-}
-
-int XGExtMemQuantileDMatrixCreateFromCallbackImpl(JNIEnv *jenv, jobject jdata_iter, jlongArray jref,
-                                                  char const *config, jlongArray jout) {
-  DMatrixHandle result;
-  DMatrixHandle ref{nullptr};
-
-  if (jref != nullptr) {
-    std::unique_ptr<jlong, Deleter<jlong>> refptr{jenv->GetLongArrayElements(jref, nullptr),
-                                                  [&](jlong *ptr) {
-                                                    jenv->ReleaseLongArrayElements(jref, ptr, 0);
-                                                    jenv->DeleteLocalRef(jref);
-                                                  }};
-    ref = reinterpret_cast<DMatrixHandle>(refptr.get()[0]);
+  if (is_extmem) {
+    ret = XGQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref, Reset, Next,
+                                              config, &result);
+  } else {
+    ret = XGExtMemQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref, Reset,
+                                                    Next, config, &result);
   }
 
-  auto jconfig = Json::Load(StringView{config});
-
-  int ret = 0;
-  xgboost::jni::ExtMemIteratorProxy proxy{jdata_iter};
-  ret = XGExtMemQuantileDMatrixCreateFromCallback(&proxy, proxy.GetDMatrixHandle(), ref,
-                                                  ExternalMemoryReset, ExternalMemoryNext, config,
-                                                  &result);
   JVM_CHECK_CALL(ret);
   setHandle(jenv, jout, result);
   return ret;
