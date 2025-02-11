@@ -28,6 +28,7 @@ from typing import Callable, List, Tuple
 import numpy as np
 from loky import get_reusable_executor
 from sklearn.datasets import make_regression
+from cuml.datasets import make_regression
 
 import xgboost
 from xgboost import collective as coll
@@ -38,13 +39,14 @@ def make_batches(
     n_samples_per_batch: int, n_features: int, n_batches: int, tmpdir: str, rank: int
 ) -> List[Tuple[str, str]]:
     files: List[Tuple[str, str]] = []
-    rng = np.random.RandomState(rank)
+    rng = np.random.RandomState(int(rank))
+    import cupy as cp
     for i in range(n_batches):
-        X, y = make_regression(n_samples_per_batch, n_features, random_state=rng)
+        X, y = make_regression(int(n_samples_per_batch), n_features, random_state=rank)
         X_path = os.path.join(tmpdir, f"X-r{rank}-{i}.npy")
         y_path = os.path.join(tmpdir, f"y-r{rank}-{i}.npy")
-        np.save(X_path, X)
-        np.save(y_path, y)
+        cp.save(X_path, X)
+        cp.save(y_path, y)
         files.append((X_path, y_path))
     return files
 
@@ -107,8 +109,11 @@ def setup_rmm() -> None:
 
     try:
         # Use the arena pool if available
-        from cuda.bindings import runtime as cudart
-        from rmm.mr import ArenaMemoryResource
+        from cuda import cudart
+        try:
+            from cuda.bindings import runtime as cudart
+        except ImportError:
+            from rmm.mr import ArenaMemoryResource
 
         status, free, total = cudart.cudaMemGetInfo()
         if status != cudart.cudaError_t.cudaSuccess:
@@ -121,54 +126,64 @@ def setup_rmm() -> None:
         # large pages repeatly, it's not easy to handle fragmentation. We can use more
         # experiments here.
         mr = rmm.mr.PoolMemoryResource(rmm.mr.CudaAsyncMemoryResource())
-        rmm.mr.set_current_device_resource(mr)
+    rmm.mr.set_current_device_resource(mr)
     # Set the allocator for cupy as well.
     cp.cuda.set_allocator(rmm_cupy_allocator)
 
 
-def hist_train(worker_idx: int, tmpdir: str, device: str, rabit_args: dict) -> None:
+def hist_train(worker_idx: int, device: str, rabit_args: dict) -> None:
     """The hist tree method can use a special data structure `ExtMemQuantileDMatrix` for
     faster initialization and lower memory usage.
 
     """
 
     # Make sure XGBoost is using RMM for all allocations.
-    with coll.CommunicatorContext(**rabit_args), xgboost.config_context(use_rmm=True):
-        # Generate the data for demonstration. The sythetic data is sharded by workers.
-        files = make_batches(
-            n_samples_per_batch=4096,
-            n_features=16,
-            n_batches=17,
-            tmpdir=tmpdir,
-            rank=coll.get_rank(),
-        )
-        # Since we are running two workers on a single node, we should divide the number
-        # of threads between workers.
-        n_threads = os.cpu_count()
-        assert n_threads is not None
-        n_threads = max(n_threads // coll.get_world_size(), 1)
-        it = Iterator(device, files)
-        Xy = xgboost.ExtMemQuantileDMatrix(
-            it, missing=np.nan, enable_categorical=False, nthread=n_threads
-        )
-        # Check the device is correctly set.
-        if device == "cuda":
-            assert int(os.environ["CUDA_VISIBLE_DEVICES"]) < coll.get_world_size()
-        booster = xgboost.train(
-            {
-                "tree_method": "hist",
-                "max_depth": 4,
-                "device": it.device,
-                "nthread": n_threads,
-            },
-            Xy,
-            evals=[(Xy, "Train")],
-            num_boost_round=10,
-        )
-        booster.predict(Xy)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with coll.CommunicatorContext(**rabit_args, DMLC_TIMEOUT=10), xgboost.config_context(use_rmm=True, verbosity=2):
+            # Generate the data for demonstration. The sythetic data is sharded by workers.
+            print("start make batches")
+            try:
+                files = make_batches(
+                    n_samples_per_batch=int(2 ** 10),
+                    n_features=256,
+                    n_batches=17,
+                    tmpdir=tmpdir,
+                    rank=coll.get_rank(),
+                )
+            except Exception as e:
+                print(f"something went wrong: {e}", flush=True)
+                exit(1)
+            print(f"files: {files}", flush=True)
+            # Since we are running two workers on a single node, we should divide the number
+            # of threads between workers.
+            n_threads = os.cpu_count()
+            assert n_threads is not None
+            print(f"n_threads: {n_threads}")
+            n_threads = max(n_threads // coll.get_world_size(), 1)
+            it = Iterator(device, files)
+            print("start extmem qdm", flush=True)
+            Xy = xgboost.ExtMemQuantileDMatrix(
+                it, missing=np.nan, enable_categorical=False, nthread=n_threads
+            )
+            # Check the device is correctly set.
+            if device == "cuda":
+                assert int(os.environ["CUDA_VISIBLE_DEVICES"]) < coll.get_world_size()
+            print("start training", flush=True)
+            booster = xgboost.train(
+                {
+                    "tree_method": "hist",
+                    "max_depth": 4,
+                    "device": it.device,
+                    "nthread": n_threads,
+                },
+                Xy,
+                evals=[(Xy, "Train")],
+                num_boost_round=10,
+            )
+            booster.predict(Xy)
 
 
-def main(tmpdir: str, args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace) -> None:
     n_workers = 2
 
     tracker = RabitTracker(host_ip="127.0.0.1", n_workers=n_workers)
@@ -182,6 +197,9 @@ def main(tmpdir: str, args: argparse.Namespace) -> None:
             lop, sidx = mp.current_process().name.split("-")
             idx = int(sidx)  # 1-based indexing from loky
             os.environ["CUDA_VISIBLE_DEVICES"] = str(idx - 1)
+            # It's important to use RMM with `CudaAsyncMemoryResource`. for GPU-based
+            # external memory to improve performance. If XGBoost is not built with RMM
+            # support, a warning is raised when constructing the `DMatrix`.
             setup_rmm()
 
     with get_reusable_executor(
@@ -190,11 +208,12 @@ def main(tmpdir: str, args: argparse.Namespace) -> None:
         # Poor man's currying
         fn = update_wrapper(
             partial(
-                hist_train, tmpdir=tmpdir, device=args.device, rabit_args=rabit_args
+                hist_train, device=args.device, rabit_args=rabit_args
             ),
             hist_train,
         )
         pool.map(fn, range(n_workers))
+    print("Done")
 
 
 if __name__ == "__main__":
@@ -204,12 +223,7 @@ if __name__ == "__main__":
     if args.device == "cuda":
         import cupy as cp
 
-        # It's important to use RMM with `CudaAsyncMemoryResource`. for GPU-based
-        # external memory to improve performance. If XGBoost is not built with RMM
-        # support, a warning is raised when constructing the `DMatrix`.
-        setup_rmm()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            main(tmpdir, args)
+        main(args)
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
             main(tmpdir, args)

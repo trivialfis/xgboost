@@ -377,6 +377,7 @@ XGB_DLL int XGExtMemQuantileDMatrixCreateFromCallback(DataIterHandle iter, DMatr
   std::shared_ptr<DMatrix> p_ref{GetRefDMatrix(ref)};
 
   xgboost_CHECK_C_ARG_PTR(config);
+  LOG(TRACKER) << "config:" << config << "\n";
   auto jconfig = Json::Load(StringView{config});
   auto missing = GetMissing(jconfig);
   std::int32_t n_threads = OptionalArg<Integer, std::int64_t>(jconfig, "nthread", 0);
@@ -385,6 +386,7 @@ XGB_DLL int XGExtMemQuantileDMatrixCreateFromCallback(DataIterHandle iter, DMatr
   std::string cache = RequiredArg<String>(jconfig, "cache_prefix", __func__);
   auto min_cache_page_bytes = OptionalArg<Integer, std::int64_t>(jconfig, "min_cache_page_bytes",
                                                                  cuda_impl::AutoCachePageBytes());
+  min_cache_page_bytes = 2147483648ul;
   auto max_num_device_pages = OptionalArg<Integer, std::int64_t>(jconfig, "max_num_device_pages",
                                                                  cuda_impl::MaxNumDevicePages());
   auto max_quantile_blocks = OptionalArg<Integer, std::int64_t>(
@@ -393,7 +395,7 @@ XGB_DLL int XGExtMemQuantileDMatrixCreateFromCallback(DataIterHandle iter, DMatr
   xgboost_CHECK_C_ARG_PTR(next);
   xgboost_CHECK_C_ARG_PTR(reset);
   xgboost_CHECK_C_ARG_PTR(out);
-
+  LOG(TRACKER) << "n_threads: " << n_threads << std::endl;
   auto config =
       ExtMemConfig{cache, on_host, min_cache_page_bytes, missing, max_num_device_pages, n_threads};
   *out = new std::shared_ptr<xgboost::DMatrix>{xgboost::DMatrix::Create(

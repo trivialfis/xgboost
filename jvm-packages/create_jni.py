@@ -18,6 +18,7 @@ CONFIG = {
     "USE_OPENMP": "ON",
     "USE_CUDA": "OFF",
     "USE_NCCL": "OFF",
+    "PLUGIN_RMM": "ON",
     "JVM_BINDINGS": "ON",
     "LOG_CAPI_INVOCATION": "OFF",
     "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -73,8 +74,13 @@ def native_build(cli_args: argparse.Namespace) -> None:
         os.environ["JAVA_HOME"] = (
             subprocess.check_output("/usr/libexec/java_home").strip().decode()
         )
+    CONFIG["CMAKE_CXX_FLAGS"] = "-rdynamic"
     if cli_args.use_debug == "ON":
         CONFIG["CMAKE_BUILD_TYPE"] = "Debug"
+    if cli_args.use_nvtx == "ON":
+        CONFIG["USE_NVTX"] = "ON"
+    if cli_args.plugin_rmm == "ON":
+        CONFIG["PLUGIN_RMM"] = "ON"
 
     print("building Java wrapper", flush=True)
     with cd(".."):
@@ -95,6 +101,8 @@ def native_build(cli_args: argparse.Namespace) -> None:
             CONFIG["USE_CUDA"] = "ON"
             CONFIG["USE_NCCL"] = "ON"
             CONFIG["USE_DLOPEN_NCCL"] = "OFF"
+            CONFIG["CMAKE_PREFIX_PATH"] = "/workspace/rmm/build/install"
+            CONFIG["CMAKE_BUILD_TYPE"] = "RelWithDebInfo"
 
         args = ["-D{0}:BOOL={1}".format(k, v) for k, v in CONFIG.items()]
         if sys.platform != "win32":
@@ -133,7 +141,7 @@ def native_build(cli_args: argparse.Namespace) -> None:
                             maybe_makedirs(build_dir)
             else:
                 run("cmake .. " + " ".join(args))
-            run("cmake --build . --config Release" + maybe_parallel_build)
+            run("ninja")
 
 
     print("copying native library", flush=True)
@@ -190,5 +198,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-cuda", type=str, choices=["ON", "OFF"], default="OFF")
     parser.add_argument("--use-openmp", type=str, choices=["ON", "OFF"], default="ON")
     parser.add_argument("--use-debug", type=str, choices=["ON", "OFF"], default="OFF")
+    parser.add_argument("--use-nvtx", type=str, choices=["ON", "OFF"], default="OFF")
+    parser.add_argument("--plugin-rmm", type=str, choices=["ON", "OFF"], default="OFF")
     cli_args = parser.parse_args()
     native_build(cli_args)

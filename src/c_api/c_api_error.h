@@ -34,8 +34,10 @@
      and finishes with API_END() */
 #define API_END()                                                              \
   } catch (dmlc::Error & _except_) {                                           \
+    std::cerr << _except_.what() << std::endl;                                 \
     return XGBAPIHandleException(_except_);                                    \
   } catch (std::exception const& _except_) {                                   \
+    std::cerr << _except_.what() << std::endl;                                 \
     return XGBAPIHandleException(dmlc::Error(_except_.what()));                \
   }                                                                            \
   return 0; // NOLINT(*)

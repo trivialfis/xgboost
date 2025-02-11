@@ -17,6 +17,10 @@
 #include <utility>    // for pair, move
 #include <vector>     // for vector
 
+#if defined(XGBOOST_USE_NVTX)
+#include <nvtx3/nvtx3.hpp>
+#endif  // defined(XGBOOST_USE_NVTX)
+
 #if !defined(XGBOOST_USE_CUDA)
 #include "../common/common.h"  // for AssertGPUSupport
 #endif                         // !defined(XGBOOST_USE_CUDA)
@@ -283,7 +287,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
     // when page is not loaded with mmap, in addition, it triggers necessary CUDA
     // synchronizations by freeing memory.
     page_.reset();
-
+    LOG(TRACKER) << "n_batches:" << n_batches << " n_prefetch_batches:" << n_prefetch_batches << std::endl;
     for (std::int32_t i = 0; i < n_prefetch_batches; ++i, ++fetch_it) {
       bool restart = fetch_it == n_batches;
       fetch_it %= n_batches;  // ring
@@ -296,7 +300,10 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
       if (restart) {
         this->param_.prefetch_copy = true;
       }
+
+      nvtx3::mark("submit:" + std::to_string(fetch_it));
       ring_->at(fetch_it) = this->workers_.Submit([fetch_it, self, this] {
+      nvtx3::mark("activated read:" + std::to_string(fetch_it));
         auto page = std::make_shared<S>();
         this->exce_.Run([&] {
           std::unique_ptr<typename FormatStreamPolicy::FormatT> fmt{

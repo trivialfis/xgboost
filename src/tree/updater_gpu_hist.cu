@@ -690,6 +690,7 @@ struct GPUHistMakerDevice {
     std::int32_t k = 0;
     CHECK_EQ(p_fmat->NumBatches(), this->partitioners_.size());
     for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(true))) {
+      std::cerr << "k:" << k << std::endl;
       this->BuildHist(page, k, kRootNIdx);
       ++k;
     }

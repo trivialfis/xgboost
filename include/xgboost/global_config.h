@@ -14,16 +14,16 @@
 
 namespace xgboost {
 struct GlobalConfiguration : public XGBoostParameter<GlobalConfiguration> {
-  std::int32_t verbosity{1};
-  bool use_rmm{false};
+  std::int32_t verbosity{3};
+  bool use_rmm{true};
   // This is not a dmlc parameter to avoid conflict with the context class.
   std::int32_t nthread{0};
   DMLC_DECLARE_PARAMETER(GlobalConfiguration) {
     DMLC_DECLARE_FIELD(verbosity)
         .set_range(0, 3)
-        .set_default(1)  // shows only warning
+        .set_default(3)  // shows only warning
         .describe("Flag to print out detailed breakdown of runtime.");
-    DMLC_DECLARE_FIELD(use_rmm).set_default(false).describe(
+    DMLC_DECLARE_FIELD(use_rmm).set_default(true).describe(
         "Whether to use RAPIDS Memory Manager to allocate GPU memory in XGBoost");
   }
 };

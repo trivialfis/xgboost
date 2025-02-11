@@ -127,8 +127,8 @@ no long bundles NCCL in the binary wheel.
 
   std::int32_t major = 0, minor = 0, patch = 0;
   SafeColl(this->GetVersion(&major, &minor, &patch));
-  LOG(INFO) << "Loaded shared NCCL " << major << "." << minor << "." << patch << ":`" << path_
-            << "`" << std::endl;
+  LOG(TRACKER) << "Loaded shared NCCL " << major << "." << minor << "." << patch << ":`" << path_
+               << "`" << std::endl;
 
   error::CheckOldNccl(major, minor, patch);
 };
