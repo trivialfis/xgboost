@@ -287,7 +287,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
     // when page is not loaded with mmap, in addition, it triggers necessary CUDA
     // synchronizations by freeing memory.
     page_.reset();
-    LOG(TRACKER) << "n_batches:" << n_batches << " n_prefetch_batches:" << n_prefetch_batches << std::endl;
+
     for (std::int32_t i = 0; i < n_prefetch_batches; ++i, ++fetch_it) {
       bool restart = fetch_it == n_batches;
       fetch_it %= n_batches;  // ring
