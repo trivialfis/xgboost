@@ -1171,6 +1171,13 @@ xgboost <- function(
   ...
 ) {
 # nolint end
+  if (hasName(list(...), "data") && missing(x)) {
+    error_on_deprecated <- getOption("xgboost.strict_mode", default = FALSE)
+    fn_call <- match.call(expand.dots = TRUE)
+    fn_call[[1L]] <- as.name("xgb.train")
+    fn_call[["data"]] <- fn_call[["data"]]
+    return(eval.parent(fn_call))
+  }
   if (inherits(x, "xgb.DMatrix") && missing(y) && !hasName(list(...), "label")) {
     error_on_deprecated <- getOption("xgboost.strict_mode", default = FALSE)
     if (error_on_deprecated) {
@@ -1188,6 +1195,7 @@ xgboost <- function(
       return(eval.parent(fn_call))
     }
   }
+
   check.deprecation(deprecated_xgboost_params, match.call(), ...)
   params <- as.list(environment())
   params <- params[
