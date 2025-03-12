@@ -237,6 +237,7 @@ TEST(Ryu, SLOW_Double) {
         break;
       }
       case FP_SUBNORMAL:
+        // Underflow, rounding.
         break;
       default: {
         ASSERT_EQ(f, f1);

@@ -1432,10 +1432,6 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
   const bool even = (m2 & 1) == 0;
   const bool acceptBounds = even;
 
-#ifdef RYU_DEBUG
-  printf("-> %" PRIu64 " * 2^%d\n", m2, e2 + 2);
-#endif
-
   // Step 2: Determine the interval of valid decimal representations.
   const uint64_t mv = 4 * m2;
   // Implicit bool -> int conversion. True is 1, false is 0.
@@ -1456,17 +1452,8 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
     e10 = (int32_t)q;
     const int32_t k = DOUBLE_POW5_INV_BITCOUNT + RyuPowLogUtils::Pow5Bits((int32_t)q) - 1;
     const int32_t i = -e2 + (int32_t)q + k;
-#if defined(RYU_OPTIMIZE_SIZE)
-    uint64_t pow5[2];
-    double_computeInvPow5(q, pow5);
-    vr = mulShiftAll64(m2, pow5, i, &vp, &vm, mmShift);
-#else
     vr = RyuPowLogUtils::mulShiftAll64(m2, DOUBLE_POW5_INV_SPLIT[q], i, &vp, &vm, mmShift);
-#endif
-#ifdef RYU_DEBUG
-    printf("%" PRIu64 " * 2^%d / 10^%u\n", mv, e2, q);
-    printf("V+=%" PRIu64 "\nV =%" PRIu64 "\nV-=%" PRIu64 "\n", vp, vr, vm);
-#endif
+
     if (q <= 21) {
       // This should use q <= 22, but I think 21 is also safe. Smaller values
       // may still be safe, but it's more difficult to reason about them.
@@ -1491,18 +1478,9 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
     const int32_t i = -e2 - (int32_t)q;
     const int32_t k = RyuPowLogUtils::Pow5Bits(i) - DOUBLE_POW5_BITCOUNT;
     const int32_t j = (int32_t)q - k;
-#if defined(RYU_OPTIMIZE_SIZE)
-    uint64_t pow5[2];
-    double_computePow5(i, pow5);
-    vr = mulShiftAll64(m2, pow5, j, &vp, &vm, mmShift);
-#else
+
     vr = RyuPowLogUtils::mulShiftAll64(m2, DOUBLE_POW5_SPLIT[i], j, &vp, &vm, mmShift);
-#endif
-#ifdef RYU_DEBUG
-    printf("%" PRIu64 " * 5^%d / 10^%u\n", mv, -e2, q);
-    printf("%u %d %d %d\n", q, i, k, j);
-    printf("V+=%" PRIu64 "\nV =%" PRIu64 "\nV-=%" PRIu64 "\n", vp, vr, vm);
-#endif
+
     if (q <= 1) {
       // {vr,vp,vm} is trailing zeros if {mv,mp,mm} has at least q trailing 0 bits.
       // mv = 4 * m2, so it always has at least two trailing 0 bits.
@@ -1520,17 +1498,8 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
       // <=> p2(mv) >= q && p5(mv) - e2 >= q
       // <=> p2(mv) >= q (because -e2 >= q)
       vrIsTrailingZeros = RyuPowLogUtils::MultipleOfPowerOf2(mv, q);
-#ifdef RYU_DEBUG
-      printf("vr is trailing zeros=%s\n", vrIsTrailingZeros ? "true" : "false");
-#endif
     }
   }
-#ifdef RYU_DEBUG
-  printf("e10=%d\n", e10);
-  printf("V+=%" PRIu64 "\nV =%" PRIu64 "\nV-=%" PRIu64 "\n", vp, vr, vm);
-  printf("vm is trailing zeros=%s\n", vmIsTrailingZeros ? "true" : "false");
-  printf("vr is trailing zeros=%s\n", vrIsTrailingZeros ? "true" : "false");
-#endif
 
   // Step 4: Find the shortest decimal representation in the interval of valid representations.
   int32_t removed = 0;
@@ -1556,10 +1525,7 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
       vm = vmDiv10;
       ++removed;
     }
-#ifdef RYU_DEBUG
-    printf("V+=%" PRIu64 "\nV =%" PRIu64 "\nV-=%" PRIu64 "\n", vp, vr, vm);
-    printf("d-10=%s\n", vmIsTrailingZeros ? "true" : "false");
-#endif
+
     if (vmIsTrailingZeros) {
       for (;;) {
         const uint64_t vmDiv10 = div10(vm);
@@ -1578,10 +1544,7 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
         ++removed;
       }
     }
-#ifdef RYU_DEBUG
-    printf("%" PRIu64 " %d\n", vr, lastRemovedDigit);
-    printf("vr is trailing zeros=%s\n", vrIsTrailingZeros ? "true" : "false");
-#endif
+
     if (vrIsTrailingZeros && lastRemovedDigit == 5 && vr % 2 == 0) {
       // Round even if the exact number is .....50..0.
       lastRemovedDigit = 4;
@@ -1620,20 +1583,10 @@ static inline UnsignedDoubleBase10 d2d(const uint64_t ieeeMantissa, const uint32
       vm = vmDiv10;
       ++removed;
     }
-#ifdef RYU_DEBUG
-    printf("%" PRIu64 " roundUp=%s\n", vr, roundUp ? "true" : "false");
-    printf("vr is trailing zeros=%s\n", vrIsTrailingZeros ? "true" : "false");
-#endif
     // We need to take vr + 1 if vr is outside bounds or we need to round up.
     output = vr + (vr == vm || roundUp);
   }
   const int32_t exp = e10 + removed;
-
-#ifdef RYU_DEBUG
-  printf("V+=%" PRIu64 "\nV =%" PRIu64 "\nV-=%" PRIu64 "\n", vp, vr, vm);
-  printf("O=%" PRIu64 "\n", output);
-  printf("EXP=%d\n", exp);
-#endif
 
   UnsignedDoubleBase10 fd;
   fd.exponent = exp;
@@ -1650,12 +1603,6 @@ static inline int to_chars(UnsignedDoubleBase10 const v, const bool sign, char *
 
   uint64_t output = v.mantissa;
   const uint32_t olength = decimalLength17(output);
-
-#ifdef RYU_DEBUG
-  printf("DIGITS=%" PRIu64 "\n", v.mantissa);
-  printf("OLEN=%u\n", olength);
-  printf("EXP=%u\n", v.exponent + olength);
-#endif
 
   // Print the decimal digits.
   // The following code is equivalent to:
@@ -1802,14 +1749,6 @@ int d2s_buffered_n(double f, char *result) {
   // Step 1: Decode the floating-point number, and unify normalized and subnormal cases.
   auto bits = detail::BitCast<std::uint64_t>(f);
 
-#ifdef RYU_DEBUG
-  printf("IN=");
-  for (int32_t bit = 63; bit >= 0; --bit) {
-    printf("%d", (int)((bits >> bit) & 1));
-  }
-  printf("\n");
-#endif
-
   // Decode bits into sign, mantissa, and exponent.
   const bool ieeeSign = ((bits >> (DOUBLE_MANTISSA_BITS + DOUBLE_EXPONENT_BITS)) & 1) != 0;
   const uint64_t ieeeMantissa = bits & ((1ull << DOUBLE_MANTISSA_BITS) - 1);
@@ -1844,26 +1783,13 @@ int d2s_buffered_n(double f, char *result) {
   return to_chars(v, ieeeSign, result);
 }
 
-void d2s_buffered(double f, char *result) {
-  const int index = d2s_buffered_n(f, result);
-
-  // Terminate the string.
-  result[index] = '\0';
-}
-
-char *d2s(double f) {
-  char *const result = (char *)malloc(25);
-  d2s_buffered(f, result);
-  return result;
-}
-
 static inline double int64Bits2Double(uint64_t bits) {
   double f;
   memcpy(&f, &bits, sizeof(double));
   return f;
 }
 
-std::errc s2d_n(const char * buffer, const int len, double * result) {
+std::errc s2d_n(const char *buffer, const int len, double *result) {
   if (len == 0) {
     return std::errc::invalid_argument;
   }
@@ -1934,22 +1860,16 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
     return std::errc{};
   }
 
-#ifdef RYU_DEBUG
-  printf("Input=%s\n", buffer);
-  printf("m10digits = %d\n", m10digits);
-  printf("e10digits = %d\n", e10digits);
-  printf("m10 * 10^e10 = %" PRIu64 " * 10^%d\n", m10, e10);
-#endif
-
   if ((m10digits + e10 <= -324) || (m10 == 0)) {
     // Number is less than 1e-324, which should be rounded down to 0; return +/-0.0.
-    uint64_t ieee = ((uint64_t) signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS);
+    uint64_t ieee = ((uint64_t)signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS);
     *result = int64Bits2Double(ieee);
     return std::errc{};
   }
   if (m10digits + e10 >= 310) {
     // Number is larger than 1e+309, which should be rounded to +/-Infinity.
-    uint64_t ieee = (((uint64_t) signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS)) | (0x7ffull << DOUBLE_MANTISSA_BITS);
+    uint64_t ieee = (((uint64_t)signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS)) |
+                    (0x7ffull << DOUBLE_MANTISSA_BITS);
     *result = int64Bits2Double(ieee);
     return std::errc{};
   }
@@ -1969,7 +1889,8 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
     //
     // We use floor(log2(5^e10)) so that we get at least this many bits; better to
     // have an additional bit than to not have enough bits.
-    e2 = RyuPowLogUtils::FloorLog2(m10) + e10 + RyuPowLogUtils::Log2Pow5(e10) - (DOUBLE_MANTISSA_BITS + 1);
+    e2 = RyuPowLogUtils::FloorLog2(m10) + e10 + RyuPowLogUtils::Log2Pow5(e10) -
+         (DOUBLE_MANTISSA_BITS + 1);
 
     // We now compute [m10 * 10^e10 / 2^e2] = [m10 * 5^e10 / 2^(e2-e10)].
     // To that end, we use the DOUBLE_POW5_SPLIT table.
@@ -1988,9 +1909,11 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
     // This can only be the case if 2^e2 divides m10 * 10^e10, which in turn requires that the
     // largest power of 2 that divides m10 + e10 is greater than e2. If e2 is less than e10, then
     // the result must be exact. Otherwise we use the existing multipleOfPowerOf2 function.
-    trailingZeros = e2 < e10 || (e2 - e10 < 64 && RyuPowLogUtils::MultipleOfPowerOf2(m10, e2 - e10));
+    trailingZeros =
+        e2 < e10 || (e2 - e10 < 64 && RyuPowLogUtils::MultipleOfPowerOf2(m10, e2 - e10));
   } else {
-    e2 = RyuPowLogUtils::FloorLog2(m10) + e10 - RyuPowLogUtils::CeilLog2Pow5(-e10) - (DOUBLE_MANTISSA_BITS + 1);
+    e2 = RyuPowLogUtils::FloorLog2(m10) + e10 - RyuPowLogUtils::CeilLog2Pow5(-e10) -
+         (DOUBLE_MANTISSA_BITS + 1);
     int j = e2 - e10 + RyuPowLogUtils::CeilLog2Pow5(-e10) - 1 + DOUBLE_POW5_INV_BITCOUNT;
 #if defined(RYU_OPTIMIZE_SIZE)
     uint64_t pow5[2];
@@ -2003,17 +1926,14 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
     trailingZeros = RyuPowLogUtils::MultipleOfPowerOf5(m10, -e10);
   }
 
-#ifdef RYU_DEBUG
-  printf("m2 * 2^e2 = %" PRIu64 " * 2^%d\n", m2, e2);
-#endif
-
   // Compute the final IEEE exponent.
   uint32_t ieee_e2 = (uint32_t)std::max(
       0, static_cast<std::int32_t>(e2 + DOUBLE_EXPONENT_BIAS + RyuPowLogUtils::FloorLog2(m2)));
 
   if (ieee_e2 > 0x7fe) {
     // Final IEEE exponent is larger than the maximum representable; return +/-Infinity.
-    uint64_t ieee = (((uint64_t) signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS)) | (0x7ffull << DOUBLE_MANTISSA_BITS);
+    uint64_t ieee = (((uint64_t)signedM) << (DOUBLE_EXPONENT_BITS + DOUBLE_MANTISSA_BITS)) |
+                    (0x7ffull << DOUBLE_MANTISSA_BITS);
     *result = int64Bits2Double(ieee);
     return std::errc{};
   }
@@ -2023,10 +1943,6 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
   // the value 0.
   int32_t shift = (ieee_e2 == 0 ? 1 : ieee_e2) - e2 - DOUBLE_EXPONENT_BIAS - DOUBLE_MANTISSA_BITS;
   assert(shift >= 0);
-#ifdef RYU_DEBUG
-  printf("ieee_e2 = %d\n", ieee_e2);
-  printf("shift = %d\n", shift);
-#endif
 
   // We need to round up if the exact value is more than 0.5 above the value we computed. That's
   // equivalent to checking if the last removed bit was 1 and either the value was not just
@@ -2037,10 +1953,6 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
   uint64_t lastRemovedBit = (m2 >> (shift - 1)) & 1;
   bool roundUp = (lastRemovedBit != 0) && (!trailingZeros || (((m2 >> shift) & 1) != 0));
 
-#ifdef RYU_DEBUG
-  printf("roundUp = %d\n", roundUp);
-  printf("ieee_m2 = %" PRIu64 "\n", (m2 >> shift) + roundUp);
-#endif
   uint64_t ieee_m2 = (m2 >> shift) + roundUp;
   assert(ieee_m2 <= (1ull << (DOUBLE_MANTISSA_BITS + 1)));
   ieee_m2 &= (1ull << DOUBLE_MANTISSA_BITS) - 1;
@@ -2049,7 +1961,9 @@ std::errc s2d_n(const char * buffer, const int len, double * result) {
     ieee_e2++;
   }
 
-  uint64_t ieee = (((((uint64_t) signedM) << DOUBLE_EXPONENT_BITS) | (uint64_t)ieee_e2) << DOUBLE_MANTISSA_BITS) | ieee_m2;
+  uint64_t ieee = (((((uint64_t)signedM) << DOUBLE_EXPONENT_BITS) | (uint64_t)ieee_e2)
+                   << DOUBLE_MANTISSA_BITS) |
+                  ieee_m2;
   *result = int64Bits2Double(ieee);
   return std::errc{};
 }

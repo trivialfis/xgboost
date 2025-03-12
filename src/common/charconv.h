@@ -106,7 +106,6 @@ inline from_chars_result from_chars(const char *buffer, const char *end, // NOLI
 
 namespace f64 {
 std::errc s2d(const char * buffer, double * result);
-char *d2s(double f);
 int d2s_buffered_n(double f, char *result);
 }
 
