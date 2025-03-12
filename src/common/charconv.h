@@ -46,6 +46,11 @@ template <> struct NumericLimits<float> {
   static constexpr size_t kToCharsSize = 16;
 };
 
+template <>
+struct NumericLimits<double> {
+  static constexpr size_t kToCharsSize = 25;
+};
+
 template <> struct NumericLimits<int64_t> {
   // From llvm libcxx: numeric_limits::digits10 returns value less on 1 than desired for
   // unsigned numbers.  For example, for 1-byte unsigned value digits10 is 2 (999 can not
@@ -97,6 +102,36 @@ inline from_chars_result from_chars(const char *buffer, const char *end, // NOLI
   from_chars_result res =
       detail::FromCharFloatImpl(buffer, std::distance(buffer, end), &value);
   return res;
+}
+
+namespace f64 {
+std::errc s2d(const char * buffer, double * result);
+char *d2s(double f);
+int d2s_buffered_n(double f, char *result);
+}
+
+inline from_chars_result from_chars(const char *buffer, const char *end,  // NOLINT
+                                    double &value) {                      // NOLINT
+  std::errc res = f64::s2d(buffer, &value);
+  return {buffer, res};  // TODO
+}
+
+inline to_chars_result to_chars(char *first, char *last, double value) {  // NOLINT
+  if (XGBOOST_EXPECT(!(static_cast<size_t>(last - first) >= NumericLimits<double>::kToCharsSize),
+                     false)) {
+    return {first, std::errc::value_too_large};
+  }
+  auto index = f64::d2s_buffered_n(value, first);
+  to_chars_result ret;
+  ret.ptr = first + index;
+
+  if (XGBOOST_EXPECT(ret.ptr < last, true)) {
+    ret.ec = std::errc{};
+  } else {
+    ret.ec = std::errc::value_too_large;
+    ret.ptr = last;
+  }
+  return ret;
 }
 }  // namespace xgboost
 

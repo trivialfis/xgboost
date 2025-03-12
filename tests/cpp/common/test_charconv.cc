@@ -20,10 +20,14 @@
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.
  */
-#include <cstddef>
 #include <gtest/gtest.h>
+#include <xgboost/context.h>  // for Context
+
+#include <cstddef>
 #include <limits>
+
 #include "../../../src/common/charconv.h"
+#include "../../../src/common/threading_utils.h"  // for ParallelFor
 
 namespace xgboost {
 namespace {
@@ -210,4 +214,29 @@ TEST(Ryu, TrailingZeros) {
   TestRyuParse(99999992.0f, "99999989.5");
 }
 
+TEST(Ryu, SLOW_Double) {
+  auto test = [](std::uint64_t i) {
+    double f;
+    std::memcpy(&f, &i, sizeof(f));
+    char buf[NumericLimits<double>::kToCharsSize];
+    auto res = to_chars(buf, buf + NumericLimits<double>::kToCharsSize, f);
+    *res.ptr = '\0';
+    ASSERT_EQ(res.ec, std::errc{});
+
+    double f1;
+    auto res1 = from_chars(buf, buf + NumericLimits<double>::kToCharsSize, f1);
+    ASSERT_EQ(res1.ec, std::errc{});
+
+    if (std::isnan(f)) {
+      ASSERT_TRUE(std::isnan(f1));
+    } else if (std::isinf(f)) {
+      ASSERT_TRUE(std::isinf(f1));
+    } else {
+      ASSERT_EQ(f, f1);
+    }
+  };
+  std::uint64_t uint64_max = std::numeric_limits<uint64_t>::max();
+  Context ctx;
+  common::ParallelFor(uint64_max, ctx.Threads(), [&](auto i) { test(static_cast<uint32_t>(i)); });
+}
 }  // namespace xgboost
