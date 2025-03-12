@@ -48,7 +48,7 @@ template <> struct NumericLimits<float> {
 
 template <>
 struct NumericLimits<double> {
-  static constexpr size_t kToCharsSize = 25;
+  static constexpr size_t kToCharsSize = 26;
 };
 
 template <> struct NumericLimits<int64_t> {

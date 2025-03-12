@@ -227,12 +227,20 @@ TEST(Ryu, SLOW_Double) {
     auto res1 = from_chars(buf, buf + NumericLimits<double>::kToCharsSize, f1);
     ASSERT_EQ(res1.ec, std::errc{});
 
-    if (std::isnan(f)) {
-      ASSERT_TRUE(std::isnan(f1));
-    } else if (std::isinf(f)) {
-      ASSERT_TRUE(std::isinf(f1));
-    } else {
-      ASSERT_EQ(f, f1);
+    switch (std::fpclassify(f)) {
+      case FP_INFINITE: {
+        ASSERT_TRUE(std::isinf(f1));
+        break;
+      }
+      case FP_NAN: {
+        ASSERT_TRUE(std::isnan(f1));
+        break;
+      }
+      case FP_SUBNORMAL:
+        break;
+      default: {
+        ASSERT_EQ(f, f1);
+      }
     }
   };
   std::uint64_t uint64_max = std::numeric_limits<uint64_t>::max();
