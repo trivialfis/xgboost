@@ -214,6 +214,68 @@ TEST(Ryu, TrailingZeros) {
   TestRyuParse(99999992.0f, "99999989.5");
 }
 
+void TestRyuParseF64(double f, std::string in) {
+  double res{std::numeric_limits<double>::quiet_NaN()};
+  char buf[NumericLimits<double>::kToCharsSize];
+  std::memset(buf, '\0', NumericLimits<double>::kToCharsSize);
+  std::copy_n(in.data(), in.size(), buf);
+  auto ret = from_chars(buf, buf + in.size(), res);
+  ASSERT_EQ(ret.ec, std::errc{});
+  ASSERT_EQ(f, res);
+}
+
+TEST(Ryu, BasicF64) {
+  TestRyuParseF64(0.0, "0");
+  TestRyuParseF64(-0.0, "-0");
+  TestRyuParseF64(1.0, "1");
+  TestRyuParseF64(2.0, "2");
+  TestRyuParseF64(123456789.0, "123456789");
+  TestRyuParseF64(123.456, "123.456");
+  TestRyuParseF64(123.456, "123456e-3");
+  TestRyuParseF64(123.456, "1234.56e-1");
+  TestRyuParseF64(1.453, "1.453");
+  TestRyuParseF64(1453.0, "1.453e+3");
+  TestRyuParseF64(0.0, ".0");
+  TestRyuParseF64(1.0, "1e0");
+  TestRyuParseF64(1.0, "1E0");
+  TestRyuParseF64(1.0, "000001.000000");
+  TestRyuParseF64(0.2316419, "0.2316419");
+}
+
+TEST(Ryu, MinMaxF64) {
+  TestRyuParseF64(1.7976931348623157e308, "1.7976931348623157e308");
+  TestRyuParseF64(5E-324, "5E-324");
+}
+
+TEST(Ryu, MantissaRoundingOverflowF64) {
+  // This results in binary mantissa that is all ones and requires rounding up
+  // because it is closer to 1 than to the next smaller float. This is a
+  // regression test that the mantissa overflow is handled correctly by
+  // increasing the exponent.
+  TestRyuParseF64(1.0, "0.99999999999999999");
+  // This number overflows the mantissa *and* the IEEE exponent.
+  TestRyuParseF64(INFINITY, "1.7976931348623159e308");
+}
+
+TEST(Ryu, UnderflowF64) {
+  TestRyuParseF64(0.0, "2.4e-324");
+  TestRyuParseF64(0.0, "1e-324");
+  TestRyuParseF64(0.0, "9.99999e-325");
+  // These are just about halfway between 0 and the smallest float.
+  // The first is just below the halfway point, the second just above.
+  TestRyuParseF64(0.0, "2.4703282292062327e-324");
+  TestRyuParseF64(5e-324, "2.4703282292062328e-324");
+}
+
+TEST(Ryu, OverflowF64) {
+  TestRyuParseF64(INFINITY, "2e308");
+  TestRyuParseF64(INFINITY, "1e309");
+}
+
+TEST(Ryu, TableSizeDenormalF64) {
+  TestRyuParseF64(5e-324, "4.9406564584124654e-324");
+}
+
 TEST(Ryu, SLOW_Double) {
   auto test = [](std::uint64_t i) {
     double f;
