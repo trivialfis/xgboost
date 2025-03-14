@@ -2,9 +2,9 @@
  * Copyright 2024, XGBoost contributors
  */
 #include <nvcomp.hpp>
+#include <nvcomp/cascaded.hpp>
 #include <nvcomp/gdeflate.hpp>
 #include <nvcomp/lz4.hpp>
-#include <nvcomp/cascaded.hpp>
 #include <nvcomp/nvcompManagerFactory.hpp>
 #include <nvcomp/snappy.hpp>
 
@@ -79,9 +79,12 @@ void DecompCompressedWithManagerFactoryExample(Context const* ctx,
   }
 
   // Construct a new nvcomp manager from the compressed buffer.
+  //
   // Note we could use the nvcomp_manager from above, but here we demonstrate how to create a
   // manager for the use case where a buffer is received and the user doesn't know how it was
-  // compressed Also note, creating the manager in this way synchronizes the stream, as the
+  // compressed.
+  //
+  // Also note, creating the manager in this way synchronizes the stream, as the
   // compressed buffer must be read to construct the manager
   auto decomp_nvcomp_manager = create_manager(comp_buffer, stream);
 
