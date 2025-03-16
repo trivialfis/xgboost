@@ -9,7 +9,7 @@
 #include <xgboost/base.h>                // for bst_node_t, bst_target_t, bst_feature_t
 #include <xgboost/context.h>             // for Context
 #include <xgboost/host_device_vector.h>  // for HostDeviceVector
-#include <xgboost/linalg.h>              // for VectorView
+#include <xgboost/linalg.h>              // for VectorView, MatrixView
 #include <xgboost/model.h>               // for Model
 #include <xgboost/span.h>                // for Span
 
@@ -19,6 +19,17 @@
 
 namespace xgboost {
 struct TreeParam;
+
+struct MultiTargetTreeView {
+  common::Span<bst_node_t const> left;
+  common::Span<bst_node_t const> right;
+  common::Span<bst_node_t const> parent;
+  common::Span<bst_feature_t const> split_index;
+  common::Span<std::uint8_t const> default_left;
+  common::Span<float const> split_conds;
+  linalg::MatrixView<float const> weights;
+};
+
 /**
  * @brief Tree structure for multi-target model.
  */
@@ -108,6 +119,18 @@ class MultiTargetTree : public Model {
   [[nodiscard]] linalg::VectorView<float const> LeafValue(bst_node_t nidx) const {
     CHECK(IsLeaf(nidx));
     return this->NodeWeight(nidx);
+  }
+
+  MultiTargetTreeView View() const {
+    auto n_leaves = this->weights_.Size() / this->NumTarget();
+    return {this->left_.ConstDeviceSpan(),
+            this->right_.ConstDeviceSpan(),
+            this->parent_.ConstDeviceSpan(),
+            this->split_index_.ConstDeviceSpan(),
+            this->default_left_.ConstDeviceSpan(),
+            this->split_conds_.ConstDeviceSpan(),
+            linalg::MakeTensorView(this->weights_.Device(), this->weights_.ConstDeviceSpan(),
+                                   n_leaves, this->NumTarget())};
   }
 
   void LoadModel(Json const& in) override;
