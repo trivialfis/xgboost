@@ -410,6 +410,8 @@ void CopyGHistToEllpack(Context const* ctx, GHistIndexMatrix const& page,
 
   // GPU employs the same dense compression as CPU, no need to handle page.index.Offset()
   auto bin_type = page.index.GetBinTypeSize();
+  std::cout << "bin type:" << static_cast<std::int32_t>(bin_type) << std::endl;
+  common::DecompCompressedWithManagerFactoryExample(ctx, d_data.data(), d_data.size());
   common::CompressedBufferWriter writer{n_symbols};
   auto cuctx = ctx->CUDACtx();
 

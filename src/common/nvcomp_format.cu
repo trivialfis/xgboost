@@ -26,6 +26,7 @@ void DecompCompressedWithManagerFactoryExample(Context const* ctx,
 
   auto stream = ctx->CUDACtx()->Stream();
   const int chunk_size = 1 << 16;
+  // NVCOMP_TYPE_UINT8
   nvcompType_t data_type = NVCOMP_TYPE_UCHAR;
 
   // lz4
@@ -48,6 +49,8 @@ void DecompCompressedWithManagerFactoryExample(Context const* ctx,
   // CascadedManager cascaded_mgr{chunk_size, cascaded_opts, stream};
 
   auto compress = [device_input_ptr, input_buffer_len](auto& mgr) {
+    // This may fail with:
+    // Could not determine the maximum compressed chunk size. : code=11.
     CompressionConfig comp_config = mgr.configure_compression(input_buffer_len);
 
     std::cout << "max compressed buffer:" << comp_config.max_compressed_buffer_size << std::endl;
@@ -61,7 +64,7 @@ void DecompCompressedWithManagerFactoryExample(Context const* ctx,
               << std::endl;
     return comp_buffer;
   };
-  Algo algo = kLz4;
+  Algo algo = kSnappy;
   uint8_t* comp_buffer = nullptr;
   switch (algo) {
     case kLz4: {
