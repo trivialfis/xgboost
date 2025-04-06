@@ -310,12 +310,18 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
               self->CreatePageFormat(self->param_)};
           auto name = self->cache_info_->ShardName();
           auto [offset, length] = self->cache_info_->View(fetch_it);
+          std::string create_mark{"create"};
+          run_mark += std::to_string(fetch_it);
+          nvtx3::mark(create_mark);
           std::unique_ptr<typename FormatStreamPolicy::ReaderT> fi{
               self->CreateReader(name, offset, length)};
-          std::string read_mark{"read"};
-          read_mark += std::to_string(fetch_it);
-          nvtx3::mark(read_mark);
-          CHECK(fmt->Read(page.get(), fi.get()));
+          {
+            std::string read_mark{"actual-read"};
+            read_mark += std::to_string(fetch_it);
+            nvtx3::event_attributes attr{read_mark, nvtx3::rgb{127, 255, 0}};
+            nvtx3::scoped_range range{attr};  // Creates a range with message contents
+            CHECK(fmt->Read(page.get(), fi.get()));
+          }
         });
         return page;
       });
