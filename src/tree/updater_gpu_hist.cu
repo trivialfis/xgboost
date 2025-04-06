@@ -497,6 +497,7 @@ struct GPUHistMakerDevice {
     std::vector<bst_node_t> subtraction_nidx(candidates.size());
     AssignNodes(p_tree, this->quantiser.get(), candidates, build_nidx, subtraction_nidx);
     auto prefetch_copy = !build_nidx.empty() && this->NeedCopy(p_fmat, candidates);
+    std::cout << "[hist] prefetch_copy:" << prefetch_copy << std::endl;
 
     this->histogram_.AllocateHistograms(ctx_, build_nidx, subtraction_nidx);
 
