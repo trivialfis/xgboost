@@ -207,6 +207,7 @@ class EllpackHostCacheStreamImpl {
       prefetch_copy = false;
     }
     auto out_impl = out->Impl();
+    std::cout << "prefetch_copy:" << prefetch_copy << std::endl;
     if (prefetch_copy) {
       out_impl->gidx_buffer =
           common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());
