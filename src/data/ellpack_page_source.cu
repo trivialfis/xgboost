@@ -112,6 +112,7 @@ class EllpackHostCacheStreamImpl {
     auto new_page = cache_idx == this->cache_->pages.size();
     // Last page expected from the user.
     auto last_page = (orig_ptr + 1) == this->cache_->NumBatchesOrig();
+    std::cout << "orig_ptr:" << orig_ptr << " last:" << last_page << ", new_page:" << new_page << std::endl;
 
     bool const no_concat = this->cache_->NoConcat();
 
