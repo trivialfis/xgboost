@@ -319,7 +319,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
             std::string read_mark{"actual-read"};
             read_mark += std::to_string(fetch_it);
             nvtx3::event_attributes attr{read_mark, nvtx3::rgb{127, 255, 0}};
-            nvtx3::scoped_range range{attr};  // Creates a range with message contents
+            curt::NvtxScopedRange range{attr};  // Creates a range with message contents
             CHECK(fmt->Read(page.get(), fi.get()));
           }
         });
