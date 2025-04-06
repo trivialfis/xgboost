@@ -297,8 +297,14 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
       if (restart) {
         this->param_.prefetch_copy = true;
       }
+      std::string submit_mark{"submit"};
+      submit_mark += std::to_string(fetch_it);
+      nvtx3::mark(submit_mark);
       ring_->at(fetch_it) = this->workers_.Submit([fetch_it, self, this] {
         auto page = std::make_shared<S>();
+        std::string run_mark{"run"};
+        run_mark += std::to_string(fetch_it);
+        nvtx3::mark(run_mark);
         this->exce_.Run([&] {
           std::unique_ptr<typename FormatStreamPolicy::FormatT> fmt{
               self->CreatePageFormat(self->param_)};
@@ -306,6 +312,9 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
           auto [offset, length] = self->cache_info_->View(fetch_it);
           std::unique_ptr<typename FormatStreamPolicy::ReaderT> fi{
               self->CreateReader(name, offset, length)};
+          std::string read_mark{"read"};
+          read_mark += std::to_string(fetch_it);
+          nvtx3::mark(read_mark);
           CHECK(fmt->Read(page.get(), fi.get()));
         });
         return page;
