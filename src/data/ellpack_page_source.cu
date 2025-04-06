@@ -204,10 +204,11 @@ class EllpackHostCacheStreamImpl {
     auto page = this->cache_->At(this->ptr_);
     if (IsDevicePage(page)) {
       // Page is already in the device memory, no need to copy.
+      std::cout << "[cache]: device" << std::endl;
       prefetch_copy = false;
     }
     auto out_impl = out->Impl();
-    std::cout << "prefetch_copy:" << prefetch_copy << std::endl;
+    std::cout << "[cache]: prefetch_copy:" << prefetch_copy << std::endl;
     if (prefetch_copy) {
       out_impl->gidx_buffer =
           common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());

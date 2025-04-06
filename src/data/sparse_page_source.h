@@ -311,8 +311,7 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
           auto name = self->cache_info_->ShardName();
           auto [offset, length] = self->cache_info_->View(fetch_it);
           std::string create_mark{"create"};
-          run_mark += std::to_string(fetch_it);
-          std::cout << create_mark << std::endl;
+          create_mark += std::to_string(fetch_it);
           nvtx3::mark(create_mark);
           std::unique_ptr<typename FormatStreamPolicy::ReaderT> fi{
               self->CreateReader(name, offset, length)};

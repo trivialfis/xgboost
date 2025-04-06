@@ -100,7 +100,8 @@ template <typename T>
 
   auto* impl = page->Impl();
   CHECK(this->cuts_->cut_values_.DeviceCanRead());
-
+  std::cout << "[fmt] prefetch_copy:" << (this->param_.prefetch_copy && !this->has_hmm_ats_)
+            << std::endl;
   fi->Read(page, this->param_.prefetch_copy || !this->has_hmm_ats_);
   impl->SetCuts(this->cuts_);
 
