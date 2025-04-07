@@ -51,6 +51,8 @@ struct EllpackCacheInfo {
 // This is a memory-based cache. It can be a mixed of the device memory and the host memory.
 struct EllpackMemCache {
   std::vector<std::unique_ptr<EllpackPageImpl>> pages;
+  // Whether the concatenated page is on device. The size equals to the total number of
+  // concatenated pages.
   std::vector<bool> on_device;
   std::vector<std::size_t> offsets;
   // Size of each batch before concatenation.

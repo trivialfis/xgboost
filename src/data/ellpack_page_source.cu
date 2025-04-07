@@ -11,6 +11,7 @@
 #include "../common/common.h"               // for HumanMemUnit, safe_cuda
 #include "../common/cuda_rt_utils.h"        // for SetDevice
 #include "../common/device_helpers.cuh"     // for CUDAStreamView, DefaultStream
+#include "../common/nvcomp_format.h"        // for CompressEllpack
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
 #include "../common/resource.cuh"           // for PrivateCudaMmapConstStream
 #include "../common/transform_iterator.h"   // for MakeIndexTransformIter
@@ -126,14 +127,30 @@ class EllpackHostCacheStreamImpl {
         this->cache_->prefer_device &&
         this->cache_->NumDevicePages() < this->cache_->max_num_device_pages;
 
-    auto commit_host_page = [](EllpackPageImpl const* old_impl) {
+    auto commit_host_page = [&ctx, this](EllpackPageImpl const* old_impl) {
+      // The old_impl is on device, whereas new_impl is on the host.
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
+
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
-      new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
-          old_impl->gidx_buffer.size());
-      dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
-                                    old_impl->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+
+      if (!old_impl->IsDenseCompressed()) {
+        // Compress the sparse ellpack
+        dh::DeviceUVector<std::uint8_t> out;
+        common::CompressEllpack(&ctx, old_impl->gidx_buffer.data(),
+                                old_impl->gidx_buffer.size_bytes(), &out);
+        auto n_bytes = out.size_bytes();
+        new_impl->gidx_buffer =
+            common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
+        dh::safe_cuda(
+            cudaMemcpyAsync(new_impl->gidx_buffer.data(), out.data(), n_bytes, cudaMemcpyDefault));
+      } else {
+        // Dense data doesn't need nvcomp.
+        new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
+            old_impl->gidx_buffer.size());
+        dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
+                                      old_impl->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+      }
       LOG(INFO) << "Create cache page with size:" << common::HumanMemUnit(new_impl->MemCostBytes());
       return new_impl;
     };
@@ -205,9 +222,12 @@ class EllpackHostCacheStreamImpl {
 
   void Read(EllpackPage* out, bool prefetch_copy) const {
     auto page = this->cache_->At(this->ptr_);
-    if (IsDevicePage(page)) {
+    if (IsDevicePage(page) && page->IsDenseCompressed()) {
       // Page is already in the device memory, no need to copy.
       prefetch_copy = false;
+    } else if (!page->IsDenseCompressed()) {
+      // Have to make a copy if it's compressed.
+      prefetch_copy = true;
     }
     auto out_impl = out->Impl();
     if (prefetch_copy) {

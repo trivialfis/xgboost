@@ -101,8 +101,7 @@ class MemoryLogger {
       return;
     }
     auto current_device = cub::CurrentDevice();
-    LOG(CONSOLE) << "======== Device " << current_device << " Memory Allocations: "
-                 << " ========";
+    LOG(CONSOLE) << "======== Device " << current_device << " Memory Allocations: " << " ========";
     LOG(CONSOLE) << "Peak memory usage: "
                  << xgboost::common::HumanMemUnit(stats_.peak_allocated_bytes);
   }
@@ -382,9 +381,9 @@ using XGBCachingDeviceAllocator = detail::XGBCachingDeviceAllocatorImpl<T>;
  *         OOM errors.
  */
 template <typename T>
-using device_vector = thrust::device_vector<T,  XGBDeviceAllocator<T>>;  // NOLINT
+using device_vector = thrust::device_vector<T, XGBDeviceAllocator<T>>;  // NOLINT
 template <typename T>
-using caching_device_vector = thrust::device_vector<T,  XGBCachingDeviceAllocator<T>>;  // NOLINT
+using caching_device_vector = thrust::device_vector<T, XGBCachingDeviceAllocator<T>>;  // NOLINT
 
 #if defined(XGBOOST_USE_RMM)
 /**
@@ -460,23 +459,24 @@ class DeviceUVectorImpl {
   using const_pointer = value_type const *;    // NOLINT
   using reference = value_type &;              // NOLINT
   using const_reference = value_type const &;  // NOLINT
+  using index_type = std::size_t;              // NOLINT
 
  public:
   DeviceUVectorImpl() = default;
-  explicit DeviceUVectorImpl(std::size_t n) { this->resize(n); }
+  explicit DeviceUVectorImpl(index_type n) { this->resize(n); }
   DeviceUVectorImpl(DeviceUVectorImpl const &that) = delete;
   DeviceUVectorImpl &operator=(DeviceUVectorImpl const &that) = delete;
   DeviceUVectorImpl(DeviceUVectorImpl &&that) = default;
   DeviceUVectorImpl &operator=(DeviceUVectorImpl &&that) = default;
 
-  void resize(std::size_t n) {  // NOLINT
+  void resize(index_type n) {  // NOLINT
 #if defined(XGBOOST_USE_RMM)
     data_.resize(n, rmm::cuda_stream_per_thread);
 #else
     data_.resize(n);
 #endif
   }
-  void resize(std::size_t n, T const &v) {         // NOLINT
+  void resize(index_type n, T const &v) {  // NOLINT
 #if defined(XGBOOST_USE_RMM)
     auto orig = this->size();
     data_.resize(n, rmm::cuda_stream_per_thread);
@@ -496,8 +496,11 @@ class DeviceUVectorImpl {
 #endif  // defined(XGBOOST_USE_RMM)
   }
 
-  [[nodiscard]] std::size_t size() const { return data_.size(); }  // NOLINT
-  [[nodiscard]] bool empty() const { return this->size() == 0; }   // NOLINT
+  [[nodiscard]] index_type size() const { return data_.size(); }  // NOLINT
+  [[nodiscard]] index_type size_bytes() const noexcept {          // NOLINT
+    return this->size() * sizeof(value_type);
+  }
+  [[nodiscard]] bool empty() const { return this->size() == 0; }  // NOLINT
 
   [[nodiscard]] auto begin() { return data_.begin(); }  // NOLINT
   [[nodiscard]] auto end() { return data_.end(); }      // NOLINT
