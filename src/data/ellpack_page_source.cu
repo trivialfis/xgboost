@@ -231,10 +231,21 @@ class EllpackHostCacheStreamImpl {
     }
     auto out_impl = out->Impl();
     if (prefetch_copy) {
-      out_impl->gidx_buffer =
-          common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());
-      dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
-                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+      if (!page->IsDenseCompressed()) {
+        // fixme
+        CHECK(!IsDevicePage(page));
+        // Copy buf to device.
+        dh::DeviceUVector<common::CompressedByteT> buf(page->gidx_buffer.size());
+        dh::safe_cuda(cudaMemcpyAsync(buf.data(), buf.data(), page->gidx_buffer.size_bytes(),
+                                      cudaMemcpyDefault));
+        Context ctx;
+        out_impl->gidx_buffer = common::DecompressEllpack(&ctx, buf.data(), buf.size_bytes());
+      } else {
+        out_impl->gidx_buffer =
+            common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());
+        dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
+                                      page->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+      }
     } else {
       auto res = page->gidx_buffer.Resource();
       out_impl->gidx_buffer = common::RefResourceView<common::CompressedByteT>{
