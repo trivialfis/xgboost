@@ -15,7 +15,3 @@ XGBOOST_MM_PREFETCH_PRESENT=""
 ${CXX} -o test test.cpp 2>/dev/null && ./test && XGBOOST_MM_PREFETCH_PRESENT="-DXGBOOST_MM_PREFETCH_PRESENT=1"
 rm -f ./test
 rm -f ./test.cpp
-
-sed \
-    -e "s/@XGBOOST_MM_PREFETCH_PRESENT@/$XGBOOST_MM_PREFETCH_PRESENT/" \
-    < src/Makevars.win.in > src/Makevars.win

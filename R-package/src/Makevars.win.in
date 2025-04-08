@@ -22,8 +22,6 @@ PKG_CPPFLAGS = \
     -I$(PKGROOT)/include \
     -I$(PKGROOT)/dmlc-core/include \
     -I$(PKGROOT) \
-    -DXGBOOST_BUILTIN_PREFETCH_PRESENT=1 \
-    @XGBOOST_MM_PREFETCH_PRESENT@ \
     $(XGB_RFLAGS)
 
 PKG_CXXFLAGS = \
