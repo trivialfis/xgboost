@@ -19,3 +19,4 @@ rm -f ./test.cpp
 sed \
     -e "s/@XGBOOST_MM_PREFETCH_PRESENT@/$XGBOOST_MM_PREFETCH_PRESENT/" \
     < src/Makevars.win.in > src/Makevars.win
+cat src/Makevars.win
