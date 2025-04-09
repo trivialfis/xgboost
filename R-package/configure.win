@@ -1,5 +1,8 @@
 R_EXE="${R_HOME}/bin${R_ARCH_BIN}/R.exe"
 CXX=`"${R_EXE}" CMD config CXX`
+DEBUGCXX=`"${R_EXE}" CMD config CXX17STD`
+
+echo "DEBUGCXX: ${DEBUGCXX}"
 
 cat > test.cpp <<EOL
 #include <xmmintrin.h>
