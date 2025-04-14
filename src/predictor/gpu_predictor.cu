@@ -267,6 +267,21 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, MultiTargetTreeView const& tree, L
   bst_node_t nidx = GetLeafIndex<has_missing, false>(ridx, tree, loader);
   return tree.LeafValue(nidx);
 }
+
+template <typename Loader, typename Data, bool has_missing, typename EncAccessor>
+__global__ void PredictKernel(Data data, MultiTargetTreeView tree, bst_tree_t tree_begin,
+                              bst_tree_t tree_end, bst_feature_t num_features, bst_idx_t num_rows,
+                              bool use_shared, float missing, EncAccessor acc,
+                              linalg::MatrixView<float> d_out_predt) {
+  bst_uint global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+  Loader loader{std::move(data), use_shared, num_features, num_rows, missing, std::move(acc)};
+  for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
+    auto leaf = GetLeafWeight<has_missing>(global_idx, tree, &loader);
+    for (std::size_t i = 0, n = leaf.Shape(0); i < n; ++i) {
+      d_out_predt(global_idx, i) += leaf(i);
+    }
+  }
+}
 }  // namespace multi
 
 template <bool has_missing, bool has_categorical, typename Loader>
@@ -339,7 +354,7 @@ PredictKernel(Data data, common::Span<const RegTree::Node> d_nodes,
               common::Span<uint32_t const> d_cat_tree_segments,
               common::Span<RegTree::CategoricalSplitMatrix::Segment const> d_cat_node_segments,
               common::Span<uint32_t const> d_categories, bst_tree_t tree_begin,
-              bst_tree_t tree_end, bst_feature_t num_features, size_t num_rows,
+              bst_tree_t tree_end, bst_feature_t num_features, bst_idx_t num_rows,
               bool use_shared, int num_group, float missing, EncAccessor acc) {
   bst_uint global_idx = blockDim.x * blockIdx.x + threadIdx.x;
   Loader loader{std::move(data), use_shared, num_features, num_rows, missing, std::move(acc)};
