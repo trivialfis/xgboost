@@ -21,6 +21,8 @@ namespace xgboost {
 struct TreeParam;
 
 struct MultiTargetTreeView {
+  static bst_node_t constexpr InvalidNodeId() { return -1; }
+
   common::Span<bst_node_t const> left;
   common::Span<bst_node_t const> right;
   common::Span<bst_node_t const> parent;
@@ -28,6 +30,26 @@ struct MultiTargetTreeView {
   common::Span<std::uint8_t const> default_left;
   common::Span<float const> split_conds;
   linalg::MatrixView<float const> weights;
+
+  [[nodiscard]] XGBOOST_DEVICE bool IsLeaf(bst_node_t nidx) const {
+    return left[nidx] == InvalidNodeId();
+  }
+
+  [[nodiscard]] XGBOOST_DEVICE bool LeftChild(bst_node_t nidx) const { return left[nidx]; }
+  [[nodiscard]] XGBOOST_DEVICE bool RightChild(bst_node_t nidx) const { return right[nidx]; }
+  [[nodiscard]] XGBOOST_DEVICE bst_feature_t SplitIndex(bst_node_t nidx) const {
+    return split_index[nidx];
+  }
+  [[nodiscard]] XGBOOST_DEVICE float SplitCond(bst_node_t nidx) const { return split_conds[nidx]; }
+  [[nodiscard]] XGBOOST_DEVICE bool DefaultLeft(bst_node_t nidx) const {
+    return default_left[nidx];
+  }
+  [[nodiscard]] XGBOOST_DEVICE bst_node_t DefaultChild(bst_node_t nidx) const {
+    return this->DefaultLeft(nidx) ? this->LeftChild(nidx) : this->RightChild(nidx);
+  }
+  [[nodiscard]] linalg::VectorView<float const> LeafValue(bst_node_t nidx) const {
+    return this->weights.Slice(nidx, linalg::All());
+  }
 };
 
 /**
@@ -35,7 +57,7 @@ struct MultiTargetTreeView {
  */
 class MultiTargetTree : public Model {
  public:
-  static bst_node_t constexpr InvalidNodeId() { return -1; }
+  static bst_node_t constexpr InvalidNodeId() { return MultiTargetTreeView::InvalidNodeId(); }
 
  private:
   TreeParam const* param_;

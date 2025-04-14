@@ -27,6 +27,7 @@
 #include "predict_fn.h"
 #include "xgboost/data.h"
 #include "xgboost/host_device_vector.h"
+#include "xgboost/multi_target_tree_model.h"  // for MultiTargetTree, MultiTargetTreeView
 #include "xgboost/predictor.h"
 #include "xgboost/tree_model.h"
 #include "xgboost/tree_updater.h"
@@ -237,6 +238,36 @@ struct DeviceAdapterLoader {
     }
   }
 };
+
+namespace multi {
+template <bool has_missing, bool has_categorical>
+XGBOOST_DEVICE bst_node_t GetNextNode(MultiTargetTreeView const& tree, bst_node_t const nidx,
+                                      float fvalue, bool is_missing) {
+  if (has_missing && is_missing) {
+    return tree.DefaultChild(nidx);
+  } else {
+    return tree.LeftChild(nidx) + !(fvalue < tree.SplitCond(nidx));
+  }
+}
+
+template <bool has_missing, bool has_categorical, typename Loader>
+__device__ bst_node_t GetLeafIndex(bst_idx_t ridx, MultiTargetTreeView const& tree,
+                                   Loader* loader) {
+  bst_node_t nidx = 0;
+  while (tree.IsLeaf(nidx)) {
+    float fvalue = loader->GetElement(ridx, tree.SplitIndex(nidx));
+    bool is_missing = common::CheckNAN(fvalue);
+    nidx = GetNextNode<has_missing, has_categorical>(tree, nidx, fvalue, is_missing);
+  }
+  return nidx;
+}
+
+template <bool has_missing, typename Loader>
+__device__ auto GetLeafWeight(bst_idx_t ridx, MultiTargetTreeView const& tree, Loader* loader) {
+  bst_node_t nidx = GetLeafIndex<has_missing, false>(ridx, tree, loader);
+  return tree.LeafValue(nidx);
+}
+}  // namespace multi
 
 template <bool has_missing, bool has_categorical, typename Loader>
 __device__ bst_node_t GetLeafIndex(bst_idx_t ridx, TreeView const& tree, Loader* loader) {
