@@ -1,14 +1,15 @@
 /**
- * Copyright 2017-2024, XGBoost Contributors
+ * Copyright 2017-2025, XGBoost Contributors
  * \file compressed_iterator.h
  */
 #pragma once
-#include <xgboost/base.h>
-
 #include <cmath>    // for ceil, log2
 #include <cstddef>  // for size_t
+#include <cstdint>  // for uint64_t
 
 #include "common.h"
+#include "xgboost/base.h"
+#include "xgboost/span.h"
 
 #ifdef __CUDACC__
 #include "device_helpers.cuh"
@@ -18,16 +19,26 @@ namespace xgboost::common {
 using CompressedByteT = unsigned char;
 
 namespace detail {
-inline void SetBit(CompressedByteT *byte, int bit_idx) {
-  *byte |= 1 << bit_idx;
+[[nodiscard]] constexpr bool is_pow2(std::size_t value) noexcept {
+  return (value != 0U) && ((value & (value - 1)) == 0U);
 }
+// rmm::align_down
+[[nodiscard]] constexpr std::size_t align_down(std::size_t value, std::size_t alignment) noexcept {
+  assert(is_pow2(alignment));
+  return value & ~(alignment - 1);
+}
+// rmm:is_aligned
+[[nodiscard]] constexpr bool is_aligned(std::size_t value, std::size_t alignment) noexcept {
+  assert(is_pow2(alignment));
+  return value == align_down(value, alignment);
+}
+
+inline void SetBit(CompressedByteT *byte, int bit_idx) { *byte |= 1 << bit_idx; }
 template <typename T>
 inline T CheckBit(const T &byte, int bit_idx) {
   return byte & (1 << bit_idx);
 }
-inline void ClearBit(CompressedByteT *byte, int bit_idx) {
-  *byte &= ~(1 << bit_idx);
-}
+inline void ClearBit(CompressedByteT *byte, int bit_idx) { *byte &= ~(1 << bit_idx); }
 static const int kPadding = 4;  // Assign padding so we can read slightly off
                                 // the beginning of the array
 
@@ -100,16 +111,15 @@ class CompressedBufferWriter {
   }
 
 #ifdef __CUDACC__
-  __device__ void AtomicWriteSymbol
-    (CompressedByteT* buffer, uint64_t symbol, size_t offset) {
+  __device__ void AtomicWriteSymbol(CompressedByteT *buffer, uint64_t symbol, size_t offset) {
     size_t ibit_start = offset * symbol_bits_;
     size_t ibit_end = (offset + 1) * symbol_bits_ - 1;
     size_t ibyte_start = ibit_start / 8, ibyte_end = ibit_end / 8;
 
     symbol <<= 7 - ibit_end % 8;
     for (ptrdiff_t ibyte = ibyte_end; ibyte >= static_cast<ptrdiff_t>(ibyte_start); --ibyte) {
-      dh::AtomicOrByte(reinterpret_cast<unsigned int*>(buffer + detail::kPadding),
-                       ibyte, symbol & 0xff);
+      dh::AtomicOrByte(reinterpret_cast<unsigned int *>(buffer + detail::kPadding), ibyte,
+                       symbol & 0xff);
       symbol >>= 8;
     }
   }
@@ -128,8 +138,8 @@ class CompressedBufferWriter {
         // Eject only full bytes
         size_t tmp_bytes = stored_bits / 8;
         for (size_t j = 0; j < tmp_bytes; j++) {
-          buffer[buffer_position] = static_cast<CompressedByteT>(
-              tmp >> (stored_bits - (j + 1) * 8));
+          buffer[buffer_position] =
+              static_cast<CompressedByteT>(tmp >> (stored_bits - (j + 1) * 8));
           buffer_position++;
         }
         stored_bits -= tmp_bytes * 8;
@@ -142,16 +152,13 @@ class CompressedBufferWriter {
     }
 
     // Eject all bytes
-    int tmp_bytes =
-        static_cast<int>(std::ceil(static_cast<float>(stored_bits) / 8));
+    int tmp_bytes = static_cast<int>(std::ceil(static_cast<float>(stored_bits) / 8));
     for (int j = 0; j < tmp_bytes; j++) {
       int shift_bits = static_cast<int>(stored_bits) - (j + 1) * 8;
       if (shift_bits >= 0) {
-        buffer[buffer_position] =
-            static_cast<CompressedByteT>(tmp >> shift_bits);
+        buffer[buffer_position] = static_cast<CompressedByteT>(tmp >> shift_bits);
       } else {
-        buffer[buffer_position] =
-            static_cast<CompressedByteT>(tmp << std::abs(shift_bits));
+        buffer[buffer_position] = static_cast<CompressedByteT>(tmp << std::abs(shift_bits));
       }
       buffer_position++;
     }
@@ -179,7 +186,7 @@ class CompressedIterator {
  private:
   CompressedByteT const *buffer_{nullptr};
   bst_idx_t const symbol_bits_{0};
-  size_t offset_ {0};
+  std::size_t offset_{0};
 
  public:
   CompressedIterator() = default;
@@ -198,8 +205,7 @@ class CompressedIterator {
                    static_cast<uint64_t>(buffer_[start_byte_idx - 2]) << 16 |
                    static_cast<uint64_t>(buffer_[start_byte_idx - 1]) << 8 |
                    buffer_[start_byte_idx];
-    int bit_shift =
-        (bits_per_byte - ((offset_ + 1) * symbol_bits_)) % bits_per_byte;
+    int bit_shift = (bits_per_byte - ((offset_ + 1) * symbol_bits_)) % bits_per_byte;
     tmp >>= bit_shift;
     // Mask off unneeded bits
     uint64_t mask = (static_cast<uint64_t>(1) << symbol_bits_) - 1;
@@ -212,4 +218,106 @@ class CompressedIterator {
     return *offset;
   }
 };
+
+using SingComprBinIter = CompressedIterator<std::uint32_t>;
+
+/**
+ * @brief A compressed iterator with two buffers for the underlying storage.
+ */
+template <typename OutT>
+class DoubleCompressedIter {
+ public:
+  // Type definitions for thrust
+  using self_type = DoubleCompressedIter<OutT>;  // NOLINT
+  using difference_type = ptrdiff_t;             // NOLINT
+  using value_type = OutT;                       // NOLINT
+  using pointer = value_type *;                  // NOLINT
+  using reference = value_type;                  // NOLINT
+
+ private:
+  using BufT = CompressedByteT const *__restrict__;
+  // BufT buf_[2]{nullptr, nullptr};
+  BufT buf0_{nullptr};
+  BufT buf1_{nullptr};
+  bst_idx_t const n0_{0};  // Size of the first buffer in bytes.
+  bst_idx_t const symbol_bits_{0};
+  std::size_t offset_{0};
+
+ public:
+  DoubleCompressedIter() = default;
+  DoubleCompressedIter(CompressedByteT const *__restrict__ buf0, std::size_t n0,
+                       CompressedByteT const *__restrict__ buf1, bst_idx_t num_symbols)
+      : buf0_{buf0}, buf1_{buf1}, n0_{n0}, symbol_bits_{detail::SymbolBits(num_symbols)} {
+    CHECK(detail::is_aligned(reinterpret_cast<std::uintptr_t>(buf0), alignof(std::uint32_t)));
+    CHECK(detail::is_aligned(reinterpret_cast<std::uintptr_t>(buf1), alignof(std::uint32_t)));
+    // static_assert(sizeof(buf_) == sizeof(CompressedByteT const *) * 2);
+    // static_assert(std::is_same_v<std::remove_reference_t<decltype(buf_[0])>,
+    //                              CompressedByteT const *__restrict__>);
+  }
+
+  __device__ __forceinline__ reference operator*() const {
+    constexpr std::int32_t kBitsPerByte = 8;
+    std::size_t start_bit_idx = ((offset_ + 1) * symbol_bits_ - 1);
+    std::size_t start_byte_idx = start_bit_idx >> 3;
+    start_byte_idx += detail::kPadding;
+
+    std::uint64_t tmp;
+
+    // if (start_byte_idx - 4 < n0_ && start_byte_idx >= n0_) {
+    //   auto getv = [&](auto shift) {
+    //     auto shifted = start_byte_idx - shift;
+    //     bool ind = (shifted >= n0_);
+    //     shifted -= ind * n0_;
+    //     auto const *__restrict__ buf = (start_byte_idx < n0_) ? buf0_ : buf1_;
+    //     return static_cast<std::uint64_t>(buf[shifted]);
+    //   };
+    //   // Read 5 bytes - the maximum we will need
+    //   tmp = static_cast<std::uint64_t>(buf0_[start_byte_idx - 4]) << 32 | getv(3) << 24 |
+    //         getv(2) << 16 | getv(1) << 8 | static_cast<std::uint64_t>(buf1_[start_byte_idx - n0_]);
+    // } else {
+
+    // }
+
+    bool ind = start_byte_idx >= n0_;
+    auto const *__restrict__ buf =
+        reinterpret_cast<CompressedByteT const *>((!ind) * reinterpret_cast<std::uintptr_t>(buf0_) +
+                                                  ind * reinterpret_cast<std::uintptr_t>(buf1_));
+    // auto const *__restrict__ buf = (!ind) ? buf0_ : buf1_;
+    // auto const *__restrict__ buf = buf0_;
+    auto const shifted = start_byte_idx - n0_ * ind;
+
+    auto beg_ptr = buf + shifted - 4;
+    // base ptr in bytes
+    auto b_base_ptr = detail::align_down(reinterpret_cast<std::uintptr_t>(beg_ptr),
+                                         std::alignment_of_v<std::uint32_t>);
+    // base ptr in uint32
+    auto base_ptr = reinterpret_cast<std::uint32_t const *>(b_base_ptr);
+    // 2 loads
+    std::uint64_t v;
+    reinterpret_cast<std::uint32_t *>(&v)[0] = base_ptr[0];
+    reinterpret_cast<std::uint32_t *>(&v)[1] = base_ptr[1];
+    // down alignment
+    auto diff = reinterpret_cast<std::uintptr_t>(beg_ptr) - b_base_ptr;
+    // beginning ptr that points to the read values
+    auto b_ptr = reinterpret_cast<CompressedByteT const *>(&v) + diff;
+    // Read 5 bytes - the maximum we will need
+    tmp = static_cast<std::uint64_t>(b_ptr[0]) << 32 | static_cast<std::uint64_t>(b_ptr[1]) << 24 |
+          static_cast<std::uint64_t>(b_ptr[2]) << 16 | static_cast<std::uint64_t>(b_ptr[3]) << 8 |
+          b_ptr[4];
+
+    std::int32_t bit_shift = (kBitsPerByte - ((offset_ + 1) * symbol_bits_)) % 8;
+    tmp >>= bit_shift;
+    // Mask off unneeded bits
+    std::uint64_t mask = (static_cast<std::uint64_t>(1) << symbol_bits_) - 1;
+    return static_cast<OutT>(tmp & mask);
+  }
+
+  XGBOOST_DEVICE reference operator[](std::size_t idx) const {
+    self_type offset = (*this);
+    offset.offset_ += idx;
+    return *offset;
+  }
+};
+
+using DoubComprBinIter = DoubleCompressedIter<std::uint32_t>;
 }  // namespace xgboost::common

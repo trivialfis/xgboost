@@ -114,6 +114,7 @@ class EllpackHostCacheStreamImpl {
     auto last_page = (orig_ptr + 1) == this->cache_->NumBatchesOrig();
 
     bool const no_concat = this->cache_->NoConcat();
+    // FIXME: no_concat, and to_device, estimate the ratio.
 
     // Whether the page should be cached in device. If true, then we don't need to make a
     // copy during write since the temporary page is already in device when page
@@ -128,12 +129,33 @@ class EllpackHostCacheStreamImpl {
 
     auto commit_host_page = [](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
+      CHECK(old_impl->gidx_buffer_d.empty());
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
-      new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
-          old_impl->gidx_buffer.size());
+      // Split the cache
+      // The ratio of the page that will be on the host.
+      auto ratio = 0.75;
+
+      // Host buffer
+      auto n_bytes =
+          std::max(static_cast<std::size_t>(old_impl->gidx_buffer.size() * ratio), std::size_t{1});
+      CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
+      new_impl->gidx_buffer =
+          common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
       dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
-                                    old_impl->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+                                    n_bytes, cudaMemcpyDefault));
+
+      // Device buffer
+      auto remaining = old_impl->gidx_buffer.size_bytes() - n_bytes;
+      if (remaining > 0) {
+        new_impl->gidx_buffer_d =
+            common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(remaining);
+        dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer_d.data(),
+                                      old_impl->gidx_buffer.data() + n_bytes, remaining,
+                                      cudaMemcpyDefault));
+      }
+      CHECK_LE(new_impl->gidx_buffer.size(), old_impl->gidx_buffer.size());
+      CHECK_EQ(new_impl->MemCostBytes(), old_impl->MemCostBytes());
       LOG(INFO) << "Create cache page with size:" << common::HumanMemUnit(new_impl->MemCostBytes());
       return new_impl;
     };
@@ -203,20 +225,34 @@ class EllpackHostCacheStreamImpl {
 
   void Read(EllpackPage* out, bool prefetch_copy) const {
     auto page = this->cache_->At(this->ptr_);
+    auto ctx = Context{}.MakeCUDA(dh::CurrentDevice());
     if (IsDevicePage(page)) {
       // Page is already in the device memory, no need to copy.
       prefetch_copy = false;
     }
     auto out_impl = out->Impl();
     if (prefetch_copy) {
-      out_impl->gidx_buffer =
-          common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());
+      auto n = page->gidx_buffer.size() + page->gidx_buffer_d.size();
+      out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n);
       dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
-                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
+                                    ctx.CUDACtx()->Stream()));
+      if (!page->gidx_buffer_d.empty()) {
+        auto beg = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
+        dh::safe_cuda(cudaMemcpyAsync(beg, page->gidx_buffer_d.data(),
+                                      page->gidx_buffer_d.size_bytes(), cudaMemcpyDefault,
+                                      ctx.CUDACtx()->Stream()));
+      }
     } else {
       auto res = page->gidx_buffer.Resource();
       out_impl->gidx_buffer = common::RefResourceView<common::CompressedByteT>{
           res->DataAs<common::CompressedByteT>(), page->gidx_buffer.size(), res};
+      // Add a view to the device buffer.
+      if (!page->gidx_buffer_d.empty()) {
+        auto res = page->gidx_buffer_d.Resource();
+        out_impl->gidx_buffer_d = common::RefResourceView<common::CompressedByteT>{
+            res->DataAs<common::CompressedByteT>(), page->gidx_buffer_d.size_bytes(), res};
+      }
     }
 
     out_impl->CopyInfo(page);

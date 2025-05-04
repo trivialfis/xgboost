@@ -1,5 +1,5 @@
 /**
- * Copyright 2024, XGBoost Contributors
+ * Copyright 2024-2025, XGBoost Contributors
  */
 #pragma once
 #include <cstddef>     // for size_t
@@ -12,10 +12,11 @@
 
 namespace xgboost::common {
 /**
- * @brief Resource backed by `cudaMalloc`.
+ * @brief Resource backed by `cudaMalloc` (or RMM).
  */
 class CudaMallocResource : public ResourceHandler {
-  dh::DeviceUVector<std::byte> storage_;
+  dh::DeviceUVector<std::uint32_t> storage_;
+  std::size_t n_bytes_{0};
 
   void Clear() noexcept(true) { this->Resize(0); }
 
@@ -26,8 +27,12 @@ class CudaMallocResource : public ResourceHandler {
   ~CudaMallocResource() noexcept(true) override { this->Clear(); }
 
   [[nodiscard]] void* Data() override { return storage_.data(); }
-  [[nodiscard]] std::size_t Size() const override { return storage_.size(); }
-  void Resize(std::size_t n_bytes) { this->storage_.resize(n_bytes); }
+  [[nodiscard]] std::size_t Size() const override { return n_bytes_; }
+  void Resize(std::size_t n_bytes) {
+    auto n = DivRoundUp(n_bytes, sizeof(decltype(storage_)::value_type));
+    this->storage_.resize(n);
+    this->n_bytes_ = n_bytes;
+  }
 };
 
 /**

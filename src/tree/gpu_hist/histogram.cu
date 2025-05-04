@@ -116,7 +116,7 @@ GradientQuantiser::GradientQuantiser(Context const* ctx, common::Span<GradientPa
 
 XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
                                              xgboost::GradientPairInt64 const& gpair) {
-  auto dst_ptr = reinterpret_cast<int64_t *>(dest);
+  auto dst_ptr = reinterpret_cast<int64_t*>(dest);
   auto g = gpair.GetQuantisedGrad();
   auto h = gpair.GetQuantisedHess();
 
@@ -411,6 +411,7 @@ class DeviceHistogramBuilderImpl {
     };
 
     using K = HistogramKernel<>::KernelType;
+    CHECK(matrix.IsDense());      // FIXME
     if (!this->kernel_->shared) {  // Use global memory
       CHECK_EQ(this->kernel_->smem_size, 0);
       if (matrix.IsDense()) {

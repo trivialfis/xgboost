@@ -22,6 +22,7 @@ namespace xgboost {
  *
  * Does not own the underlying memory and may be trivially copied into kernels.
  */
+template <typename CompressedBinIter>
 struct EllpackDeviceAccessor {
  private:
   /**
@@ -41,7 +42,7 @@ struct EllpackDeviceAccessor {
   /** @brief Number of rows in this batch. */
   bst_idx_t n_rows;
   /** @brief Acessor for the gradient index. */
-  common::CompressedIterator<std::uint32_t> gidx_iter;
+  CompressedBinIter gidx_iter;
   /** @brief Minimum value for each feature. Size equals to number of features. */
   common::Span<const float> min_fvalue;
   /** @brief Histogram cut pointers. Size equals to (number of features + 1). */
@@ -54,8 +55,8 @@ struct EllpackDeviceAccessor {
   EllpackDeviceAccessor() = delete;
   EllpackDeviceAccessor(Context const* ctx, std::shared_ptr<const common::HistogramCuts> cuts,
                         bst_idx_t row_stride, bst_idx_t base_rowid, bst_idx_t n_rows,
-                        common::CompressedIterator<std::uint32_t> gidx_iter, bst_idx_t null_value,
-                        bool is_dense, common::Span<FeatureType const> feature_types)
+                        CompressedBinIter gidx_iter, bst_idx_t null_value, bool is_dense,
+                        common::Span<FeatureType const> feature_types)
       : null_value_{null_value},
         row_stride{row_stride},
         base_rowid{base_rowid},
@@ -169,6 +170,11 @@ class GHistIndexMatrix;
  * histogram bin for each feature instead of for the entire dataset.
  */
 class EllpackPageImpl {
+ public:
+  using ComprBinIter = EllpackDeviceAccessor<common::CompressedIterator<std::uint32_t>>;
+  using DoubleBinIter = EllpackDeviceAccessor<common::DoubleCompressedIter<std::uint32_t>>;
+  using Accessor = std::variant<ComprBinIter, DoubleBinIter>;
+
  public:
   /**
    * @brief Default constructor.
@@ -289,14 +295,14 @@ class EllpackPageImpl {
   /**
    * @brief Get an accessor that can be passed into CUDA kernels.
    */
-  [[nodiscard]] EllpackDeviceAccessor GetDeviceAccessor(
+  [[nodiscard]] Accessor GetDeviceAccessor(
       Context const* ctx, common::Span<FeatureType const> feature_types = {}) const;
   /**
    * @brief Get an accessor for host code.
    */
-  [[nodiscard]] EllpackDeviceAccessor GetHostAccessor(
-      Context const* ctx, std::vector<common::CompressedByteT>* h_gidx_buffer,
-      common::Span<FeatureType const> feature_types = {}) const;
+  [[nodiscard]] Accessor GetHostAccessor(Context const* ctx,
+                                         std::vector<common::CompressedByteT>* h_gidx_buffer,
+                                         common::Span<FeatureType const> feature_types = {}) const;
   /**
    * @brief Calculate the number of non-missing values.
    */
@@ -329,6 +335,13 @@ class EllpackPageImpl {
    * This can be backed by various storage types.
    */
   common::RefResourceView<common::CompressedByteT> gidx_buffer;
+  /**
+   * @brief Same as the `gidx_buffer`.
+   *
+   * This is used for external memory where we might split the cache page. This must be
+   * backed by the device memory.
+   */
+  common::RefResourceView<common::CompressedByteT> gidx_buffer_d;
   /**
    * @brief Compression infomation.
    */
