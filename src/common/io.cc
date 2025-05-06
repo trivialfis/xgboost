@@ -373,7 +373,8 @@ AlignedMemWriteStream::~AlignedMemWriteStream() = default;
     LOG(FATAL) << SystemErrorMsg();
   }
   return info.totalram;
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__unix__)
+  // should we use HW_PHYSMEM for other unix platforms like freebsd?
   int mib[2] = {CTL_HW, HW_MEMSIZE};
   std::size_t totalram = 0;
   std::size_t length = sizeof(totalram);
@@ -390,7 +391,8 @@ AlignedMemWriteStream::~AlignedMemWriteStream() = default;
   }
   return memInfo.ullTotalPhys;
 #else
-  LOG(WARNING) << "SysMemSize() is not implemented for this platform";
+  // Implement this for freebsd, AI!
+  LOG(FATAL) << "SysMemSize() is not implemented for this platform";
   return 0;
 #endif
 }

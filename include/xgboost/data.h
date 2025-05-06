@@ -533,6 +533,7 @@ struct ExtMemConfig {
   std::string cache;
   // Whether the ellpack page is stored in the host memory.
   bool on_host{true};
+  float host_ratio{1.0};
   // Minimum number of of bytes for each ellpack page in cache. Only used for in-host
   // ExtMemQdm.
   std::int64_t min_cache_page_bytes{0};
@@ -544,10 +545,11 @@ struct ExtMemConfig {
   std::int32_t n_threads{0};
 
   ExtMemConfig() = default;
-  ExtMemConfig(std::string cache, bool on_host, std::int64_t min_cache, float missing,
-               std::int64_t max_num_d, std::int32_t n_threads)
+  ExtMemConfig(std::string cache, bool on_host, float h_ratio, std::int64_t min_cache,
+               float missing, std::int64_t max_num_d, std::int32_t n_threads)
       : cache{std::move(cache)},
         on_host{on_host},
+        host_ratio{h_ratio},
         min_cache_page_bytes{min_cache},
         missing{missing},
         max_num_device_pages{max_num_d},

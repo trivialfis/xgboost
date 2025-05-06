@@ -952,6 +952,7 @@ DMatrix* DMatrix::Load(const std::string& uri, bool silent, DataSplitMode data_s
     data::FileIterator iter{fname, static_cast<uint32_t>(partid), static_cast<uint32_t>(npart)};
     auto config = ExtMemConfig{cache_file,
                                false,
+                               1.0f,
                                cuda_impl::MatchingPageBytes(),
                                std::numeric_limits<float>::quiet_NaN(),
                                cuda_impl::MaxNumDevicePages(),

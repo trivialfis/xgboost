@@ -48,6 +48,8 @@ constexpr std::int64_t AutoCachePageBytes() { return -1; }
 // Use two batch for prefecting. There's always one batch being worked on, while the other
 // batch being transferred.
 constexpr auto DftPrefetchBatches() { return 2; }
+// The ratio of the cache split for external memory. Use -1 to indicate not-set.
+constexpr float DftHostRatio() { return -1; }
 
 // Empty parameter to prevent regen, only used to control external memory prefetching.
 //

@@ -16,6 +16,7 @@
 
 #include "../../src/collective/communicator-inl.h"  // for GetRank
 #include "../../src/data/adapter.h"
+#include "../../src/data/batch_utils.h"  // for DftHostRatio
 #include "../../src/data/iterative_dmatrix.h"
 #include "../../src/data/simple_dmatrix.h"
 #include "../../src/data/sparse_page_dmatrix.h"
@@ -451,6 +452,7 @@ void MakeLabels(DeviceOrd device, bst_idx_t n_samples, bst_target_t n_classes,
   auto config = ExtMemConfig{
       prefix,
       this->on_host_,
+      cuda_impl::DftHostRatio(),
       this->min_cache_page_bytes_,
       std::numeric_limits<float>::quiet_NaN(),
       this->max_num_device_pages_,
@@ -501,6 +503,7 @@ void MakeLabels(DeviceOrd device, bst_idx_t n_samples, bst_target_t n_classes,
   auto config = ExtMemConfig{
       prefix,
       this->on_host_,
+      cuda_impl::DftHostRatio(),
       this->min_cache_page_bytes_,
       std::numeric_limits<float>::quiet_NaN(),
       this->max_num_device_pages_,

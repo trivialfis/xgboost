@@ -1,5 +1,5 @@
 /**
- * Copyright 2021-2024, XGBoost contributors
+ * Copyright 2021-2025, XGBoost contributors
  */
 #include <gtest/gtest.h>
 #include <xgboost/data.h>
@@ -8,6 +8,7 @@
 #include "../../../src/data/ellpack_page_raw_format.h"  // for EllpackPageRawFormat
 #include "../../../src/data/ellpack_page_source.h"      // for EllpackFormatStreamPolicy
 #include "../../../src/tree/param.h"                    // for TrainParam
+#include "../../../src/data/batch_utils.h"              // for DftHostRatio
 #include "../filesystem.h"                              // dmlc::TemporaryDirectory
 #include "../helpers.h"
 
@@ -16,7 +17,8 @@ namespace {
 [[nodiscard]] EllpackCacheInfo CInfoForTest(Context const *ctx, DMatrix *Xy, bst_idx_t row_stride,
                                             BatchParam param,
                                             std::shared_ptr<common::HistogramCuts const> cuts) {
-  EllpackCacheInfo cinfo{param, false, 1, std::numeric_limits<float>::quiet_NaN()};
+  EllpackCacheInfo cinfo{param, false, ::xgboost::cuda_impl::DftHostRatio(), 1,
+                         std::numeric_limits<float>::quiet_NaN()};
   ExternalDataInfo ext_info;
   ext_info.n_batches = 1;
   ext_info.row_stride = row_stride;
@@ -120,7 +122,8 @@ TEST_P(TestEllpackPageRawFormat, HostIO) {
       for (auto const &page : p_fmat->GetBatches<EllpackPage>(&ctx, param)) {
         if (!format) {
           // Prepare the mapping info.
-          EllpackCacheInfo cinfo{param, false, 1, std::numeric_limits<float>::quiet_NaN()};
+          EllpackCacheInfo cinfo{param, false, ::xgboost::cuda_impl::DftHostRatio(), 1,
+                                 std::numeric_limits<float>::quiet_NaN()};
           for (std::size_t i = 0; i < 3; ++i) {
             cinfo.cache_mapping.push_back(i);
             cinfo.buffer_bytes.push_back(page.Impl()->MemCostBytes());
@@ -168,7 +171,7 @@ TEST(EllpackPageRawFormat, DevicePageConcat) {
   bst_idx_t n_features = 16, n_samples = 128;
 
   auto test = [&](std::int32_t max_num_device_pages, std::int64_t min_cache_page_bytes) {
-    EllpackCacheInfo cinfo{param, true, max_num_device_pages,
+    EllpackCacheInfo cinfo{param, true, ::xgboost::cuda_impl::DftHostRatio(), max_num_device_pages,
                            std::numeric_limits<float>::quiet_NaN()};
     ExternalDataInfo ext_info;
 
