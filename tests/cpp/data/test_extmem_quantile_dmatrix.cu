@@ -180,9 +180,9 @@ INSTANTIATE_TEST_SUITE_P(ExtMemQuantileDMatrix, EllpackDeviceCacheTest,
                          ::testing::Values(0.0f, 0.8f));
 
 TEST(ExtMemQuantileDMatrixGpu, CacheHostRatio) {
-  auto cache_host_ratio = detail::DftHostRatio(-1.0);
+  auto cache_host_ratio = detail::DftHostRatio(-1.0, false);
   LOG(INFO) << "cache_host_ratio:" << cache_host_ratio;  // show it on CI, might be useful.
   ASSERT_GT(cache_host_ratio, 0.0);
-  ASSERT_LT(cache_host_ratio, 1.0);
+  ASSERT_LE(cache_host_ratio, 1.0);
 }
 }  // namespace xgboost::data

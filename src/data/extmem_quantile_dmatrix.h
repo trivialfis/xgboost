@@ -76,6 +76,6 @@ class ExtMemQuantileDMatrix : public QuantileDMatrix {
 };
 
 namespace detail {
-[[nodiscard]] float DftHostRatio(float cache_host_ratio);
+[[nodiscard]] float DftHostRatio(float cache_host_ratio, bool is_validation);
 }
 }  // namespace xgboost::data

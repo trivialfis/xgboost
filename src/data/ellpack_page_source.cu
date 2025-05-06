@@ -47,6 +47,7 @@ EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
       buffer_bytes{std::move(cinfo.buffer_bytes)},
       buffer_rows{std::move(cinfo.buffer_rows)},
       prefer_device{cinfo.prefer_device},
+      cache_host_ratio{cinfo.cache_host_ratio},
       max_num_device_pages{cinfo.max_num_device_pages} {
   CHECK_EQ(buffer_bytes.size(), buffer_rows.size());
 }

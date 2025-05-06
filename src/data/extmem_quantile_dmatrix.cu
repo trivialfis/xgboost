@@ -40,7 +40,11 @@ namespace detail {
 constexpr float UseDeviceCacheThreshold() { return 0.25; }
 
 // Get the default host ratio. It's |device|/2/|host|.
-[[nodiscard]] float DftHostRatio(float cache_host_ratio) {
+[[nodiscard]] float DftHostRatio(float cache_host_ratio, bool is_validation) {
+  if (is_validation) {
+    // Don't split the cache if this is a validation dataset.
+    return 1.0;
+  }
   if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
     auto n_devices = curt::AllVisibleGPUs();  // Handle SNMG
     auto host_size = common::SysTotalRam() / n_devices;
@@ -88,9 +92,10 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   // Prefer device storage for validation dataset since we can't hide the data loading
   // overhead with inference. On the other hand, training procedures can comfortably
   // overlap with the data transfer.
-  auto prefer_device = (ref != nullptr);
-  auto cinfo = EllpackCacheInfo{p, prefer_device, detail::DftHostRatio(config.host_ratio),
-                                config.max_num_device_pages, config.missing};
+  auto is_validation = (ref != nullptr);
+  auto cinfo =
+      EllpackCacheInfo{p, is_validation, detail::DftHostRatio(config.host_ratio, is_validation),
+                       config.max_num_device_pages, config.missing};
   CalcCacheMapping(ctx, this->info_.IsDense(), cuts,
                    detail::DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
   CHECK_EQ(cinfo.cache_mapping.size(), ext_info.n_batches);
