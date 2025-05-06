@@ -55,7 +55,8 @@ EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
 EllpackMemCache::~EllpackMemCache() = default;
 
 [[nodiscard]] std::size_t EllpackMemCache::SizeBytes() const {
-  auto it = common::MakeIndexTransformIter([&](auto i) { return pages.at(i)->MemCostBytes(); });
+  auto it = common::MakeIndexTransformIter(
+      [&](auto i) { return pages.at(i)->MemCostBytes() + this->d_pages.at(i).size_bytes(); });
   using T = std::iterator_traits<decltype(it)>::value_type;
   return std::accumulate(it, it + pages.size(), static_cast<T>(0));
 }
@@ -90,7 +91,7 @@ class EllpackHostCacheStreamImpl {
         k = i;
         break;
       }
-      n_bytes += cache_->pages[i]->MemCostBytes();
+      n_bytes += (cache_->pages[i]->MemCostBytes() + cache_->d_pages[i].size_bytes());
     }
     if (offset_bytes == n_bytes && k == -1) {
       k = this->cache_->pages.size();  // seek end
@@ -154,11 +155,14 @@ class EllpackHostCacheStreamImpl {
                                       remaining, cudaMemcpyDefault));
       }
       CHECK_LE(new_impl->gidx_buffer.size(), old_impl->gidx_buffer.size());
-      CHECK_EQ(new_impl->MemCostBytes(), old_impl->MemCostBytes());
-      LOG(INFO) << "Create cache page with size:" << common::HumanMemUnit(new_impl->MemCostBytes());
+      CHECK_EQ(new_impl->MemCostBytes() + d_page.size_bytes(), old_impl->MemCostBytes());
+      LOG(INFO) << "Create cache page with size:"
+                << common::HumanMemUnit(new_impl->MemCostBytes() + d_page.size_bytes());
       return std::make_pair(std::move(new_impl), std::move(d_page));
     };
     if (no_concat) {
+      // FIXME
+      LOG(FATAL) << "not implemented";
       // Avoid a device->device->host copy.
       CHECK(new_page);
       auto new_impl = std::make_unique<EllpackPageImpl>();
@@ -209,6 +213,8 @@ class EllpackHostCacheStreamImpl {
       this->cache_->on_device.push_back(to_device_if_new_page);
       this->cache_->d_pages.emplace_back();
     } else {
+      // Concatenate into the device pages even though `d_pages` is used. We split the
+      // page at the commit stage.
       CHECK(!this->cache_->pages.empty());
       CHECK_EQ(cache_idx, this->cache_->pages.size() - 1);
       auto& new_impl = this->cache_->pages.back();
@@ -223,10 +229,12 @@ class EllpackHostCacheStreamImpl {
       this->cache_->d_pages.back() = std::move(d_page);
     }
 
+    CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
     return new_page;
   }
 
   void Read(EllpackPage* out, bool prefetch_copy) const {
+    CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
     auto const* page = this->cache_->At(this->ptr_);
     auto const& d_page = this->cache_->d_pages.at(this->ptr_);
     auto ctx = Context{}.MakeCUDA(dh::CurrentDevice());
@@ -381,7 +389,7 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
 
   // Directly store in device if there's only one batch.
   if (cinfo->NumBatchesCc() == 1) {
-    cinfo->prefer_device = true;
+    cinfo->prefer_device = true;  // FIXME: Use cache_host_ratio instead.
     LOG(INFO) << "Prefer device cache as there's only 1 page.";
   }
 }
