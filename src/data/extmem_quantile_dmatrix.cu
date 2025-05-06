@@ -45,24 +45,30 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
     // Don't split the cache if this is a validation dataset.
     return 1.0;
   }
-  if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
-    auto n_devices = curt::AllVisibleGPUs();  // Handle SNMG
+  if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) > kRtEps) {
+    // Use user config.
+    CHECK_GE(cache_host_ratio, 0.0f) << error::CacheHostRatioInvalid();
+    CHECK_LE(cache_host_ratio, 1.0f) << error::CacheHostRatioInvalid();
+    return cache_host_ratio;
+  }
+
+  // Use auto config.
+  auto n_devices = curt::AllVisibleGPUs();  // Handle SNMG
+  // C2C bandwidth is shared by multiple GPUs
+  if (curt::SupportsAts() && n_devices > 1) {
     auto host_size = common::SysTotalRam() / n_devices;
-    CHECK_GE(host_size, 1);
+    CHECK_GE(host_size, 1) << "Failed to obtain the host memory size";
     auto device_size = curt::TotalMemory();
     auto d_ratio = static_cast<double>(device_size) / static_cast<double>(host_size);
     LOG(INFO) << "device total ram:" << device_size << " host total ram:" << host_size
               << " device/host:" << d_ratio;
-    if (d_ratio > UseDeviceCacheThreshold()) {
-      cache_host_ratio = 1.0 - d_ratio * 0.95;
-    } else {
-      // Put all data on the host memory if the device is small. We have to combat memory
-      // fragmentation, putting cache on the device is risky.
-      cache_host_ratio = 1.0;
-    }
+    // 0.95 is found via profiling on GB. It costs about the same amount of the to compute
+    // CUDA kernels and to copy the cache.
+    cache_host_ratio = 1.0 - d_ratio * 0.95;
   } else {
-    CHECK_GE(cache_host_ratio, 0.0f);
-    CHECK_LE(cache_host_ratio, 1.0f);
+    // Put all data on the host memory if we don't need to share the C2C bandwidth. We
+    // have to combat memory fragmentation, putting cache on the device is risky.
+    cache_host_ratio = 1.0;
   }
   LOG(INFO) << "`cache_host_ratio` is configured to be:" << cache_host_ratio;
   return cache_host_ratio;
@@ -96,9 +102,9 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   // overhead with inference. On the other hand, training procedures can comfortably
   // overlap with the data transfer.
   auto is_validation = (ref != nullptr);
-  auto cinfo =
-      EllpackCacheInfo{p, is_validation, detail::DftHostRatio(config.cache_host_ratio, is_validation),
-                       config.max_num_device_pages, config.missing};
+  auto cinfo = EllpackCacheInfo{p, is_validation,
+                                detail::DftHostRatio(config.cache_host_ratio, is_validation),
+                                config.max_num_device_pages, config.missing};
   CalcCacheMapping(ctx, this->info_.IsDense(), cuts,
                    detail::DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
   CHECK_EQ(cinfo.cache_mapping.size(), ext_info.n_batches);
