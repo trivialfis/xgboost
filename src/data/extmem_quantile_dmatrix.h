@@ -74,4 +74,8 @@ class ExtMemQuantileDMatrix : public QuantileDMatrix {
   std::variant<EllpackDiskPtr, EllpackHostPtr> ellpack_page_source_;
   std::shared_ptr<ExtGradientIndexPageSource> ghist_index_source_;
 };
+
+namespace detail {
+[[nodiscard]] float DftHostRatio(float cache_host_ratio);
+}
 }  // namespace xgboost::data

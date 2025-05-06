@@ -54,7 +54,7 @@ BatchSet<EllpackPage> SparsePageDMatrix::GetEllpackBatches(Context const* ctx,
     }
 
     auto cinfo =
-        EllpackCacheInfo{param, /*prefer_device=*/false, ::xgboost::cuda_impl::DftHostRatio(),
+        EllpackCacheInfo{param, /*prefer_device=*/false, ::xgboost::cuda_impl::AutoHostRatio(),
                          /*max_num_device_pages=*/0, this->missing_};
     CalcCacheMapping(ctx, this->IsDense(), cuts, min_cache_page_bytes_, this->ext_info_, &cinfo);
     CHECK_EQ(cinfo.cache_mapping.size(), this->ext_info_.n_batches)

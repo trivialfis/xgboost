@@ -326,7 +326,7 @@ XGB_DLL int XGDMatrixCreateFromCallback(DataIterHandle iter, DMatrixHandle proxy
   CHECK_EQ(min_cache_page_bytes, cuda_impl::MatchingPageBytes())
       << "Page concatenation is not supported by the DMatrix yet.";
   auto host_ratio =
-      OptionalArg<Number, float>(jconfig, "cache_host_ratio", cuda_impl::DftHostRatio());
+      OptionalArg<Number, float>(jconfig, "cache_host_ratio", cuda_impl::AutoHostRatio());
 
   xgboost_CHECK_C_ARG_PTR(next);
   xgboost_CHECK_C_ARG_PTR(reset);
@@ -401,7 +401,7 @@ XGB_DLL int XGExtMemQuantileDMatrixCreateFromCallback(DataIterHandle iter, DMatr
   auto max_quantile_blocks = OptionalArg<Integer, std::int64_t>(
       jconfig, "max_quantile_blocks", std::numeric_limits<std::int64_t>::max());
   auto host_ratio =
-      OptionalArg<Number, float>(jconfig, "cache_host_ratio", cuda_impl::DftHostRatio());
+      OptionalArg<Number, float>(jconfig, "cache_host_ratio", cuda_impl::AutoHostRatio());
 
   xgboost_CHECK_C_ARG_PTR(next);
   xgboost_CHECK_C_ARG_PTR(reset);

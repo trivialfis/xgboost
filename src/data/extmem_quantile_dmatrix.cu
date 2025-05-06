@@ -36,6 +36,21 @@ namespace xgboost::data {
   return min_cache_page_bytes;
 }
 
+namespace detail {
+// Get the default host ratio. It's |device|/2/|host|.
+[[nodiscard]] float DftHostRatio(float cache_host_ratio) {
+  if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
+    auto host_size = common::SysTotalRam();
+    auto device_size = curt::TotalMemory();
+    auto d_ratio = static_cast<double>(device_size) / static_cast<double>(host_size);
+    cache_host_ratio = 1.0 - d_ratio * 0.5;
+  } else {
+    CHECK_GE(cache_host_ratio, 0.0f);
+  }
+  return cache_host_ratio;
+}
+}  // namespace detail
+
 void ExtMemQuantileDMatrix::InitFromCUDA(
     Context const *ctx,
     std::shared_ptr<DataIterProxy<DataIterResetCallback, XGDMatrixCallbackNext>> iter,

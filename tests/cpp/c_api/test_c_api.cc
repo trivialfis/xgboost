@@ -472,7 +472,7 @@ auto MakeExtMemForTest(bst_idx_t n_samples, bst_feature_t n_features, Json dconf
   NumpyArrayIterForTest iter_1{0.0f, n_samples, n_features, n_batches};
   auto config = ExtMemConfig{"",
                              false,
-                             cuda_impl::DftHostRatio(),
+                             cuda_impl::AutoHostRatio(),
                              cuda_impl::MatchingPageBytes(),
                              std::numeric_limits<float>::quiet_NaN(),
                              cuda_impl::MaxNumDevicePages(),

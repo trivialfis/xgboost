@@ -34,7 +34,7 @@ void TestSparseDMatrixLoadFile(Context const* ctx) {
   auto n_threads = 0;
   auto config = ExtMemConfig{tmpdir.path + "cache",
                              false,
-                             ::xgboost::cuda_impl::DftHostRatio(),
+                             ::xgboost::cuda_impl::AutoHostRatio(),
                              cuda_impl::MatchingPageBytes(),
                              std::numeric_limits<float>::quiet_NaN(),
                              cuda_impl::MaxNumDevicePages(),
@@ -369,7 +369,7 @@ auto TestSparsePageDMatrixDeterminism(int32_t threads) {
   data::FileIterator iter(filename + "?format=libsvm", 0, 1);
   auto config = ExtMemConfig{filename,
                              false,
-                             ::xgboost::cuda_impl::DftHostRatio(),
+                             ::xgboost::cuda_impl::AutoHostRatio(),
                              cuda_impl::MatchingPageBytes(),
                              std::numeric_limits<float>::quiet_NaN(),
                              cuda_impl::MaxNumDevicePages(),

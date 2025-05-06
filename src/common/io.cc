@@ -365,7 +365,7 @@ AlignedMemWriteStream::~AlignedMemWriteStream() = default;
 }
 
 // Get the total amount of system memory size in bytes.
-[[nodiscard]] std::size_t SysMemSize() {
+[[nodiscard]] std::size_t SysTotalRam() {
 #if defined(__linux__)
   struct sysinfo info;
   int status = sysinfo(&info);
