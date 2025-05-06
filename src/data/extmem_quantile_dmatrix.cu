@@ -55,7 +55,7 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
   // Use auto config.
   auto n_devices = curt::AllVisibleGPUs();  // Handle SNMG
   // C2C bandwidth is shared by multiple GPUs
-  if (curt::SupportsAts() && n_devices > 1) {
+  if (curt::SupportsAts() && n_devices > 2) {  // FIXME: not accurate
     auto host_size = common::SysTotalRam() / n_devices;
     CHECK_GE(host_size, 1) << "Failed to obtain the host memory size";
     auto device_size = curt::TotalMemory();

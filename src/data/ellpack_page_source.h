@@ -52,6 +52,7 @@ struct EllpackCacheInfo {
 //
 // This is a memory-based cache. It can be a mixed of the device memory and the host memory.
 struct EllpackMemCache {
+  // The host portion of each page.
   std::vector<std::unique_ptr<EllpackPageImpl>> pages;
   // The device portion of each page.
   std::vector<common::RefResourceView<common::CompressedByteT>> d_pages;
