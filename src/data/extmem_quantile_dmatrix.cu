@@ -51,8 +51,10 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
     CHECK_GE(host_size, 1);
     auto device_size = curt::TotalMemory();
     auto d_ratio = static_cast<double>(device_size) / static_cast<double>(host_size);
+    LOG(INFO) << "device total ram:" << device_size << " host total ram:" << host_size
+              << " device/host:" << d_ratio;
     if (d_ratio > UseDeviceCacheThreshold()) {
-      cache_host_ratio = 1.0 - d_ratio * 0.5;
+      cache_host_ratio = 1.0 - d_ratio * 0.65;
     } else {
       // Put all data on the host memory if the device is small. We have to combat memory
       // fragmentation, putting cache on the device is risky.
