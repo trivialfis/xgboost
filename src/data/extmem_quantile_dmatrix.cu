@@ -36,15 +36,24 @@ namespace detail {
   }
   return min_cache_page_bytes;
 }
+
+constexpr float UseDeviceCacheThreshold() { return 0.25; }
+
 // Get the default host ratio. It's |device|/2/|host|.
 [[nodiscard]] float DftHostRatio(float cache_host_ratio) {
   if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
-    auto n_devices = curt::AllVisibleGPUs();
+    auto n_devices = curt::AllVisibleGPUs();  // Handle SNMG
     auto host_size = common::SysTotalRam() / n_devices;
     CHECK_GE(host_size, 1);
     auto device_size = curt::TotalMemory();
     auto d_ratio = static_cast<double>(device_size) / static_cast<double>(host_size);
-    cache_host_ratio = 1.0 - d_ratio * 0.5;
+    if (d_ratio > UseDeviceCacheThreshold()) {
+      cache_host_ratio = 1.0 - d_ratio * 0.5;
+    } else {
+      // Put all data on the host memory if the device is small. We have to combat memory
+      // fragmentation, putting cache on the device is risky.
+      cache_host_ratio = 1.0;
+    }
   } else {
     CHECK_GE(cache_host_ratio, 0.0f);
     CHECK_LE(cache_host_ratio, 1.0f);
