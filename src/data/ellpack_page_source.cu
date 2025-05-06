@@ -115,6 +115,7 @@ class EllpackHostCacheStreamImpl {
     auto last_page = (orig_ptr + 1) == this->cache_->NumBatchesOrig();
 
     bool const no_concat = this->cache_->NoConcat();
+    // FIXME: no_concat, and to_device, estimate the ratio.
 
     // Whether the page should be cached in device. If true, then we don't need to make a
     // copy during write since the temporary page is already in device when page
@@ -126,17 +127,36 @@ class EllpackHostCacheStreamImpl {
     bool to_device_if_new_page =
         this->cache_->prefer_device &&
         this->cache_->NumDevicePages() < this->cache_->max_num_device_pages;
-
-    auto commit_host_page = [](EllpackPageImpl const* old_impl) {
+    auto cache_host_ratio = this->cache_->cache_host_ratio;
+    auto commit_host_page = [cache_host_ratio](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
-      new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
-          old_impl->gidx_buffer.size());
+      // Split the cache
+      // The ratio of the page that will be on the host.
+
+      // Host buffer
+      auto n_bytes =
+          std::max(static_cast<std::size_t>(old_impl->gidx_buffer.size() * cache_host_ratio),
+                   std::size_t{1});
+      CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
+      new_impl->gidx_buffer =
+          common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
       dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
-                                    old_impl->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+                                    n_bytes, cudaMemcpyDefault));
+
+      // Device buffer
+      auto remaining = old_impl->gidx_buffer.size_bytes() - n_bytes;
+      CHECK_GE(remaining, 0);
+      auto d_page = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(remaining);
+      if (remaining > 0) {
+        dh::safe_cuda(cudaMemcpyAsync(d_page.data(), old_impl->gidx_buffer.data() + n_bytes,
+                                      remaining, cudaMemcpyDefault));
+      }
+      CHECK_LE(new_impl->gidx_buffer.size(), old_impl->gidx_buffer.size());
+      CHECK_EQ(new_impl->MemCostBytes(), old_impl->MemCostBytes());
       LOG(INFO) << "Create cache page with size:" << common::HumanMemUnit(new_impl->MemCostBytes());
-      return new_impl;
+      return std::make_pair(std::move(new_impl), std::move(d_page));
     };
     if (no_concat) {
       // Avoid a device->device->host copy.
@@ -166,9 +186,10 @@ class EllpackHostCacheStreamImpl {
       // No need to copy if it's already in device.
       if (!this->cache_->pages.empty() && !this->cache_->on_device.back()) {
         // Need to wrap up the previous page.
-        auto commited = commit_host_page(this->cache_->pages.back().get());
+        auto [commited, d_page] = commit_host_page(this->cache_->pages.back().get());
         // Replace the previous page (on device) with a new page on host.
         this->cache_->pages.back() = std::move(commited);
+        this->cache_->d_pages.back() = std::move(d_page);
       }
       // Push a new page
       auto n_bytes = this->cache_->buffer_bytes.at(this->cache_->pages.size());
@@ -183,8 +204,10 @@ class EllpackHostCacheStreamImpl {
 
       this->cache_->offsets.push_back(offset);
 
+      // Make sure we can always access the back of the vectors
       this->cache_->pages.push_back(std::move(new_impl));
       this->cache_->on_device.push_back(to_device_if_new_page);
+      this->cache_->d_pages.emplace_back();
     } else {
       CHECK(!this->cache_->pages.empty());
       CHECK_EQ(cache_idx, this->cache_->pages.size() - 1);
@@ -195,26 +218,41 @@ class EllpackHostCacheStreamImpl {
 
     // No need to copy if it's already in device.
     if (last_page && !this->cache_->on_device.back()) {
-      auto commited = commit_host_page(this->cache_->pages.back().get());
+      auto [commited, d_page] = commit_host_page(this->cache_->pages.back().get());
       this->cache_->pages.back() = std::move(commited);
+      this->cache_->d_pages.back() = std::move(d_page);
     }
 
     return new_page;
   }
 
   void Read(EllpackPage* out, bool prefetch_copy) const {
-    auto page = this->cache_->At(this->ptr_);
+    auto const* page = this->cache_->At(this->ptr_);
+    auto const& d_page = this->cache_->d_pages.at(this->ptr_);
+    auto ctx = Context{}.MakeCUDA(dh::CurrentDevice());
     if (IsDevicePage(page)) {
       // Page is already in the device memory, no need to copy.
       prefetch_copy = false;
     }
+    // FIXME: remove the device page cache and rely on the cache split instead.
+    if (this->cache_->cache_host_ratio < 1.0) {
+      prefetch_copy = true;
+    }
     auto out_impl = out->Impl();
     if (prefetch_copy) {
-      out_impl->gidx_buffer =
-          common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(page->gidx_buffer.size());
+      auto n = page->gidx_buffer.size() + d_page.size();
+      out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n);
       dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
-                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault));
+                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
+                                    ctx.CUDACtx()->Stream()));
+      if (!d_page.empty()) {
+        auto beg = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
+        dh::safe_cuda(cudaMemcpyAsync(beg, d_page.data(), d_page.size_bytes(), cudaMemcpyDefault,
+                                      ctx.CUDACtx()->Stream()));
+      }
     } else {
+      // FIXME: Not implemented yet. Split is false as long as the host cache ratio is less than 1.
+      CHECK(d_page.empty());
       auto res = page->gidx_buffer.Resource();
       out_impl->gidx_buffer = common::RefResourceView<common::CompressedByteT>{
           res->DataAs<common::CompressedByteT>(), page->gidx_buffer.size(), res};
