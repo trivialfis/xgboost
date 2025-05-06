@@ -80,8 +80,8 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   // overhead with inference. On the other hand, training procedures can comfortably
   // overlap with the data transfer.
   auto prefer_device = (ref != nullptr);
-  auto cinfo = EllpackCacheInfo{p, prefer_device, config.host_ratio, config.max_num_device_pages,
-                                config.missing};
+  auto cinfo = EllpackCacheInfo{p, prefer_device, detail::DftHostRatio(config.host_ratio),
+                                config.max_num_device_pages, config.missing};
   CalcCacheMapping(ctx, this->info_.IsDense(), cuts,
                    detail::DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
   CHECK_EQ(cinfo.cache_mapping.size(), ext_info.n_batches);
