@@ -135,5 +135,9 @@ constexpr StringView NoFloatCat() {
   return "Category index from DataFrame has floating point dtype, consider using strings or "
          "integers instead.";
 }
+
+constexpr StringView CacheHostRatio() {
+  return "`cache_host_ratio` is only used by the GPU `ExtMemQuantileDMatrix`.";
+}
 }  // namespace xgboost::error
 #endif  // XGBOOST_COMMON_ERROR_MSG_H_
