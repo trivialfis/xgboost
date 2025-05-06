@@ -133,6 +133,9 @@ class EllpackHostCacheStreamImpl {
       if (this->cache_->cache_host_ratio == 1.0) {
         return old_impl->gidx_buffer.size_bytes();
       }
+      if (this->cache_->cache_host_ratio == 0.0) {
+        return static_cast<std::size_t>(0);
+      }
       auto n_bytes =
           std::max(static_cast<std::size_t>(old_impl->gidx_buffer.size_bytes() * cache_host_ratio),
                    std::size_t{1});
@@ -150,8 +153,10 @@ class EllpackHostCacheStreamImpl {
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
       new_impl->gidx_buffer =
           common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
-      dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
-                                    n_bytes, cudaMemcpyDefault));
+      if (n_bytes > 0) {
+        dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
+                                      n_bytes, cudaMemcpyDefault));
+      }
 
       // Device buffer
       auto remaining = old_impl->gidx_buffer.size_bytes() - n_bytes;
@@ -257,9 +262,11 @@ class EllpackHostCacheStreamImpl {
     if (prefetch_copy) {
       auto n = page->gidx_buffer.size() + d_page.size();
       out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n);
-      dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
-                                    page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
-                                    ctx.CUDACtx()->Stream()));
+      if (!page->gidx_buffer.empty()) {
+        dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
+                                      page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
+                                      ctx.CUDACtx()->Stream()));
+      }
       if (!d_page.empty()) {
         auto beg = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
         dh::safe_cuda(cudaMemcpyAsync(beg, d_page.data(), d_page.size_bytes(), cudaMemcpyDefault,
@@ -396,7 +403,7 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
 
   // Directly store in device if there's only one batch.
   if (cinfo->NumBatchesCc() == 1) {
-    cinfo->prefer_device = true;  // FIXME: Use cache_host_ratio instead.
+    cinfo->cache_host_ratio = 0.0;
     LOG(INFO) << "Prefer device cache as there's only 1 page.";
   }
 }
