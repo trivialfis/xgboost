@@ -129,7 +129,16 @@ class EllpackHostCacheStreamImpl {
         this->cache_->prefer_device &&
         this->cache_->NumDevicePages() < this->cache_->max_num_device_pages;
     auto cache_host_ratio = this->cache_->cache_host_ratio;
-    auto commit_host_page = [cache_host_ratio](EllpackPageImpl const* old_impl) {
+    auto get_host_nbytes = [&](EllpackPageImpl const* old_impl) {
+      if (this->cache_->cache_host_ratio == 1.0) {
+        return old_impl->gidx_buffer.size_bytes();
+      }
+      auto n_bytes =
+          std::max(static_cast<std::size_t>(old_impl->gidx_buffer.size_bytes() * cache_host_ratio),
+                   std::size_t{1});
+      return n_bytes;
+    };
+    auto commit_host_page = [cache_host_ratio, get_host_nbytes](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
@@ -137,9 +146,7 @@ class EllpackHostCacheStreamImpl {
       // The ratio of the page that will be on the host.
 
       // Host buffer
-      auto n_bytes =
-          std::max(static_cast<std::size_t>(old_impl->gidx_buffer.size() * cache_host_ratio),
-                   std::size_t{1});
+      auto n_bytes = get_host_nbytes(old_impl);
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
       new_impl->gidx_buffer =
           common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
