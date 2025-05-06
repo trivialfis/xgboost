@@ -27,6 +27,7 @@
 #include "xgboost/data.h"     // for BatchParam
 
 namespace xgboost::data {
+namespace detail {
 [[nodiscard]] std::int64_t DftMinCachePageBytes(std::int64_t min_cache_page_bytes) {
   // Set to 0 if it should match the user input size.
   if (::xgboost::cuda_impl::AutoCachePageBytes() == min_cache_page_bytes) {
@@ -35,8 +36,6 @@ namespace xgboost::data {
   }
   return min_cache_page_bytes;
 }
-
-namespace detail {
 // Get the default host ratio. It's |device|/2/|host|.
 [[nodiscard]] float DftHostRatio(float cache_host_ratio) {
   if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
@@ -81,7 +80,7 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   auto cinfo = EllpackCacheInfo{p, prefer_device, config.host_ratio, config.max_num_device_pages,
                                 config.missing};
   CalcCacheMapping(ctx, this->info_.IsDense(), cuts,
-                   DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
+                   detail::DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
   CHECK_EQ(cinfo.cache_mapping.size(), ext_info.n_batches);
   auto n_batches = cinfo.NumBatchesCc();
   LOG(INFO) << "Number of batches after concatenation:" << n_batches;
