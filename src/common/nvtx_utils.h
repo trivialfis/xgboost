@@ -57,6 +57,6 @@ inline auto MakeScopedRange(StringView, Rgb) { return ScopedRange{}; }
 
 #define xgboost_NVTX_FN_RANGE()
 
-#define xgboost_NVTX_FN_RANGE_C(rgb)
+#define xgboost_NVTX_FN_RANGE_C(r, g, b)
 
 #endif  // defined(XGBOOST_USE_NVTX)
