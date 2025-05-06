@@ -62,6 +62,7 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
     CHECK_GE(cache_host_ratio, 0.0f);
     CHECK_LE(cache_host_ratio, 1.0f);
   }
+  LOG(INFO) << "`cache_host_ratio` is configured to be:" << cache_host_ratio;
   return cache_host_ratio;
 }
 }  // namespace detail
