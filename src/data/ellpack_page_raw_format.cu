@@ -96,7 +96,7 @@ template <typename T>
 }
 
 [[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page, EllpackHostCacheStream* fi) const {
-  nvtx::MakeScopedRange(__func__, nvtx::Rgb{252, 198, 3});
+  auto __scoped = nvtx::MakeScopedRange(__func__, nvtx::Rgb{252, 198, 3});
 
   auto* impl = page->Impl();
   CHECK(this->cuts_->cut_values_.DeviceCanRead());
@@ -111,7 +111,7 @@ template <typename T>
 
 [[nodiscard]] std::size_t EllpackPageRawFormat::Write(EllpackPage const& page,
                                                       EllpackHostCacheStream* fo) const {
-  nvtx::MakeScopedRange(__func__, nvtx::Rgb{3, 252, 198});
+  auto __scoped = nvtx::MakeScopedRange(__func__, nvtx::Rgb{3, 252, 198});
 
   bool new_page = fo->Write(page);
   dh::DefaultStream().Sync();
