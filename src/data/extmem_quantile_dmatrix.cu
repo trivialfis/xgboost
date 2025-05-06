@@ -95,7 +95,7 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   // overlap with the data transfer.
   auto is_validation = (ref != nullptr);
   auto cinfo =
-      EllpackCacheInfo{p, is_validation, detail::DftHostRatio(config.host_ratio, is_validation),
+      EllpackCacheInfo{p, is_validation, detail::DftHostRatio(config.cache_host_ratio, is_validation),
                        config.max_num_device_pages, config.missing};
   CalcCacheMapping(ctx, this->info_.IsDense(), cuts,
                    detail::DftMinCachePageBytes(config.min_cache_page_bytes), ext_info, &cinfo);
