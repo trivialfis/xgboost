@@ -39,12 +39,15 @@ namespace detail {
 // Get the default host ratio. It's |device|/2/|host|.
 [[nodiscard]] float DftHostRatio(float cache_host_ratio) {
   if (std::abs(cache_host_ratio - ::xgboost::cuda_impl::AutoHostRatio()) < kRtEps) {
-    auto host_size = common::SysTotalRam();
+    auto n_devices = curt::AllVisibleGPUs();
+    auto host_size = common::SysTotalRam() / n_devices;
+    CHECK_GE(host_size, 1);
     auto device_size = curt::TotalMemory();
     auto d_ratio = static_cast<double>(device_size) / static_cast<double>(host_size);
     cache_host_ratio = 1.0 - d_ratio * 0.5;
   } else {
     CHECK_GE(cache_host_ratio, 0.0f);
+    CHECK_LE(cache_host_ratio, 1.0f);
   }
   return cache_host_ratio;
 }
@@ -74,7 +77,7 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
    * Calculate cache info
    */
   // Prefer device storage for validation dataset since we can't hide the data loading
-  // overhead with inference. On the other hand, training procedures can confortably
+  // overhead with inference. On the other hand, training procedures can comfortably
   // overlap with the data transfer.
   auto prefer_device = (ref != nullptr);
   auto cinfo = EllpackCacheInfo{p, prefer_device, config.host_ratio, config.max_num_device_pages,
