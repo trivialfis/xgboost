@@ -46,7 +46,6 @@ EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
     : cache_mapping{std::move(cinfo.cache_mapping)},
       buffer_bytes{std::move(cinfo.buffer_bytes)},
       buffer_rows{std::move(cinfo.buffer_rows)},
-      prefer_device{cinfo.prefer_device},
       cache_host_ratio{cinfo.cache_host_ratio},
       max_num_device_pages{cinfo.max_num_device_pages} {
   CHECK_EQ(buffer_bytes.size(), buffer_rows.size());
@@ -106,7 +105,6 @@ class EllpackHostCacheStreamImpl {
 
     this->cache_->sizes_orig.push_back(page.Impl()->MemCostBytes());
     auto orig_ptr = this->cache_->sizes_orig.size() - 1;
-    CHECK_EQ(this->cache_->pages.size(), this->cache_->on_device.size());
 
     CHECK_LT(orig_ptr, this->cache_->NumBatchesOrig());
     auto cache_idx = this->cache_->cache_mapping.at(orig_ptr);
@@ -125,9 +123,6 @@ class EllpackHostCacheStreamImpl {
     // This applies only to a new cached page. If we are concatenating this page to an
     // existing cached page, then we should respect the existing flag obtained from the
     // first page of the cached page.
-    bool to_device_if_new_page =
-        this->cache_->prefer_device &&
-        this->cache_->NumDevicePages() < this->cache_->max_num_device_pages;
     auto cache_host_ratio = this->cache_->cache_host_ratio;
     auto get_host_nbytes = [&](EllpackPageImpl const* old_impl) {
       if (this->cache_->cache_host_ratio == 1.0) {
@@ -180,27 +175,20 @@ class EllpackHostCacheStreamImpl {
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(page.Impl());
 
-      if (to_device_if_new_page) {
-        // Copy to device
-        new_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(
-            page.Impl()->gidx_buffer.size());
-      } else {
-        // Copy to host
-        new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
-            page.Impl()->gidx_buffer.size());
-      }
+      // Copy to host
+      new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(
+          page.Impl()->gidx_buffer.size());
       dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), page.Impl()->gidx_buffer.data(),
                                     page.Impl()->gidx_buffer.size_bytes(), cudaMemcpyDefault));
 
       this->cache_->offsets.push_back(new_impl->n_rows * new_impl->info.row_stride);
       this->cache_->pages.push_back(std::move(new_impl));
-      this->cache_->on_device.push_back(to_device_if_new_page);
       return new_page;
     }
 
     if (new_page) {
       // No need to copy if it's already in device.
-      if (!this->cache_->pages.empty() && !this->cache_->on_device.back()) {
+      if (!this->cache_->pages.empty()) {
         // Need to wrap up the previous page.
         auto [commited, d_page] = commit_host_page(this->cache_->pages.back().get());
         // Replace the previous page (on device) with a new page on host.
@@ -222,7 +210,6 @@ class EllpackHostCacheStreamImpl {
 
       // Make sure we can always access the back of the vectors
       this->cache_->pages.push_back(std::move(new_impl));
-      this->cache_->on_device.push_back(to_device_if_new_page);
       this->cache_->d_pages.emplace_back();
     } else {
       // Concatenate into the device pages even though `d_pages` is used. We split the
@@ -235,7 +222,7 @@ class EllpackHostCacheStreamImpl {
     }
 
     // No need to copy if it's already in device.
-    if (last_page && !this->cache_->on_device.back()) {
+    if (last_page) {
       auto [commited, d_page] = commit_host_page(this->cache_->pages.back().get());
       this->cache_->pages.back() = std::move(commited);
       this->cache_->d_pages.back() = std::move(d_page);
