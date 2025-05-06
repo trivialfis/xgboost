@@ -17,7 +17,7 @@ namespace {
 [[nodiscard]] EllpackCacheInfo CInfoForTest(Context const *ctx, DMatrix *Xy, bst_idx_t row_stride,
                                             BatchParam param,
                                             std::shared_ptr<common::HistogramCuts const> cuts) {
-  EllpackCacheInfo cinfo{param, false, ::xgboost::cuda_impl::AutoHostRatio(), 1,
+  EllpackCacheInfo cinfo{param, ::xgboost::cuda_impl::AutoHostRatio(), 1,
                          std::numeric_limits<float>::quiet_NaN()};
   ExternalDataInfo ext_info;
   ext_info.n_batches = 1;
@@ -27,8 +27,8 @@ namespace {
   CalcCacheMapping(ctx, Xy->IsDense(), cuts, 0, ext_info, &cinfo);
   CHECK_EQ(ext_info.n_batches, cinfo.cache_mapping.size());
   if (cinfo.NumBatchesCc() == 1) {
-    EXPECT_TRUE(cinfo.prefer_device);
-    cinfo.prefer_device = false;  // We test the host cache.
+    EXPECT_EQ(cinfo.cache_host_ratio, 0.0);
+    cinfo.cache_host_ratio = 1.0;  // We test the host cache.
   }
   return cinfo;
 }
@@ -122,7 +122,7 @@ TEST_P(TestEllpackPageRawFormat, HostIO) {
       for (auto const &page : p_fmat->GetBatches<EllpackPage>(&ctx, param)) {
         if (!format) {
           // Prepare the mapping info.
-          EllpackCacheInfo cinfo{param, false, ::xgboost::cuda_impl::AutoHostRatio(), 1,
+          EllpackCacheInfo cinfo{param, ::xgboost::cuda_impl::AutoHostRatio(), 1,
                                  std::numeric_limits<float>::quiet_NaN()};
           for (std::size_t i = 0; i < 3; ++i) {
             cinfo.cache_mapping.push_back(i);
@@ -171,7 +171,7 @@ TEST(EllpackPageRawFormat, DevicePageConcat) {
   bst_idx_t n_features = 16, n_samples = 128;
 
   auto test = [&](std::int32_t max_num_device_pages, std::int64_t min_cache_page_bytes) {
-    EllpackCacheInfo cinfo{param, true, ::xgboost::cuda_impl::AutoHostRatio(), max_num_device_pages,
+    EllpackCacheInfo cinfo{param, ::xgboost::cuda_impl::AutoHostRatio(), max_num_device_pages,
                            std::numeric_limits<float>::quiet_NaN()};
     ExternalDataInfo ext_info;
 
@@ -213,15 +213,15 @@ TEST(EllpackPageRawFormat, DevicePageConcat) {
 
   {
     auto mem_cache = test(1, n_features * n_samples);
-    ASSERT_EQ(mem_cache->on_device.size(), 4);
-    ASSERT_TRUE(mem_cache->on_device[0]);
+    ASSERT_EQ(mem_cache->d_pages.size(), 4);
+    ASSERT_FALSE(mem_cache->d_pages[0].empty());
     ASSERT_EQ(mem_cache->NumDevicePages(), 1);
   }
   {
     auto mem_cache = test(2, n_features * n_samples);
-    ASSERT_EQ(mem_cache->on_device.size(), 4);
-    ASSERT_TRUE(mem_cache->on_device[0]);
-    ASSERT_TRUE(mem_cache->on_device[1]);
+    ASSERT_EQ(mem_cache->d_pages.size(), 4);
+    ASSERT_FALSE(mem_cache->d_pages[0].empty());
+    ASSERT_FALSE(mem_cache->d_pages[1].empty());
     ASSERT_EQ(mem_cache->NumDevicePages(), 2);
   }
 }
