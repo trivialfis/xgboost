@@ -29,7 +29,10 @@ cudaMemPool_t* CreateHostMemPool() {
   std::call_once(once, [] {
     mem_pool = std::unique_ptr<cudaMemPool_t, void (*)(cudaMemPool_t*)>{
         [] {
+          curt::DefaultStream().Sync();
           std::cout << "create mem pool" << std::endl;
+
+          // setting location fails on gb for some reason. both device and host.
 
           cudaMemPoolProps props;
           std::memset(&props, '\0', sizeof(props));
@@ -37,7 +40,8 @@ cudaMemPool_t* CreateHostMemPool() {
           std::int32_t numa_id = -1;
           dh::safe_cuda(cudaDeviceGetAttribute(&numa_id, cudaDevAttrNumaId, curt::CurrentDevice()));
           numa_id = std::max(numa_id, 0);
-          props.location.id = numa_id;
+          std::cout << "numa_id: " << numa_id << std::endl;
+          // props.location.id = numa_id;
           props.allocType = cudaMemAllocationTypePinned;
           props.usage = cudaMemPoolCreateUsageHwDecompress;
           props.handleTypes = cudaMemHandleTypeNone;
@@ -45,19 +49,21 @@ cudaMemPool_t* CreateHostMemPool() {
           cudaMemPoolProps dprops;
           std::memset(&dprops, '\0', sizeof(dprops));
           dprops.location.type = cudaMemLocationTypeDevice;
-          dprops.location.id = curt::CurrentDevice();
-          // dprops.allocType = cudaMemAllocationTypePinned;
+          // dprops.location.id = 0;
+          dprops.allocType = cudaMemAllocationTypePinned;
           dprops.usage = cudaMemPoolCreateUsageHwDecompress;
           dprops.handleTypes = cudaMemHandleTypeNone;
 
-          std::vector<cudaMemPoolProps> vprops{props, dprops};
+          std::vector<cudaMemPoolProps> vprops{props};
 
           cudaMemPool_t* mem_pool = new cudaMemPool_t;
           dh::safe_cuda(cudaMemPoolCreate(mem_pool, vprops.data()));
+          std::cout << "created" << std::endl;
           return mem_pool;
         }(),
         [](cudaMemPool_t* mem_pool) {
           if (mem_pool) {
+            std::cout << "delete pool" << std::endl;
             dh::safe_cuda(cudaMemPoolDestroy(*mem_pool));
           }
         }};
