@@ -84,18 +84,17 @@ void CompressEllpack(Context const* ctx, CompressedByteT const* device_input_ptr
   }
 }
 
-common::RefResourceView<common::CompressedByteT> DecompressEllpack(
-    Context const* ctx, CompressedByteT const* comp_buffer, std::size_t input_buffer_len) {
+void DecompressEllpack(Context const* ctx, CompressedByteT const* comp_buffer, CompressedByteT* out,
+                       std::size_t out_n_bytes) {
   auto stream = ctx->CUDACtx()->Stream();
   auto decomp_nvcomp_manager = nvcomp::create_manager(comp_buffer, stream);
 
   nvcomp::DecompressionConfig decomp_config =
       decomp_nvcomp_manager->configure_decompression(comp_buffer);
-
-  auto decomp_buf =
-      common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(decomp_config.decomp_data_size);
-
-  decomp_nvcomp_manager->decompress(decomp_buf.data(), comp_buffer, decomp_config);
+  CHECK_GE(out_n_bytes, decomp_config.decomp_data_size);
+  // auto decomp_buf =
+  //     common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(decomp_config.decomp_data_size);
+  decomp_nvcomp_manager->decompress(out, comp_buffer, decomp_config);
 }
 
 void DecompCompressedWithManagerFactoryExample(Context const* ctx,

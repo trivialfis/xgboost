@@ -167,7 +167,8 @@ class EllpackHostCacheStreamImpl {
       dh::DeviceUVector<std::uint8_t> tmp;
       common::CompressEllpack(&ctx, old_impl->gidx_buffer.data() + n_host_bytes, n_compressed_bytes,
                               &tmp);
-      // fixme: we should use tmp.size() here and fix the SizeBytes method.
+      // fixme: we should use tmp.size() here and fix the SizeBytes method and the
+      // allocation in the Read method.
       auto c_page =
           common::MakeFixedVecWithPinnedMalloc<decltype(tmp)::value_type>(n_compressed_bytes);
       std::memset(c_page.data(), '\0', c_page.size_bytes());
@@ -257,9 +258,11 @@ class EllpackHostCacheStreamImpl {
     return new_page;
   }
 
-  void Read(EllpackPage* out, bool prefetch_copy) const {
+  void Read(EllpackPage* out, bool prefetch_copy, dh::CUDAStreamView ds) const {
+
     CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
     auto const* page = this->cache_->At(this->ptr_);
+    auto const& c_page = this->cache_->c_pages.at(this->ptr_);
     auto const& d_page = this->cache_->d_pages.at(this->ptr_);
     auto ctx = Context{}.MakeCUDA(dh::CurrentDevice());
     if (IsDevicePage(page)) {
@@ -272,15 +275,22 @@ class EllpackHostCacheStreamImpl {
     }
     auto out_impl = out->Impl();
     if (prefetch_copy) {
-      auto n = page->gidx_buffer.size() + d_page.size();
+      auto n = page->gidx_buffer.size() + d_page.size() + c_page.size();
       out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n);
+
+      // Copy host cache
       if (!page->gidx_buffer.empty()) {
         dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), page->gidx_buffer.data(),
                                       page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
                                       ctx.CUDACtx()->Stream()));
       }
+      // Copy compressed host cache
+      auto ptr = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
+      common::DecompressEllpack(&ctx, c_page.data(), ptr, c_page.size_bytes());
+
+      // Copy device cache.
       if (!d_page.empty()) {
-        auto beg = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
+        auto beg = out_impl->gidx_buffer.data() + page->gidx_buffer.size() + c_page.size_bytes();
         dh::safe_cuda(cudaMemcpyAsync(beg, d_page.data(), d_page.size_bytes(), cudaMemcpyDefault,
                                       ctx.CUDACtx()->Stream()));
       }
@@ -310,8 +320,9 @@ std::shared_ptr<EllpackMemCache const> EllpackHostCacheStream::Share() const {
 
 void EllpackHostCacheStream::Seek(bst_idx_t offset_bytes) { this->p_impl_->Seek(offset_bytes); }
 
-void EllpackHostCacheStream::Read(EllpackPage* page, bool prefetch_copy) const {
-  this->p_impl_->Read(page, prefetch_copy);
+void EllpackHostCacheStream::Read(EllpackPage* page, bool prefetch_copy,
+                                  dh::CUDAStreamView ds) const {
+  this->p_impl_->Read(page, prefetch_copy, ds);
 }
 
 [[nodiscard]] bool EllpackHostCacheStream::Write(EllpackPage const& page) {
