@@ -71,6 +71,7 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
     // have to combat memory fragmentation, putting cache on the device is risky.
     cache_host_ratio = 1.0;
   }
+  cache_host_ratio = 0.727671;
   LOG(INFO) << "`cache_host_ratio` is configured to be:" << cache_host_ratio;
   return cache_host_ratio;
 }
