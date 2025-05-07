@@ -12,6 +12,7 @@
 #include <new>      // for bad_array_new_length
 
 #include "common.h"
+#include "cuda_rt_utils.h"
 
 namespace xgboost::common::cuda_impl {
 // \p pinned_allocator is a CUDA-specific host memory allocator
@@ -121,6 +122,7 @@ struct PinnedMemPoolPolicy {
     }
 
     auto mem_pool = CreateHostMemPool();
+    CHECK(mem_pool);
     size_type n_bytes = cnt * sizeof(value_type);
     pointer result = nullptr;
     dh::safe_cuda(cudaMallocFromPoolAsync(&result, n_bytes, *mem_pool, cudaStreamPerThread));

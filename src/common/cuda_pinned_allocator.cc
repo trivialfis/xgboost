@@ -4,8 +4,19 @@
 #include "cuda_pinned_allocator.h"
 
 #include "common.h"
+#include "cuda_rt_utils.h"
 
 namespace xgboost::common::cuda_impl {
+/**
+cudaHostAlloc:	0
+cudaMallocHost:	0
+cudaHostRegister:	0
+cudaMalloc:	1
+cudaMallocManaged:	0
+mem_pool_ptr:	1
+minimum granularity:	2097152
+mem_create_ptr:	1
+ */
 cudaMemPool_t* CreateHostMemPool() {
   auto del = [](cudaMemPool_t* mem_pool) {
     if (mem_pool) {
