@@ -156,6 +156,9 @@ class EllpackHostCacheStreamImpl {
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
 
       auto n_compressed_bytes = n_bytes / 2;
+      // nvcomp overflow, we should batch it.
+      n_compressed_bytes = std::min(n_compressed_bytes, static_cast<std::size_t>(2147483648ul));
+
       auto n_host_bytes = n_bytes - n_compressed_bytes;
       CHECK_GT(n_compressed_bytes, 0);
       CHECK_GT(n_host_bytes, 0);
