@@ -64,7 +64,8 @@ constexpr float UseDeviceCacheThreshold() { return 0.25; }
               << " device/host:" << d_ratio;
     // 0.95 is found via profiling on GB. It costs about the same amount of the to compute
     // CUDA kernels and to copy the cache.
-    cache_host_ratio = 1.0 - d_ratio * 0.95;
+    // cache_host_ratio = 1.0 - d_ratio * 0.95;
+    cache_host_ratio = 1.0 - d_ratio * 0.65;
   } else {
     // Put all data on the host memory if we don't need to share the C2C bandwidth. We
     // have to combat memory fragmentation, putting cache on the device is risky.

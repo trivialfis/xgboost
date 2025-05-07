@@ -117,7 +117,9 @@ template <typename T>
   dh::DefaultStream().Sync();
 
   if (new_page) {
-    return fo->Share()->pages.back()->MemCostBytes() + fo->Share()->d_pages.back().size_bytes();
+    auto cache = fo->Share();
+    return cache->pages.back()->MemCostBytes() + cache->d_pages.back().size_bytes() +
+           cache->c_pages.back().size_bytes();
   } else {
     return InvalidPageSize();
   }

@@ -54,6 +54,8 @@ struct EllpackCacheInfo {
 struct EllpackMemCache {
   // The host portion of each page.
   std::vector<std::unique_ptr<EllpackPageImpl>> pages;
+  // The compressed portion of each page.
+  std::vector<common::RefResourceView<std::uint8_t>> c_pages;
   // The device portion of each page.
   std::vector<common::RefResourceView<common::CompressedByteT>> d_pages;
   std::vector<std::size_t> offsets;
