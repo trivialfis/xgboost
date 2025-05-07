@@ -54,7 +54,7 @@ cudaMemPool_t* CreateHostMemPool() {
           dprops.usage = cudaMemPoolCreateUsageHwDecompress;
           dprops.handleTypes = cudaMemHandleTypeNone;
 
-          std::vector<cudaMemPoolProps> vprops{props};
+          std::vector<cudaMemPoolProps> vprops{props, dprops};
 
           cudaMemPool_t* mem_pool = new cudaMemPool_t;
           dh::safe_cuda(cudaMemPoolCreate(mem_pool, vprops.data()));
