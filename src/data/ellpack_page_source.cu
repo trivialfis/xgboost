@@ -50,6 +50,7 @@ EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
       cache_host_ratio{cinfo.cache_host_ratio},
       max_num_device_pages{cinfo.max_num_device_pages} {
   CHECK_EQ(buffer_bytes.size(), buffer_rows.size());
+  CHECK_GT(cinfo.cache_host_ratio, 0.0);
 }
 
 EllpackMemCache::~EllpackMemCache() = default;
@@ -127,6 +128,7 @@ class EllpackHostCacheStreamImpl {
     // existing cached page, then we should respect the existing flag obtained from the
     // first page of the cached page.
     auto cache_host_ratio = this->cache_->cache_host_ratio;
+    CHECK_GT(cache_host_ratio, 0);
     auto get_host_nbytes = [&](EllpackPageImpl const* old_impl) {
       if (this->cache_->cache_host_ratio == 1.0) {
         return old_impl->gidx_buffer.size_bytes();
@@ -151,6 +153,7 @@ class EllpackHostCacheStreamImpl {
       auto n_bytes = get_host_nbytes(old_impl);
       // Further split into host buffer and compressed host buffer.
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
+      std::cout << "n_bytes:" << n_bytes << " sb:" << old_impl->gidx_buffer.size_bytes() << std::endl;
       auto n_compressed_bytes = n_bytes / 2;
       auto n_host_bytes = n_bytes - n_compressed_bytes;
       CHECK_GT(n_compressed_bytes, 0);
@@ -425,10 +428,10 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
   cinfo->buffer_rows = std::move(cache_rows);
 
   // Directly store in device if there's only one batch.
-  if (cinfo->NumBatchesCc() == 1) {
-    cinfo->cache_host_ratio = 0.0;  // FIXME: Add tests.
-    LOG(INFO) << "Prefer device cache as there's only 1 page.";
-  }
+  // if (cinfo->NumBatchesCc() == 1) {
+  //   cinfo->cache_host_ratio = 0.0;  // FIXME: Add tests.
+  //   LOG(INFO) << "Prefer device cache as there's only 1 page.";
+  // }
 }
 
 /**
