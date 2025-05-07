@@ -120,8 +120,10 @@ template <typename T>
 
   if (new_page) {
     auto cache = fo->Share();
+    // CHECK_NE(cache->decomp_n_bytes.back(), 0); fixme: may not need to add these sizes
+    // since the pages field is the only valid field for a newly written page.
     return cache->pages.back()->MemCostBytes() + cache->d_pages.back().size_bytes() +
-           cache->c_pages.back().size_bytes();
+           cache->decomp_n_bytes.back();
   } else {
     return InvalidPageSize();
   }
