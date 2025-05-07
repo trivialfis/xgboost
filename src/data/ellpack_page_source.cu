@@ -94,7 +94,8 @@ class EllpackHostCacheStreamImpl {
         k = i;
         break;
       }
-      n_bytes += (cache_->pages[i]->MemCostBytes() + cache_->d_pages[i].size_bytes());
+      n_bytes += (cache_->pages[i]->MemCostBytes() + cache_->d_pages[i].size_bytes() +
+                  cache_->decomp_n_bytes.at(i));
     }
     if (offset_bytes == n_bytes && k == -1) {
       k = this->cache_->pages.size();  // seek end
@@ -153,7 +154,7 @@ class EllpackHostCacheStreamImpl {
       auto n_bytes = get_host_nbytes(old_impl);
       // Further split into host buffer and compressed host buffer.
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
-      std::cout << "n_bytes:" << n_bytes << " sb:" << old_impl->gidx_buffer.size_bytes() << std::endl;
+
       auto n_compressed_bytes = n_bytes / 2;
       auto n_host_bytes = n_bytes - n_compressed_bytes;
       CHECK_GT(n_compressed_bytes, 0);

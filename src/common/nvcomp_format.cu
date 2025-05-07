@@ -56,13 +56,23 @@ void CompressEllpack(Context const* ctx, CompressedByteT const* device_input_ptr
     // This may fail with:
     // Could not determine the maximum compressed chunk size. : code=11.
     CompressionConfig comp_config = mgr.configure_compression(input_buffer_len);
+    mgr.set_scratch_allocators(
+        [](std::size_t n_bytes) -> void* {
+          return static_cast<void*>(dh::XGBDeviceAllocator<char>{}.allocate(n_bytes).get());
+        },
+        [](void* ptr, std::size_t n_bytes) {
+          dh::XGBDeviceAllocator<char>{}.deallocate(
+              thrust::device_ptr<char>{static_cast<char*>(ptr)}, n_bytes);
+        });
 
-    std::cout << "max compressed buffer:" << comp_config.max_compressed_buffer_size << std::endl;
+
     comp_buffer.resize(comp_config.max_compressed_buffer_size);
 
     mgr.compress(device_input_ptr, comp_buffer.data(), comp_config);
     std::size_t comp_size = mgr.get_compressed_output_size(comp_buffer.data());
-    std::cout << "comp size:" << comp_size
+    LOG(INFO) << "max compressed buffer:"
+              << common::HumanMemUnit(comp_config.max_compressed_buffer_size)
+              << " compression size:" << common::HumanMemUnit(comp_size)
               << " compression ratio:" << (static_cast<double>(comp_size) / input_buffer_len)
               << std::endl;
     comp_buffer.resize(comp_size);
@@ -87,6 +97,14 @@ void CompressEllpack(Context const* ctx, CompressedByteT const* device_input_ptr
 void DecompressEllpack(curt::CUDAStreamView s, CompressedByteT const* comp_buffer,
                        CompressedByteT* out, std::size_t out_n_bytes) {
   auto decomp_nvcomp_manager = nvcomp::create_manager(comp_buffer, s);
+  decomp_nvcomp_manager->set_scratch_allocators(
+      [](std::size_t n_bytes) -> void* {
+        return static_cast<void*>(dh::XGBDeviceAllocator<char>{}.allocate(n_bytes).get());
+      },
+      [](void* ptr, std::size_t n_bytes) {
+        dh::XGBDeviceAllocator<char>{}.deallocate(thrust::device_ptr<char>{static_cast<char*>(ptr)},
+                                                  n_bytes);
+      });
 
   nvcomp::DecompressionConfig decomp_config =
       decomp_nvcomp_manager->configure_decompression(comp_buffer);
