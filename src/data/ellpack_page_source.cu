@@ -172,8 +172,8 @@ class EllpackHostCacheStreamImpl {
 
       // Copy compressed buffer
       dh::DeviceUVector<std::uint8_t> tmp;
-      common::CompressEllpack(&ctx, old_impl->gidx_buffer.data() + n_host_bytes, n_compressed_bytes,
-                              &tmp);
+      common::CompressEllpack(
+          &ctx, old_impl->gidx_buffer.ToSpan().subspan(n_host_bytes, n_compressed_bytes), &tmp);
       // fixme: we should use tmp.size() here and fix the SizeBytes method and the
       // allocation in the Read method.
       auto c_page = common::MakeFixedVecWithPinnedMalloc<decltype(tmp)::value_type>(tmp.size());
