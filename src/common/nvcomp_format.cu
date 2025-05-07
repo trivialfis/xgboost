@@ -92,7 +92,7 @@ void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
 }
 
 void DecompressEllpack(curt::CUDAStreamView s, CompressedByteT const* comp_buffer,
-                       CompressedByteT* out, std::size_t out_n_bytes) {
+                       Span<CompressedByteT> out) {
   auto decomp_nvcomp_manager = nvcomp::create_manager(comp_buffer, s);
   decomp_nvcomp_manager->set_scratch_allocators(
       [](std::size_t n_bytes) -> void* {
@@ -105,9 +105,7 @@ void DecompressEllpack(curt::CUDAStreamView s, CompressedByteT const* comp_buffe
 
   nvcomp::DecompressionConfig decomp_config =
       decomp_nvcomp_manager->configure_decompression(comp_buffer);
-  CHECK_GE(out_n_bytes, decomp_config.decomp_data_size);
-  // auto decomp_buf =
-  //     common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(decomp_config.decomp_data_size);
-  decomp_nvcomp_manager->decompress(out, comp_buffer, decomp_config);
+  CHECK_GE(out.size_bytes(), decomp_config.decomp_data_size);
+  decomp_nvcomp_manager->decompress(out.data(), comp_buffer, decomp_config);
 }
 }  // namespace xgboost::common

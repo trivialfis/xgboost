@@ -10,5 +10,5 @@ void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
                      dh::DeviceUVector<std::uint8_t>* p_out);
 
 void DecompressEllpack(curt::CUDAStreamView s, CompressedByteT const* comp_buffer,
-                       CompressedByteT* out, std::size_t out_n_bytes);
+                       Span<CompressedByteT> out);
 }  // namespace xgboost::common
