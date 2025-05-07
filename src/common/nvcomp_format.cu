@@ -23,8 +23,6 @@ enum Algo {
 
 void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
                      dh::DeviceUVector<std::uint8_t>* p_out) {
-  using namespace nvcomp;
-
   auto stream = ctx->CUDACtx()->Stream();
   const int chunk_size = 1 << 16;
   // NVCOMP_TYPE_UINT8
@@ -32,7 +30,7 @@ void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
 
   // lz4
   nvcompBatchedLZ4Opts_t lz4_opts{data_type};
-  LZ4Manager lz4_mgr{chunk_size, lz4_opts, stream};
+  nvcomp::LZ4Manager lz4_mgr{chunk_size, lz4_opts, stream};
   // gdeflate
   /**
    * 0 : high-throughput, low compression ratio (default)
@@ -41,19 +39,19 @@ void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
    * performance)
    */
   nvcompBatchedGdeflateOpts_t gdeflate_opts{1};
-  GdeflateManager gdeflate_mgr{chunk_size, gdeflate_opts, stream};
+  nvcomp::GdeflateManager gdeflate_mgr{chunk_size, gdeflate_opts, stream};
   // snappy
   nvcompBatchedSnappyOpts_t snappy_opts{};
-  SnappyManager snappy_mgr{chunk_size, snappy_opts, stream};
+  nvcomp::SnappyManager snappy_mgr{chunk_size, snappy_opts, stream};
   // cascaded
   nvcompBatchedCascadedOpts_t cascaded_opts{chunk_size, data_type};
-  CascadedManager cascaded_mgr{chunk_size, cascaded_opts, stream};
+  nvcomp::CascadedManager cascaded_mgr{chunk_size, cascaded_opts, stream};
   dh::DeviceUVector<std::uint8_t>& comp_buffer = *p_out;
 
   auto compress = [in, &comp_buffer](auto& mgr) {
     // This may fail with:
     // Could not determine the maximum compressed chunk size. : code=11.
-    CompressionConfig comp_config = mgr.configure_compression(in.size_bytes());
+    nvcomp::CompressionConfig comp_config = mgr.configure_compression(in.size_bytes());
     mgr.set_scratch_allocators(
         [](std::size_t n_bytes) -> void* {
           return static_cast<void*>(dh::XGBDeviceAllocator<char>{}.allocate(n_bytes).get());
