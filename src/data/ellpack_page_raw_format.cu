@@ -98,7 +98,7 @@ template <typename T>
 [[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page, EllpackHostCacheStream* fi) const {
   xgboost_NVTX_FN_RANGE_C(252, 198, 3);
 
-  dh::CUDAStream ds;  // decompression stream
+  curt::CUDAStream ds;  // decompression stream
   auto* impl = page->Impl();
   CHECK(this->cuts_->cut_values_.DeviceCanRead());
 

@@ -258,7 +258,7 @@ class EllpackHostCacheStreamImpl {
     return new_page;
   }
 
-  void Read(EllpackPage* out, bool prefetch_copy, dh::CUDAStreamView ds) const {
+  void Read(EllpackPage* out, bool prefetch_copy, curt::CUDAStreamView ds) const {
 
     CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
     auto const* page = this->cache_->At(this->ptr_);
@@ -286,7 +286,7 @@ class EllpackHostCacheStreamImpl {
       }
       // Copy compressed host cache
       auto ptr = out_impl->gidx_buffer.data() + page->gidx_buffer.size();
-      common::DecompressEllpack(&ctx, c_page.data(), ptr, c_page.size_bytes());
+      common::DecompressEllpack(ds, c_page.data(), ptr, c_page.size_bytes());
 
       // Copy device cache.
       if (!d_page.empty()) {
@@ -321,7 +321,7 @@ std::shared_ptr<EllpackMemCache const> EllpackHostCacheStream::Share() const {
 void EllpackHostCacheStream::Seek(bst_idx_t offset_bytes) { this->p_impl_->Seek(offset_bytes); }
 
 void EllpackHostCacheStream::Read(EllpackPage* page, bool prefetch_copy,
-                                  dh::CUDAStreamView ds) const {
+                                  curt::CUDAStreamView ds) const {
   this->p_impl_->Read(page, prefetch_copy, ds);
 }
 

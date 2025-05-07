@@ -116,7 +116,7 @@ class EllpackHostCacheStream {
    * @param page[out] The returned page.
    * @param prefetch_copy[in] Does the stream need to copy the page?
    */
-  void Read(EllpackPage* page, bool prefetch_copy, dh::CUDAStreamView ds) const;
+  void Read(EllpackPage* page, bool prefetch_copy, curt::CUDAStreamView ds) const;
   /**
    * @brief Add a new page to the host cache.
    *

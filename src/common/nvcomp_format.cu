@@ -84,10 +84,9 @@ void CompressEllpack(Context const* ctx, CompressedByteT const* device_input_ptr
   }
 }
 
-void DecompressEllpack(Context const* ctx, CompressedByteT const* comp_buffer, CompressedByteT* out,
-                       std::size_t out_n_bytes) {
-  auto stream = ctx->CUDACtx()->Stream();
-  auto decomp_nvcomp_manager = nvcomp::create_manager(comp_buffer, stream);
+void DecompressEllpack(curt::CUDAStreamView s, CompressedByteT const* comp_buffer,
+                       CompressedByteT* out, std::size_t out_n_bytes) {
+  auto decomp_nvcomp_manager = nvcomp::create_manager(comp_buffer, s);
 
   nvcomp::DecompressionConfig decomp_config =
       decomp_nvcomp_manager->configure_decompression(comp_buffer);
