@@ -60,7 +60,8 @@ class CudaGrowOnlyResource : public ResourceHandler {
 };
 
 class CudaPinnedResource : public ResourceHandler {
-  std::vector<std::byte, cuda_impl::SamAllocator<std::byte>> storage_;
+  // std::vector<std::byte, cuda_impl::SamAllocator<std::byte>> storage_;
+  std::vector<std::byte, cuda_impl::PinnedPoolAllocator<std::byte>> storage_;
 
   void Clear() noexcept(true) { this->Resize(0); }
 

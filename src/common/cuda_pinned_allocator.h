@@ -3,7 +3,6 @@
  *
  * @brief cuda pinned allocator for usage with thrust containers
  */
-
 #pragma once
 
 #include <cuda_runtime.h>
@@ -103,6 +102,36 @@ struct SamAllocPolicy {
   }
 };
 
+cudaMemPool_t* CreateHostMemPool();
+
+template <typename T>
+struct PinnedMemPoolPolicy {
+  using pointer = T*;              // NOLINT: The type returned by address() / allocate()
+  using const_pointer = const T*;  // NOLINT: The type returned by address()
+  using size_type = std::size_t;   // NOLINT: The type used for the size of the allocation
+  using value_type = T;            // NOLINT: The type of the elements in the allocator
+
+  [[nodiscard]] constexpr size_type max_size() const {  // NOLINT
+    return std::numeric_limits<size_type>::max() / sizeof(value_type);
+  }
+
+  [[nodiscard]] pointer allocate(size_type cnt, const_pointer = nullptr) const {  // NOLINT
+    if (cnt > this->max_size()) {
+      throw std::bad_array_new_length{};
+    }
+
+    auto mem_pool = CreateHostMemPool();
+    size_type n_bytes = cnt * sizeof(value_type);
+    pointer result = nullptr;
+    dh::safe_cuda(cudaMallocFromPoolAsync(&result, n_bytes, *mem_pool, cudaStreamPerThread));
+    return result;
+  }
+
+  void deallocate(pointer p, size_type) {  // NOLINT
+    dh::safe_cuda(cudaFreeAsync(p, cudaStreamPerThread));
+  }
+};
+
 template <typename T, template <typename> typename Policy>
 class CudaHostAllocatorImpl : public Policy<T> {
  public:
@@ -147,4 +176,7 @@ using ManagedAllocator = CudaHostAllocatorImpl<T, ManagedAllocPolicy>;
 
 template <typename T>
 using SamAllocator = CudaHostAllocatorImpl<T, SamAllocPolicy>;
+
+template <typename T>
+using PinnedPoolAllocator = CudaHostAllocatorImpl<T, PinnedMemPoolPolicy>;
 }  // namespace xgboost::common::cuda_impl
