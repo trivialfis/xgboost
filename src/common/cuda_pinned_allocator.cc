@@ -18,14 +18,31 @@ cudaMemPool_t* CreateHostMemPool() {
   std::call_once(once, [] {
     mem_pool = std::unique_ptr<cudaMemPool_t, void (*)(cudaMemPool_t*)>{
         [] {
-          cudaMemPoolProps props = {};
+          std::cout << "create mem pool" << std::endl;
+
+          cudaMemPoolProps props;
+          std::memset(&props, '\0', sizeof(props));
           props.location.type = cudaMemLocationTypeHostNuma;
-          props.location.id = 0;
+          std::int32_t numa_id = -1;
+          dh::safe_cuda(cudaDeviceGetAttribute(&numa_id, cudaDevAttrNumaId, curt::CurrentDevice()));
+          numa_id = std::max(numa_id, 0);
+          props.location.id = numa_id;
           props.allocType = cudaMemAllocationTypePinned;
           props.usage = cudaMemPoolCreateUsageHwDecompress;
+          props.handleTypes = cudaMemHandleTypeNone;
+
+          cudaMemPoolProps dprops;
+          std::memset(&dprops, '\0', sizeof(dprops));
+          dprops.location.type = cudaMemLocationTypeDevice;
+          dprops.location.id = curt::CurrentDevice();
+          // dprops.allocType = cudaMemAllocationTypePinned;
+          dprops.usage = cudaMemPoolCreateUsageHwDecompress;
+          dprops.handleTypes = cudaMemHandleTypeNone;
+
+          std::vector<cudaMemPoolProps> vprops{props, dprops};
 
           cudaMemPool_t* mem_pool = new cudaMemPool_t;
-          dh::safe_cuda(cudaMemPoolCreate(mem_pool, &props));
+          dh::safe_cuda(cudaMemPoolCreate(mem_pool, vprops.data()));
           return mem_pool;
         }(),
         [](cudaMemPool_t* mem_pool) {

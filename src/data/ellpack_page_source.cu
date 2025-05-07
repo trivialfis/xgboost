@@ -268,6 +268,7 @@ class EllpackHostCacheStreamImpl {
     }
 
     CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
+    ctx.CUDACtx()->Stream().Sync();
     return new_page;
   }
 

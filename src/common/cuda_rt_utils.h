@@ -115,4 +115,6 @@ class CUDAStream {
   void Sync() { this->View().Sync(); }
   void Wait(CUDAEvent const &e) { this->View().Wait(e); }
 };
+
+inline CUDAStreamView DefaultStream() { return CUDAStreamView{cudaStreamPerThread}; }
 }  // namespace xgboost::curt
