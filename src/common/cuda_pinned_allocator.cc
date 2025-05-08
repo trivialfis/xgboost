@@ -59,6 +59,19 @@ cudaMemPool_t* CreateHostMemPool() {
           cudaMemPool_t* mem_pool = new cudaMemPool_t;
           dh::safe_cuda(cudaMemPoolCreate(mem_pool, vprops.data()));
           std::cout << "created" << std::endl;
+
+          cudaMemAccessDesc h_desc;
+          h_desc.location.type = cudaMemLocationTypeHostNuma;
+          h_desc.location.id = 0;
+          h_desc.flags = cudaMemAccessFlagsProtReadWrite;
+
+          cudaMemAccessDesc d_desc;
+          d_desc.location.type = cudaMemLocationTypeDevice;
+          d_desc.location.id = 0;
+          d_desc.flags = cudaMemAccessFlagsProtReadWrite;
+
+          std::vector<cudaMemAccessDesc> descs{h_desc, d_desc};
+          dh::safe_cuda(cudaMemPoolSetAccess(*mem_pool, descs.data(), descs.size()));
           return mem_pool;
         }(),
         [](cudaMemPool_t* mem_pool) {
