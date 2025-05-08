@@ -33,8 +33,17 @@ void test_comp() {
   std::cout << "done" << std::endl;
   dh::DebugSyncDevice(__FILE__, __LINE__);
   dh::DeviceUVector<CompressedByteT> dout(in.size());
-  DecompressEllpack(curt::DefaultStream(), h_in.data(), dh::ToSpan(dout));
+  DecompressEllpack(curt::DefaultStream(), h_in, dh::ToSpan(dout));
 }
 
 TEST(NVComp, Basic) { test_comp(); }
+
+TEST(NVComp, Snappy) {
+  auto ctx = MakeCUDACtx(0);
+  dh::DeviceUVector<CompressedByteT> in(256);
+  thrust::sequence(ctx.CUDACtx()->CTP(), in.begin(), in.end(), 0);
+  dh::DeviceUVector<std::uint8_t> out;
+
+  CompressSnappy(&ctx, dh::ToSpan(in), &out);
+}
 }  // namespace xgboost::common

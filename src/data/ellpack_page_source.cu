@@ -302,7 +302,7 @@ class EllpackHostCacheStreamImpl {
       }
       // Copy compressed host cache
       auto out = out_impl->gidx_buffer.ToSpan().subspan(page->gidx_buffer.size(), n_decomp_bytes);
-      common::DecompressEllpack(ds, c_page.data(), out);
+      common::DecompressEllpack(ds, c_page.ToSpan(), out);
 
       // Copy device cache.
       if (!d_page.empty()) {
