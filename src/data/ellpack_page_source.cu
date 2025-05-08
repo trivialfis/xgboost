@@ -172,7 +172,7 @@ class EllpackHostCacheStreamImpl {
 
       // Copy compressed buffer
       dh::DeviceUVector<std::uint8_t> tmp;
-      common::CompressEllpack(
+      auto params = common::CompressSnappy(
           &ctx, old_impl->gidx_buffer.ToSpan().subspan(n_host_bytes, n_compressed_bytes), &tmp);
       // fixme: we should use tmp.size() here and fix the SizeBytes method and the
       // allocation in the Read method.
@@ -196,7 +196,7 @@ class EllpackHostCacheStreamImpl {
       LOG(INFO) << "Create cache page with size:"
                 << common::HumanMemUnit(new_impl->MemCostBytes() + d_page.size_bytes());
       return std::make_tuple(std::move(new_impl), std::move(d_page), std::move(c_page),
-                             n_compressed_bytes);
+                             n_compressed_bytes, std::move(params));
     };
     if (no_concat) {
       // FIXME
@@ -221,13 +221,14 @@ class EllpackHostCacheStreamImpl {
       // No need to copy if it's already in device.
       if (!this->cache_->pages.empty()) {
         // Need to wrap up the previous page.
-        auto [commited, d_page, c_page, decomp_n_bytes] =
+        auto [commited, d_page, c_page, decomp_n_bytes, params] =
             commit_host_page(this->cache_->pages.back().get());
         // Replace the previous page (on device) with a new page on host.
         this->cache_->pages.back() = std::move(commited);
         this->cache_->d_pages.back() = std::move(d_page);
         this->cache_->c_pages.back() = std::move(c_page);
         this->cache_->decomp_n_bytes.back() = decomp_n_bytes;
+        this->cache_->mem_params.back() = std::move(params);
       }
       // Push a new page
       auto n_bytes = this->cache_->buffer_bytes.at(this->cache_->pages.size());
@@ -247,6 +248,7 @@ class EllpackHostCacheStreamImpl {
       this->cache_->d_pages.emplace_back();
       this->cache_->c_pages.emplace_back();
       this->cache_->decomp_n_bytes.emplace_back(0);
+      this->cache_->mem_params.emplace_back();
     } else {
       // Concatenate into the device pages even though `d_pages` is used. We split the
       // page at the commit stage.
@@ -259,12 +261,13 @@ class EllpackHostCacheStreamImpl {
 
     // No need to copy if it's already in device.
     if (last_page) {
-      auto [commited, d_page, c_page, decomp_n_bytes] =
+      auto [commited, d_page, c_page, decomp_n_bytes, params] =
           commit_host_page(this->cache_->pages.back().get());
       this->cache_->pages.back() = std::move(commited);
       this->cache_->d_pages.back() = std::move(d_page);
       this->cache_->c_pages.back() = std::move(c_page);
       this->cache_->decomp_n_bytes.back() = decomp_n_bytes;
+      this->cache_->mem_params.back() = std::move(params);
     }
 
     CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
@@ -272,7 +275,7 @@ class EllpackHostCacheStreamImpl {
     return new_page;
   }
 
-  void Read(EllpackPage* out, bool prefetch_copy, curt::CUDAStreamView ds) const {
+  void Read(EllpackPage* out, bool prefetch_copy, dh::CUDAStreamView ds) const {
 
     CHECK_EQ(this->cache_->pages.size(), this->cache_->d_pages.size());
     auto const* page = this->cache_->At(this->ptr_);
@@ -292,6 +295,7 @@ class EllpackHostCacheStreamImpl {
     if (prefetch_copy) {
       auto n_decomp_bytes = this->cache_->decomp_n_bytes.at(this->ptr_);
       auto n = page->gidx_buffer.size() + d_page.size() + n_decomp_bytes;
+      auto const& params = this->cache_->mem_params.at(this->ptr_);
       out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n);
 
       // Copy host cache
@@ -302,7 +306,7 @@ class EllpackHostCacheStreamImpl {
       }
       // Copy compressed host cache
       auto out = out_impl->gidx_buffer.ToSpan().subspan(page->gidx_buffer.size(), n_decomp_bytes);
-      common::DecompressEllpack(ds, c_page.ToSpan(), out);
+      common::DecompressSnappy(ds, params, c_page.ToSpan(), out);
 
       // Copy device cache.
       if (!d_page.empty()) {
@@ -339,7 +343,7 @@ void EllpackHostCacheStream::Seek(bst_idx_t offset_bytes) { this->p_impl_->Seek(
 
 void EllpackHostCacheStream::Read(EllpackPage* page, bool prefetch_copy,
                                   curt::CUDAStreamView ds) const {
-  this->p_impl_->Read(page, prefetch_copy, ds);
+  this->p_impl_->Read(page, prefetch_copy, dh::CUDAStreamView{cudaStream_t{ds}});
 }
 
 [[nodiscard]] bool EllpackHostCacheStream::Write(EllpackPage const& page) {

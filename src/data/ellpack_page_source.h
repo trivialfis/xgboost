@@ -10,10 +10,11 @@
 #include <memory>   // for shared_ptr
 #include <utility>  // for move
 #include <vector>   // for vector
-
+#include <cuda.h>
 #include "../common/compressed_iterator.h"  // for CompressedByteT
 #include "../common/cuda_rt_utils.h"        // for SupportsPageableMem, SupportsAts
 #include "../common/hist_util.h"            // for HistogramCuts
+#include "../common/cuda_pinned_allocator.h"
 #include "../common/ref_resource_view.h"    // for RefResourceView
 #include "ellpack_page.h"                   // for EllpackPage
 #include "ellpack_page_raw_format.h"        // for EllpackPageRawFormat
@@ -51,12 +52,15 @@ struct EllpackCacheInfo {
 // for stream.
 //
 // This is a memory-based cache. It can be a mixed of the device memory and the host memory.
+using CuMemParams = std::vector<CUmemDecompressParams,
+                                common::cuda_impl::PinnedPoolAllocator<CUmemDecompressParams>>;
 struct EllpackMemCache {
   // The host portion of each page.
   std::vector<std::unique_ptr<EllpackPageImpl>> pages;
   // The compressed portion of each page.
   std::vector<common::RefResourceView<std::uint8_t>> c_pages;
   std::vector<std::size_t> decomp_n_bytes;
+  std::vector<CuMemParams> mem_params;
   // The device portion of each page.
   std::vector<common::RefResourceView<common::CompressedByteT>> d_pages;
   std::vector<std::size_t> offsets;
