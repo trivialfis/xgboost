@@ -132,15 +132,16 @@ void DecompressSnappy(dh::CUDAStreamView s, CuMemParams params, Span<CompressedB
   std::size_t error_index = 0;
   std::size_t n_chunks = params.size();
 
-  std::vector<cuuint32_t> act_bytes(n_chunks, 0);
+  std::vector<cuuint32_t, cuda_impl::PinnedPoolAllocator<cuuint32_t>> act_bytes(n_chunks, 0);
   std::size_t last_in = 0, last_out = 0;
   for (std::size_t i = 0; i < n_chunks; ++i) {
-    params[i].dstActBytes = &act_bytes[i];
+    params[i].dstActBytes = act_bytes.data() + i;
     params[i].src = in.subspan(last_in, params[i].srcNumBytes).data();
     params[i].dst = out.subspan(last_out, params[i].dstNumBytes).data();
     last_in += params[i].srcNumBytes;
     last_out += params[i].dstNumBytes;
   }
+  s.Sync();
   auto err = cudr::GetGlobalCuDriverApi().cuMemBatchDecompressAsync(params.data(), n_chunks,
                                                                     0 /*unused*/, &error_index, s);
   safe_cu(err);
