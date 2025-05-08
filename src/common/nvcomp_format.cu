@@ -28,41 +28,11 @@ void SafeNvComp(nvcompStatus_t status) {
   }
 }
 
-std::size_t CalcInChunks(dh::CUDAStreamView stream, Span<CompressedByteT const> data,
-                         std::size_t chunk_size, dh::DeviceUVector<void const*>* p_ptrs,
-                         dh::DeviceUVector<std::size_t>* p_sizes, std::size_t* max_n_bytes) {
-  // div roundup
-  std::size_t n_chunks = (data.size() + chunk_size - 1) / chunk_size;
-  std::size_t last = 0;
+[[nodiscard]] CuMemParams CompressSnappy(Context const* ctx, Span<CompressedByteT const> in,
+                                         dh::DeviceUVector<std::uint8_t>* p_out) {
+  auto cuctx = ctx->CUDACtx();
 
-  std::vector<CompressedByteT const*> ptrs;
-  std::vector<std::size_t> sizes;
-  for (std::size_t i = 0; i < n_chunks; ++i) {
-    auto n = std::min(chunk_size, data.size() - last);
-    auto chunk = data.subspan(last, n);
-    last += n;
-
-    sizes.push_back(chunk.size());
-    ptrs.push_back(chunk.data());
-  }
-  CHECK_EQ(last, data.size());
-
-  p_sizes->resize(sizes.size());
-  dh::safe_cuda(cudaMemcpyAsync(p_sizes->data(), sizes.data(), Span{sizes}.size_bytes(),
-                                cudaMemcpyDefault, stream));
-
-  p_ptrs->resize(ptrs.size());
-  dh::safe_cuda(cudaMemcpyAsync(p_ptrs->data(), ptrs.data(), Span{ptrs}.size_bytes(),
-                                cudaMemcpyDefault, stream));
-
-  CHECK_EQ(n_chunks, p_sizes->size());
-  *max_n_bytes = *std::max_element(sizes.cbegin(), sizes.cend());
-  return n_chunks;
-}
-
-void CompressSnappy(Context const* ctx, Span<CompressedByteT const> in,
-                    dh::DeviceUVector<std::uint8_t>* p_out) {
-  std::size_t const kChunkSize = 1 << 18;  // fixme: this might be too large for memory alloc
+  std::size_t const kChunkSize = 1 << 18;
   auto nvcompBatchedSnappyOpts = nvcompBatchedSnappyDefaultOpts;
 
   nvcompAlignmentRequirements_t compression_alignment_reqs;
@@ -72,28 +42,52 @@ void CompressSnappy(Context const* ctx, Span<CompressedByteT const> in,
   CHECK_EQ(compression_alignment_reqs.output, 1);
   CHECK_EQ(compression_alignment_reqs.temp, 1);
 
-  // inputs
-  dh::DeviceUVector<void const*> in_ptrs;
-  dh::DeviceUVector<std::size_t> in_sizes;
+  /**
+   * Inputs
+   */
+  std::size_t n_chunks = (in.size() + kChunkSize - 1) / kChunkSize;
+  std::size_t last = 0;
 
+  std::vector<CompressedByteT const*> h_in_ptrs;
+  std::vector<std::size_t> h_in_sizes;
+  for (std::size_t i = 0; i < n_chunks; ++i) {
+    auto n = std::min(kChunkSize, in.size() - last);
+    auto chunk = in.subspan(last, n);
+    last += n;
+
+    h_in_sizes.push_back(chunk.size());
+    h_in_ptrs.push_back(chunk.data());
+  }
+  CHECK_EQ(last, in.size());
+
+  dh::DeviceUVector<void const*> in_ptrs(h_in_ptrs.size());
+  dh::safe_cuda(cudaMemcpyAsync(in_ptrs.data(), h_in_ptrs.data(), Span{h_in_ptrs}.size_bytes(),
+                                cudaMemcpyDefault, cuctx->Stream()));
+  dh::DeviceUVector<std::size_t> in_sizes(h_in_sizes.size());
+  dh::safe_cuda(cudaMemcpyAsync(in_sizes.data(), h_in_sizes.data(), Span{h_in_sizes}.size_bytes(),
+                                cudaMemcpyDefault, cuctx->Stream()));
+
+  CHECK_EQ(n_chunks, in_sizes.size());
+  std::size_t max_in_nbytes = *std::max_element(h_in_sizes.cbegin(), h_in_sizes.cend());
+
+  /**
+   * Outputs
+   */
   std::size_t comp_temp_bytes;
-  auto cuctx = ctx->CUDACtx();
-  std::size_t max_n_bytes = 0;
-  auto n_chunks = CalcInChunks(cuctx->Stream(), in, kChunkSize, &in_ptrs, &in_sizes, &max_n_bytes);
   SafeNvComp(nvcompBatchedSnappyCompressGetTempSize(n_chunks, kChunkSize, nvcompBatchedSnappyOpts,
                                                     &comp_temp_bytes));
   CHECK_EQ(comp_temp_bytes, 0);
   dh::DeviceUVector<char> comp_tmp(comp_temp_bytes);
 
-  std::size_t max_out_bytes;
+  std::size_t max_out_nbytes;
   SafeNvComp(nvcompBatchedSnappyCompressGetMaxOutputChunkSize(
-      std::min(max_n_bytes, kChunkSize), nvcompBatchedSnappyOpts, &max_out_bytes));
-  p_out->resize(max_out_bytes * n_chunks);
+      std::min(max_in_nbytes, kChunkSize), nvcompBatchedSnappyOpts, &max_out_nbytes));
+  p_out->resize(max_out_nbytes * n_chunks);
   std::vector<void*> h_out_ptrs(n_chunks);
   std::vector<std::size_t> h_out_sizes(n_chunks);
   auto s_out = dh::ToSpan(*p_out);
   for (std::size_t i = 0; i < n_chunks; ++i) {
-    auto chunk = s_out.subspan(max_out_bytes * i, max_out_bytes);
+    auto chunk = s_out.subspan(max_out_nbytes * i, max_out_nbytes);
     h_out_ptrs[i] = chunk.data();
     h_out_sizes[i] = chunk.size();
   }
@@ -103,15 +97,53 @@ void CompressSnappy(Context const* ctx, Span<CompressedByteT const> in,
   dh::DeviceUVector<std::size_t> out_sizes(h_out_sizes.size());
   dh::safe_cuda(cudaMemcpyAsync(out_sizes.data(), h_out_sizes.data(),
                                 Span{h_out_sizes}.size_bytes(), cudaMemcpyDefault));
-  // build output buffers
+
+  /**
+   * Compress
+   */
   SafeNvComp(nvcompBatchedSnappyCompressAsync(
-      in_ptrs.data(), in_sizes.data(), max_n_bytes, n_chunks, comp_tmp.data(), comp_temp_bytes,
+      in_ptrs.data(), in_sizes.data(), max_in_nbytes, n_chunks, comp_tmp.data(), comp_temp_bytes,
       out_ptrs.data(), out_sizes.data(), nvcompBatchedSnappyOpts, cuctx->Stream()));
   auto n_bytes = thrust::reduce(cuctx->CTP(), out_sizes.cbegin(), out_sizes.cend());
   auto n_total_bytes = p_out->size();
   auto ratio = static_cast<double>(n_total_bytes) / in.size_bytes();
   LOG(INFO) << "Input: " << in.size_bytes() << ", need:" << n_bytes
             << " allocated:" << n_total_bytes << " ratio:" << ratio;
+
+  /**
+   * Meta
+   */
+  CuMemParams params(n_chunks);
+  dh::safe_cuda(cudaMemcpyAsync(h_out_sizes.data(), out_sizes.data(),
+                                Span{h_out_sizes}.size_bytes(), cudaMemcpyDefault,
+                                cuctx->Stream()));
+  std::memset(params.data(), '\0', params.size() * sizeof(CuMemParams::value_type));
+  for (std::size_t i = 0; i < n_chunks; ++i) {
+    auto& p = params[i];
+    p.srcNumBytes = h_out_sizes[i];
+    p.dstNumBytes = h_in_sizes[i];
+    p.algo = CU_MEM_DECOMPRESS_ALGORITHM_SNAPPY;
+  }
+  return params;
+}
+
+void DecompressSnappy(dh::CUDAStreamView s, CuMemParams params, Span<CompressedByteT const> in,
+                      Span<CompressedByteT> out) {
+  std::size_t error_index = 0;
+  std::size_t n_chunks = params.size();
+
+  std::vector<cuuint32_t> act_bytes(n_chunks, 0);
+  std::size_t last_in = 0, last_out = 0;
+  for (std::size_t i = 0; i < n_chunks; ++i) {
+    params[i].dstActBytes = &act_bytes[i];
+    params[i].src = in.subspan(last_in, params[i].srcNumBytes).data();
+    params[i].dst = out.subspan(last_out, params[i].dstNumBytes).data();
+    last_in += params[i].srcNumBytes;
+    last_out += params[i].dstNumBytes;
+  }
+  auto err = cudr::GetGlobalCuDriverApi().cuMemBatchDecompressAsync(params.data(), n_chunks,
+                                                                    0 /*unused*/, &error_index, s);
+  safe_cu(err);
 }
 
 void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
@@ -184,33 +216,18 @@ void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,
 
 void DecompressEllpack(curt::CUDAStreamView s, Span<CompressedByteT const> in,
                        Span<CompressedByteT> out) {
-  std::size_t error_index = 0;
-  std::size_t num_chunks = 1;
-  CUmemDecompressParams params;
-  std::memset(&params, '\0', sizeof(params));
-  params.srcNumBytes = in.size_bytes();
-  params.dstNumBytes = out.size_bytes();
-  cuuint32_t dst_act_bytes = 0;
-  params.dstActBytes = &dst_act_bytes;
-  params.src = in.data();
-  params.dst = out.data();
-  params.algo = CU_MEM_DECOMPRESS_ALGORITHM_SNAPPY;
-  auto err = cudr::GetGlobalCuDriverApi().cuMemBatchDecompressAsync(&params, num_chunks,
-                                                                    1 /*unused*/, &error_index, s);
-  safe_cu(err);
-
   auto decomp_nvcomp_manager = nvcomp::create_manager(in.data(), s);
-  // decomp_nvcomp_manager->set_scratch_allocators(
-  //     [](std::size_t n_bytes) -> void* {
-  //       return static_cast<void*>(dh::XGBDeviceAllocator<char>{}.allocate(n_bytes).get());
-  //     },
-  //     [](void* ptr, std::size_t n_bytes) {
-  //       dh::XGBDeviceAllocator<char>{}.deallocate(thrust::device_ptr<char>{static_cast<char*>(ptr)},
-  //                                                 n_bytes);
-  //     });
-  // nvcomp::DecompressionConfig decomp_config =
-  //     decomp_nvcomp_manager->configure_decompression(in.data());
-  // CHECK_GE(out.size_bytes(), decomp_config.decomp_data_size);
-  // decomp_nvcomp_manager->decompress(out.data(), comp_buffer, decomp_config);
+  decomp_nvcomp_manager->set_scratch_allocators(
+      [](std::size_t n_bytes) -> void* {
+        return static_cast<void*>(dh::XGBDeviceAllocator<char>{}.allocate(n_bytes).get());
+      },
+      [](void* ptr, std::size_t n_bytes) {
+        dh::XGBDeviceAllocator<char>{}.deallocate(thrust::device_ptr<char>{static_cast<char*>(ptr)},
+                                                  n_bytes);
+      });
+  nvcomp::DecompressionConfig decomp_config =
+      decomp_nvcomp_manager->configure_decompression(in.data());
+  CHECK_GE(out.size_bytes(), decomp_config.decomp_data_size);
+  decomp_nvcomp_manager->decompress(out.data(), in.data(), decomp_config);
 }
 }  // namespace xgboost::common

@@ -44,6 +44,14 @@ TEST(NVComp, Snappy) {
   thrust::sequence(ctx.CUDACtx()->CTP(), in.begin(), in.end(), 0);
   dh::DeviceUVector<std::uint8_t> out;
 
-  CompressSnappy(&ctx, dh::ToSpan(in), &out);
+  auto params = CompressSnappy(&ctx, dh::ToSpan(in), &out);
+  ASSERT_EQ(params.size(), 1);
+
+  std::vector<std::uint8_t, cuda_impl::PinnedPoolAllocator<std::uint8_t>> h_in(out.size());
+  dh::safe_cuda(cudaMemcpyAsync(h_in.data(), out.data(), out.size() * sizeof(std::uint8_t),
+                                cudaMemcpyDefault));
+
+  dh::DeviceUVector<CompressedByteT> dout(in.size());
+  DecompressSnappy(dh::DefaultStream(), params, h_in, dh::ToSpan(dout));
 }
 }  // namespace xgboost::common
