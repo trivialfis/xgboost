@@ -129,22 +129,50 @@ void SafeNvComp(nvcompStatus_t status) {
 
 void DecompressSnappy(dh::CUDAStreamView s, CuMemParams params, Span<CompressedByteT const> in,
                       Span<CompressedByteT> out) {
+
   std::size_t error_index = 0;
   std::size_t n_chunks = params.size();
 
   std::vector<cuuint32_t, cuda_impl::PinnedPoolAllocator<cuuint32_t>> act_bytes(n_chunks, 0);
   std::size_t last_in = 0, last_out = 0;
+
+  std::vector<void const*> in_chunk_ptrs(n_chunks);
+  std::vector<std::size_t> in_chunk_sizes(n_chunks);
+  std::vector<std::size_t> out_chunk_sizes(n_chunks);
+  // std::vector<std::size_t> act(n_chunks, 0);
+  std::vector<void*> out_ptrs(n_chunks);
+  dh::device_vector<nvcompStatus_t> status(n_chunks);
   for (std::size_t i = 0; i < n_chunks; ++i) {
-    params[i].dstActBytes = act_bytes.data() + i;
-    params[i].src = in.subspan(last_in, params[i].srcNumBytes).data();
-    params[i].dst = out.subspan(last_out, params[i].dstNumBytes).data();
+    in_chunk_ptrs[i] = in.subspan(last_in, params[i].srcNumBytes).data();
+    in_chunk_sizes[i] = params[i].srcNumBytes;
+    out_chunk_sizes[i] = params[i].dstNumBytes;
+    out_ptrs[i] = out.subspan(last_out, params[i].dstNumBytes).data();
+
     last_in += params[i].srcNumBytes;
     last_out += params[i].dstNumBytes;
   }
+  // copy to d
+  dh::device_vector<void const*> d_in_chunk_ptrs(in_chunk_ptrs);
+  dh::device_vector<std::size_t> d_in_chunk_sizes(in_chunk_sizes);
+  dh::device_vector<std::size_t> d_out_chunk_sizes(out_chunk_sizes);
+  dh::device_vector<std::size_t> act(n_chunks, 0);
+  dh::device_vector<void*> d_out_ptrs(out_ptrs);
+  SafeNvComp(nvcompBatchedSnappyDecompressAsync(
+      d_in_chunk_ptrs.data().get(), d_in_chunk_sizes.data().get(), d_out_chunk_sizes.data().get(),
+      act.data().get(), n_chunks, nullptr, 0, d_out_ptrs.data().get(), status.data().get(), s));
   s.Sync();
-  auto err = cudr::GetGlobalCuDriverApi().cuMemBatchDecompressAsync(params.data(), n_chunks,
-                                                                    0 /*unused*/, &error_index, s);
-  safe_cu(err);
+
+  // for (std::size_t i = 0; i < n_chunks; ++i) {
+  //   params[i].dstActBytes = act_bytes.data() + i;
+  //   params[i].src = in.subspan(last_in, params[i].srcNumBytes).data();
+  //   params[i].dst = out.subspan(last_out, params[i].dstNumBytes).data();
+  //   last_in += params[i].srcNumBytes;
+  //   last_out += params[i].dstNumBytes;
+  // }
+  //
+  // auto err = cudr::GetGlobalCuDriverApi().cuMemBatchDecompressAsync(params.data(), n_chunks,
+  //                                                                   0 /*unused*/, &error_index, s);
+  // safe_cu(err);
 }
 
 void CompressEllpack(Context const* ctx, Span<CompressedByteT const> in,

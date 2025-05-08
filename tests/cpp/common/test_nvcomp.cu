@@ -53,5 +53,7 @@ TEST(NVComp, Snappy) {
 
   dh::DeviceUVector<CompressedByteT> dout(in.size());
   DecompressSnappy(dh::DefaultStream(), params, h_in, dh::ToSpan(dout));
+  bool eq = thrust::equal(ctx.CUDACtx()->CTP(), dout.cbegin(), dout.cend(), in.cbegin());
+  ASSERT_TRUE(eq);
 }
 }  // namespace xgboost::common
