@@ -30,6 +30,29 @@ import static org.junit.Assert.assertArrayEquals;
 public class DMatrixTest {
 
   @Test
+  public void testMakingDMatrixViaArray() {
+    Float[][] features1 = {
+      {1.0f, 12.0f},
+      {2.0f, 13.0f},
+      null,
+      {4.0f, null},
+      {5.0f, 16.0f}
+    };
+    Float[] label1 = {0.0f, 1.0f, 0.0f, 1.0f, 0.0f};
+    Table X1 = new Table.TestBuilder().column(features1).build();
+    Table y1 = new Table.TestBuilder().column(label1).build();
+    List<ColumnBatch> tables = new LinkedList<>();
+    CudfColumnBatch batch = new CudfColumnBatch(X1, y1, null, null, null);
+    tables.add(batch);
+    System.out.println(batch.toFeaturesJson());
+    try {
+      QuantileDMatrix dmat = new QuantileDMatrix(tables.iterator(), 0.0f, 256, 1);
+    } catch (XGBoostError e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @Test
   public void testCreateFromArrayInterfaceColumns() {
     Float[] labelFloats = new Float[]{2f, 4f, 6f, 8f, 10f};
     Integer[] groups = new Integer[]{1, 1, 7, 7, 19, 26};

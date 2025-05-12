@@ -21,6 +21,7 @@ import java.util.List;
 
 import ai.rapids.cudf.BaseDeviceMemoryBuffer;
 import ai.rapids.cudf.ColumnVector;
+import ai.rapids.cudf.ColumnView;
 import ai.rapids.cudf.DType;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -48,20 +49,38 @@ public class CudfColumn extends Column {
   /**
    * Create CudfColumn according to ColumnVector
    */
-  public static CudfColumn from(ColumnVector cv) {
+  public static CudfColumn from(ColumnVector column) {
+
+    ColumnView cv = column;
+    DType dType = cv.getType();
+    long nullCount = cv.getNullCount();
+    String floatType = "<f";
+    String integerType = "<i";
+    long offsetPtr = 0;
+    if (dType == DType.LIST) {
+      floatType = "<lf";
+      integerType = "<li";
+      if (cv.getOffsets() != null) {
+        offsetPtr = cv.getOffsets().getAddress();
+      }
+      cv = cv.getChildColumnView(0);
+      dType = cv.getType();
+    }
+
+
     BaseDeviceMemoryBuffer dataBuffer = cv.getData();
     assert dataBuffer != null;
 
-    DType dType = cv.getType();
+    //    DType dType = cv.getType();
     String typeStr = "";
     if (dType == DType.FLOAT32 || dType == DType.FLOAT64 ||
         dType == DType.TIMESTAMP_DAYS || dType == DType.TIMESTAMP_MICROSECONDS ||
         dType == DType.TIMESTAMP_MILLISECONDS || dType == DType.TIMESTAMP_NANOSECONDS ||
         dType == DType.TIMESTAMP_SECONDS) {
-      typeStr = "<f" + dType.getSizeInBytes();
+      typeStr = floatType + dType.getSizeInBytes();
     } else if (dType == DType.BOOL8 || dType == DType.INT8 || dType == DType.INT16 ||
         dType == DType.INT32 || dType == DType.INT64) {
-      typeStr = "<i" + dType.getSizeInBytes();
+      typeStr = integerType + dType.getSizeInBytes();
     } else {
       // Unsupported type.
       throw new IllegalArgumentException("Unsupported data type: " + dType);
