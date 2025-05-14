@@ -45,12 +45,14 @@ void DecompressSnappy(dh::CUDAStreamView stream, SnappyDecomprMgr const& mgr,
  *
  * @param stream CUDA stream.
  * @param in_params Params from @ref CompressSnappy, specifies the chunks.
+ * @param pool The shared memory pool for allocating return buffer.
  * @param in_buf The buffer storing compressed chunks.
  * @param p_out Re-newed parameters to keep track of the buffers.
  */
 [[nodiscard]] common::RefResourceView<std::uint8_t> CoalesceCompressedBuffersToHost(
-    dh::CUDAStreamView stream, CuMemParams const& in_params,
-    dh::DeviceUVector<std::uint8_t> const& in_buf, CuMemParams* p_out);
+    dh::CUDAStreamView stream, std::shared_ptr<common::cuda_impl::HostPinnedMemPool> pool,
+    CuMemParams const& in_params, dh::DeviceUVector<std::uint8_t> const& in_buf,
+    CuMemParams* p_out);
 
 // We store decompression parameters in struct of vectors. This is due to nvcomp works
 // with this format. But the CUDA driver works with vector of structs. We can optimize
@@ -97,6 +99,7 @@ struct SnappyDecomprMgrImpl {
   SnappyDecomprMgrImpl& operator=(SnappyDecomprMgrImpl&&) = default;
 };
 
+// FIXME: maybe get the ref view to keep the ownership of the data?
 inline auto MakeSnappyDecomprMgr(dh::CUDAStreamView s,
                                  std::shared_ptr<common::cuda_impl::HostPinnedMemPool> pool,
                                  CuMemParams params,

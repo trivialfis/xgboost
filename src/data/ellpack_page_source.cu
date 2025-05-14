@@ -8,16 +8,17 @@
 #include <numeric>    // for accumulate
 #include <utility>    // for move
 
-#include "../common/common.h"               // for HumanMemUnit, safe_cuda
-#include "../common/cuda_rt_utils.h"        // for SetDevice
-#include "../common/cuda_stream_pool.cuh"   // for StreamPool
-#include "../common/device_helpers.cuh"     // for CUDAStreamView, DefaultStream
-#include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
-#include "../common/resource.cuh"           // for PrivateCudaMmapConstStream
-#include "../common/transform_iterator.h"   // for MakeIndexTransformIter
-#include "batch_utils.h"                    // for HostRatioIsAuto
-#include "ellpack_page.cuh"                 // for EllpackPageImpl
-#include "ellpack_page.h"                   // for EllpackPage
+#include "../common/common.h"                // for HumanMemUnit, safe_cuda
+#include "../common/cuda_rt_utils.h"         // for SetDevice
+#include "../common/cuda_stream_pool.cuh"    // for StreamPool
+#include "../common/device_compression.cuh"  // for CompressSnappy, DecompressSnappy
+#include "../common/device_helpers.cuh"      // for CUDAStreamView, DefaultStream
+#include "../common/ref_resource_view.cuh"   // for MakeFixedVecWithCudaMalloc
+#include "../common/resource.cuh"            // for PrivateCudaMmapConstStream
+#include "../common/transform_iterator.h"    // for MakeIndexTransformIter
+#include "batch_utils.h"                     // for HostRatioIsAuto
+#include "ellpack_page.cuh"                  // for EllpackPageImpl
+#include "ellpack_page.h"                    // for EllpackPage
 #include "ellpack_page_source.h"
 #include "proxy_dmatrix.cuh"  // for Dispatch
 #include "xgboost/base.h"     // for bst_idx_t
@@ -142,8 +143,12 @@ class EllpackHostCacheStreamImpl {
                    std::size_t{1});
       return n_bytes;
     };
+
+    auto pool = this->cache_->pool;
+
     // Finish writing a (concatenated) cache page.
-    auto commit_page = [cache_host_ratio, get_host_nbytes](EllpackPageImpl const* old_impl) {
+    auto commit_page = [cache_host_ratio, get_host_nbytes, &ctx,
+                        pool](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
@@ -152,6 +157,32 @@ class EllpackHostCacheStreamImpl {
       // Host cache
       auto n_bytes = get_host_nbytes(old_impl);
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
+
+      // Further divide host buffer into host buffer and compressed host buffer
+
+      // Store the host portion
+      std::size_t constexpr kMaxCompSize = 1ul << 31;  // 2GB
+      std::size_t n_compressed_bytes = n_bytes / 2;
+      n_compressed_bytes = std::min(n_compressed_bytes, kMaxCompSize);
+      CHECK_GE(n_bytes, n_compressed_bytes);
+      std::size_t n_host_bytes = n_bytes - n_compressed_bytes;
+      if (n_host_bytes > 0) {
+        new_impl->gidx_buffer =
+            common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_host_bytes);
+        dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
+                                      n_host_bytes, cudaMemcpyDefault));
+      }
+
+      // Compress the buffer
+      std::size_t constexpr kChunkSize = 1ul << 22;  // 2MB
+      dh::DeviceUVector<std::uint8_t> tmp;
+      auto params = dc::CompressSnappy(
+          &ctx, new_impl->gidx_buffer.ToSpan().subspan(n_host_bytes, n_compressed_bytes), &tmp,
+          kChunkSize);
+      decltype(params) coal_params;
+      auto c_page = dc::CoalesceCompressedBuffersToHost(ctx.CUDACtx()->Stream(), pool, params, tmp,
+                                                        &coal_params);
+
       new_impl->gidx_buffer =
           common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
       if (n_bytes > 0) {
@@ -228,6 +259,7 @@ class EllpackHostCacheStreamImpl {
   void Read(EllpackPage* out, bool prefetch_copy) const {
     CHECK_EQ(this->cache_->h_pages.size(), this->cache_->d_pages.size());
     auto [h_page, d_page] = this->cache_->At(this->ptr_);
+    auto dc_stream = this->cache_->streams->Next();
 
     auto ctx = Context{}.MakeCUDA(dh::CurrentDevice());
     // FIXME(jiamingy): Accessing split cache directly is not yet supported.

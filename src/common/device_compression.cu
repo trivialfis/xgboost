@@ -386,8 +386,9 @@ void DecompressSnappy(dh::CUDAStreamView stream, SnappyDecomprMgr const& mgr,
 }
 
 [[nodiscard]] common::RefResourceView<std::uint8_t> CoalesceCompressedBuffersToHost(
-    dh::CUDAStreamView stream, CuMemParams const& in_params,
-    dh::DeviceUVector<std::uint8_t> const& in_buf, CuMemParams* p_out) {
+    dh::CUDAStreamView stream, std::shared_ptr<common::cuda_impl::HostPinnedMemPool> pool,
+    CuMemParams const& in_params, dh::DeviceUVector<std::uint8_t> const& in_buf,
+    CuMemParams* p_out) {
   std::size_t n_total_act_bytes = in_params.TotalSrcActBytes();
   std::size_t n_total_bytes = in_params.TotalSrcBytes();
   if (n_total_bytes == 0) {
@@ -398,8 +399,8 @@ void DecompressSnappy(dh::CUDAStreamView stream, SnappyDecomprMgr const& mgr,
   // copy from device buffer to the host cache.
   CHECK_EQ(n_total_bytes, in_buf.size());
   auto c_page =
-      common::MakeFixedVecWithPinnedMalloc<std::remove_reference_t<decltype(in_buf)>::value_type>(
-          n_total_act_bytes);
+      common::MakeFixedVecWithPinnedMemPool<std::remove_reference_t<decltype(in_buf)>::value_type>(
+          pool, n_total_act_bytes, stream);
   std::vector<std::uint8_t const*> srcs(in_params.size());
   std::vector<std::uint8_t*> dsts(in_params.size());
   std::vector<std::size_t> sizes(in_params.size());
