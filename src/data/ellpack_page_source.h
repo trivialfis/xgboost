@@ -25,7 +25,10 @@
 
 namespace xgboost::curt {
 class StreamPool;
-}
+}  // namespace xgboost::curt
+namespace xgboost::common::cuda_impl {
+class HostPinnedMemPool;
+}  // namespace xgboost::common::cuda_impl
 
 namespace xgboost::data {
 struct EllpackCacheInfo {
@@ -53,6 +56,8 @@ struct EllpackCacheInfo {
 // This is a memory-based cache. It can be a mixed of the device memory and the host
 // memory.
 struct EllpackMemCache {
+  // Memory pool for compressed pages.
+  std::shared_ptr<common::cuda_impl::HostPinnedMemPool> pool;
   // The host portion of each page.
   std::vector<std::unique_ptr<EllpackPageImpl>> h_pages;
   // The device portion of each page.
