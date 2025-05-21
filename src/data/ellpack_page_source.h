@@ -13,6 +13,7 @@
 
 #include "../common/compressed_iterator.h"  // for CompressedByteT
 #include "../common/cuda_rt_utils.h"        // for SupportsPageableMem, SupportsAts
+#include "../common/device_compression.h"   // for CuMemParams
 #include "../common/hist_util.h"            // for HistogramCuts
 #include "../common/ref_resource_view.h"    // for RefResourceView
 #include "ellpack_page.h"                   // for EllpackPage
@@ -63,6 +64,9 @@ struct EllpackMemCache {
   // The device portion of each page.
   using DPage = common::RefResourceView<common::CompressedByteT>;
   std::vector<DPage> d_pages;
+
+  std::vector<dc::CuMemParams> cparams;
+
   using PagePtr = std::pair<EllpackPageImpl const*, DPage const*>;
   using PageRef = std::pair<std::unique_ptr<EllpackPageImpl>&, DPage&>;
 

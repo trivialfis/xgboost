@@ -148,7 +148,7 @@ class EllpackHostCacheStreamImpl {
     };
     auto pool = this->cache_->pool;
     // Finish writing a (concatenated) cache page.
-    auto commit_page = [cache_host_ratio, get_host_nbytes, &ctx](EllpackPageImpl const* old_impl) {
+    auto commit_page = [&](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       CHECK(old_impl->d_gidx_buffer.empty());
       auto new_impl = std::make_unique<EllpackPageImpl>();
@@ -156,12 +156,17 @@ class EllpackHostCacheStreamImpl {
       // Split the cache into host cache and device cache
       if (dc::GetGlobalDeStatus().avail && !old_impl->IsDenseCompressed()) {
         // We use the decompression engine if it's available and the data is sparse.
+        // fixme: cache_host_ratio
+        CHECK_EQ(cache_host_ratio, 1);
         dh::DeviceUVector<std::uint8_t> tmp;
         std::size_t kChunkSize = 1 << 21;
         auto cparams = dc::CompressSnappy(&ctx, old_impl->gidx_buffer.ToSpan(), &tmp, kChunkSize);
         dc::CuMemParams coalesed;
+        // c_page is on the host.
         auto c_page =
-            CoalesceCompressedBuffersToHost(ctx.CUDACtx()->Stream(), cparams, tmp, &coalesed);
+            CoalesceCompressedBuffersToHost(ctx.CUDACtx()->Stream(), pool, cparams, tmp, &coalesed);
+        // fixme: remove return values of this lambda
+        this->cache_->cparams.emplace_back(coalesed);
       }
       // Host cache
       auto n_bytes = get_host_nbytes(old_impl);
