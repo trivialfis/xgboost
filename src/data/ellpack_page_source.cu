@@ -8,16 +8,18 @@
 #include <numeric>    // for accumulate
 #include <utility>    // for move
 
-#include "../common/common.h"               // for HumanMemUnit, safe_cuda
-#include "../common/cuda_rt_utils.h"        // for SetDevice
-#include "../common/cuda_stream_pool.cuh"   // for StreamPool
-#include "../common/device_helpers.cuh"     // for CUDAStreamView, DefaultStream
-#include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
-#include "../common/resource.cuh"           // for PrivateCudaMmapConstStream
-#include "../common/transform_iterator.h"   // for MakeIndexTransformIter
-#include "batch_utils.h"                    // for HostRatioIsAuto
-#include "ellpack_page.cuh"                 // for EllpackPageImpl
-#include "ellpack_page.h"                   // for EllpackPage
+#include "../common/common.h"                // for HumanMemUnit, safe_cuda
+#include "../common/cuda_rt_utils.h"         // for SetDevice
+#include "../common/cuda_stream_pool.cuh"    // for StreamPool
+#include "../common/device_compression.cuh"  // for CompressSnappy, CoalesceCompressedBuffersToHost
+#include "../common/device_compression.h"    // for GetGlobalDeStatus
+#include "../common/device_helpers.cuh"      // for CUDAStreamView, DefaultStream
+#include "../common/ref_resource_view.cuh"   // for MakeFixedVecWithCudaMalloc
+#include "../common/resource.cuh"            // for PrivateCudaMmapConstStream
+#include "../common/transform_iterator.h"    // for MakeIndexTransformIter
+#include "batch_utils.h"                     // for HostRatioIsAuto
+#include "ellpack_page.cuh"                  // for EllpackPageImpl
+#include "ellpack_page.h"                    // for EllpackPage
 #include "ellpack_page_source.h"
 #include "proxy_dmatrix.cuh"  // for Dispatch
 #include "xgboost/base.h"     // for bst_idx_t
@@ -144,13 +146,23 @@ class EllpackHostCacheStreamImpl {
                    std::size_t{1});
       return n_bytes;
     };
+    auto pool = this->cache_->pool;
     // Finish writing a (concatenated) cache page.
-    auto commit_page = [cache_host_ratio, get_host_nbytes](EllpackPageImpl const* old_impl) {
+    auto commit_page = [cache_host_ratio, get_host_nbytes, &ctx](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
+      CHECK(old_impl->d_gidx_buffer.empty());
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
       // Split the cache into host cache and device cache
-
+      if (dc::GetGlobalDeStatus().avail && !old_impl->IsDenseCompressed()) {
+        // We use the decompression engine if it's available and the data is sparse.
+        dh::DeviceUVector<std::uint8_t> tmp;
+        std::size_t kChunkSize = 1 << 21;
+        auto cparams = dc::CompressSnappy(&ctx, old_impl->gidx_buffer.ToSpan(), &tmp, kChunkSize);
+        dc::CuMemParams coalesed;
+        auto c_page =
+            CoalesceCompressedBuffersToHost(ctx.CUDACtx()->Stream(), cparams, tmp, &coalesed);
+      }
       // Host cache
       auto n_bytes = get_host_nbytes(old_impl);
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());

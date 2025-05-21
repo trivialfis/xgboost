@@ -49,8 +49,9 @@ void DecompressSnappy(dh::CUDAStreamView stream, SnappyDecomprMgr const& mgr,
  * @param p_out Re-newed parameters to keep track of the buffers.
  */
 [[nodiscard]] common::RefResourceView<std::uint8_t> CoalesceCompressedBuffersToHost(
-    dh::CUDAStreamView stream, CuMemParams const& in_params,
-    dh::DeviceUVector<std::uint8_t> const& in_buf, CuMemParams* p_out);
+    dh::CUDAStreamView stream, std::shared_ptr<common::cuda_impl::HostPinnedMemPool> pool,
+    CuMemParams const& in_params, dh::DeviceUVector<std::uint8_t> const& in_buf,
+    CuMemParams* p_out);
 
 // We store decompression parameters in struct of vectors. This is due to nvcomp works
 // with this format. But the CUDA driver works with vector of structs. We can optimize
