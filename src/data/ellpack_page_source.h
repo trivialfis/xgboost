@@ -32,6 +32,7 @@ struct EllpackCacheInfo {
   BatchParam param;
   double cache_host_ratio{1.0};  // The size ratio the host cache vs. the total cache
   float missing{std::numeric_limits<float>::quiet_NaN()};
+  // Mapping from original batch idx to concatenated batch idx. Size == n_original_batches
   std::vector<bst_idx_t> cache_mapping;
   std::vector<bst_idx_t> buffer_bytes;  // N bytes of the concatenated pages.
   std::vector<bst_idx_t> buffer_rows;

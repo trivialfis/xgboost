@@ -353,6 +353,12 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
                       std::int64_t min_cache_page_bytes, ExternalDataInfo const& ext_info,
                       bool is_validation, EllpackCacheInfo* cinfo) {
   CHECK(cinfo->param.Initialized()) << "Need to initialize scalar fields first.";
+
+  if (!ext_info.IsDenseCompressed()) {
+    // Sparse data storage, no feature-based compression.
+    return;
+  }
+
   auto ell_info = CalcNumSymbols(ctx, ext_info.row_stride, is_dense, cuts);
 
   /**
