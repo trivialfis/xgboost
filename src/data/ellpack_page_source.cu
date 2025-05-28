@@ -27,8 +27,7 @@ namespace xgboost::data {
  * Cache
  */
 EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo, std::int32_t n_workers)
-    : pool{std::make_shared<common::cuda_impl::HostPinnedMemPool>()},
-      cache_mapping{std::move(cinfo.cache_mapping)},
+    : cache_mapping{std::move(cinfo.cache_mapping)},
       buffer_bytes{std::move(cinfo.buffer_bytes)},
       buffer_rows{std::move(cinfo.buffer_rows)},
       cache_host_ratio{cinfo.cache_host_ratio},
@@ -146,7 +145,7 @@ class EllpackHostCacheStreamImpl {
       return n_bytes;
     };
     // Finish writing a (concatenated) cache page.
-    auto commit_page = [&](EllpackPageImpl const* old_impl) {
+    auto commit_page = [cache_host_ratio, get_host_nbytes](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
@@ -155,8 +154,8 @@ class EllpackHostCacheStreamImpl {
       // Host cache
       auto n_bytes = get_host_nbytes(old_impl);
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
-      new_impl->gidx_buffer = common::MakeFixedVecWithPinnedMemPool<common::CompressedByteT>(
-          this->cache_->pool, n_bytes, ctx.CUDACtx()->Stream());
+      new_impl->gidx_buffer =
+          common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
       if (n_bytes > 0) {
         dh::safe_cuda(cudaMemcpyAsync(new_impl->gidx_buffer.data(), old_impl->gidx_buffer.data(),
                                       n_bytes, cudaMemcpyDefault));
@@ -225,7 +224,6 @@ class EllpackHostCacheStreamImpl {
     }
 
     CHECK_EQ(this->cache_->h_pages.size(), this->cache_->d_pages.size());
-    ctx.CUDACtx()->Stream().Sync();
     return new_page;
   }
 
