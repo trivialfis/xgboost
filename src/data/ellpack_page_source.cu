@@ -1,6 +1,8 @@
 /**
  * Copyright 2019-2025, XGBoost contributors
  */
+#include <nvml.h>
+
 #include <algorithm>  // for max
 #include <cstddef>    // for size_t
 #include <cstdint>    // for int8_t, uint64_t, uint32_t
@@ -9,6 +11,7 @@
 #include <utility>    // for move
 
 #include "../common/common.h"               // for HumanMemUnit, safe_cuda
+#include "../common/cuda_dr_utils.h"        // for GetGlobalCuDriverApi
 #include "../common/cuda_rt_utils.h"        // for SetDevice
 #include "../common/cuda_stream_pool.cuh"   // for StreamPool
 #include "../common/device_helpers.cuh"     // for CUDAStreamView, DefaultStream
@@ -23,6 +26,41 @@
 #include "xgboost/base.h"     // for bst_idx_t
 
 namespace xgboost::data {
+#define safe_nvml(call)                                          \
+  do {                                                           \
+    auto __status = (call);                                      \
+    if (__status != NVML_SUCCESS) {                              \
+      LOG(FATAL) << (#call) << ":" << nvmlErrorString(__status); \
+    }                                                            \
+  } while (0)
+
+void SetOptimalCpuAffinity() {
+  // fixme: check win
+  safe_nvml(nvmlInit());
+
+  std::int32_t ordinal = curt::CurrentDevice();
+  nvmlDevice_t device;
+  CUuuid dev_uuid;
+
+  std::stringstream s;
+  std::unordered_set<unsigned char> dashPos{0, 4, 6, 8, 10};
+
+  cudr::GetGlobalCuDriverApi().cuDeviceGetUuid(&dev_uuid, ordinal);
+
+  s << "GPU";
+  for (int i = 0; i < 16; i++) {
+    if (dashPos.count(i)) {
+      s << '-';
+    }
+    s << std::hex << std::setfill('0') << std::setw(2) << (0xFF & (int)dev_uuid.bytes[i]);
+  }
+  std::cout << "s:" << s.str() << std::endl;
+  // fixme: maybe check not not supported error
+  safe_nvml(nvmlDeviceGetHandleByUUID(s.str().c_str(), &device));
+  safe_nvml(nvmlDeviceSetCpuAffinity(device));
+  safe_nvml(nvmlShutdown());
+}
+
 /**
  * Cache
  */
@@ -384,7 +422,7 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
   std::vector<std::size_t> cache_rows;
 
   for (std::size_t i = 0; i < ext_info.n_batches; ++i) {
-    auto n_samples = ext_info.base_rowids[i+1] - ext_info.base_rowids[i];
+    auto n_samples = ext_info.base_rowids[i + 1] - ext_info.base_rowids[i];
     auto n_bytes = common::CompressedBufferWriter::CalculateBufferSize(
         ext_info.row_stride * n_samples, ell_info.n_symbols);
 
