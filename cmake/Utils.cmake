@@ -121,6 +121,7 @@ function(xgboost_set_cuda_flags target)
     target_link_libraries(${target} PRIVATE CCCL::CCCL CUDA::cudart_static)
   endif()
   target_compile_definitions(${target} PRIVATE -DXGBOOST_USE_CUDA=1)
+  target_link_libraries(${target} PRIVATE CUDA::nvml)
   target_include_directories(
     ${target} PRIVATE
     ${xgboost_SOURCE_DIR}/gputreeshap)
