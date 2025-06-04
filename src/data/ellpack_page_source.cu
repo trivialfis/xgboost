@@ -11,6 +11,7 @@
 #include <utility>    // for move
 
 #include "../common/common.h"               // for HumanMemUnit, safe_cuda
+#include "../collective/communicator-inl.h"
 #include "../common/cuda_dr_utils.h"        // for GetGlobalCuDriverApi
 #include "../common/cuda_rt_utils.h"        // for SetDevice
 #include "../common/cuda_stream_pool.cuh"   // for StreamPool
@@ -61,11 +62,31 @@ void GetOptimalCpuAffinity(nvmlDevice_t device) {
 
   RBitField64 m{cpu_mask};
   std::stringstream ss;
-  for (std::size_t i = 0; i < ncpus; ++i) {
+  ss << "CPU optimal affinity\n";
+  for (std::int32_t i = 0; i < ncpus; ++i) {
     if (m.Check(i)) {
       ss << i << ", ";
     }
   }
+  std::cout << ss.str() << std::endl;
+}
+
+void GetCpuAffinity() {
+  std::int32_t ncpus = std::thread::hardware_concurrency();
+  auto msize = CPU_ALLOC_SIZE(ncpus);
+  cpu_set_t* cpusetp = CPU_ALLOC(ncpus);
+  auto pid = getpid();
+  sched_getaffinity(0, msize, cpusetp);
+
+  std::stringstream ss;
+  ss << collective::GetRank() << " CPU affinity\n";
+  for (std::int32_t i = 0; i < ncpus; ++i) {
+    if (CPU_ISSET(i, cpusetp)) {
+      ss << i << ", ";
+    }
+  }
+
+  CPU_FREE(cpusetp);
   std::cout << ss.str() << std::endl;
 }
 
@@ -81,7 +102,8 @@ void SetOptimalCpuAffinity() {
   // fixme: maybe check not not supported error
   safe_nvml(nvmlDeviceGetHandleByUUID(uuid.c_str(), &device));
 
-  GetOptimalCpuAffinity(device);
+  GetCpuAffinity();
+  // GetOptimalCpuAffinity(device);
 
   safe_nvml(nvmlDeviceSetCpuAffinity(device));
   safe_nvml(nvmlShutdown());
