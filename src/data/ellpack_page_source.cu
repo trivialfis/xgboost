@@ -34,17 +34,10 @@ namespace xgboost::data {
     }                                                            \
   } while (0)
 
-void SetOptimalCpuAffinity() {
-  // fixme: check win
-  safe_nvml(nvmlInit());
-
-  std::int32_t ordinal = curt::CurrentDevice();
-  nvmlDevice_t device;
+std::string GetCuDeviceUuid(std::int32_t ordinal) {
   CUuuid dev_uuid;
-
   std::stringstream s;
   std::unordered_set<unsigned char> dashPos{0, 4, 6, 8, 10};
-
   cudr::GetGlobalCuDriverApi().cuDeviceGetUuid(&dev_uuid, ordinal);
 
   s << "GPU";
@@ -52,11 +45,44 @@ void SetOptimalCpuAffinity() {
     if (dashPos.count(i)) {
       s << '-';
     }
-    s << std::hex << std::setfill('0') << std::setw(2) << (0xFF & (int)dev_uuid.bytes[i]);
+    s << std::hex << std::setfill('0') << std::setw(2)
+      << (0xFF & static_cast<std::int32_t>(dev_uuid.bytes[i]));
   }
-  std::cout << "s:" << s.str() << std::endl;
+  return s.str();
+}
+
+void GetOptimalCpuAffinity(nvmlDevice_t device) {
+  std::int32_t ncpus = std::thread::hardware_concurrency();
+  std::cout << "ncpus:" << ncpus << std::endl;
+
+  using Mask = unsigned long;
+  std::vector<Mask> cpu_mask(common::DivRoundUp(ncpus, sizeof(Mask)));
+  safe_nvml(nvmlDeviceGetCpuAffinity(device, cpu_mask.size(), cpu_mask.data()));
+
+  RBitField64 m{cpu_mask};
+  std::stringstream ss;
+  for (std::size_t i = 0; i < ncpus; ++i) {
+    if (m.Check(i)) {
+      ss << i << ", ";
+    }
+  }
+  std::cout << ss.str() << std::endl;
+}
+
+void SetOptimalCpuAffinity() {
+  // fixme: check win
+  safe_nvml(nvmlInit());
+
+  std::int32_t ordinal = curt::CurrentDevice();
+  nvmlDevice_t device;
+
+  auto uuid = GetCuDeviceUuid(ordinal);
+  std::cout << "s:" << uuid << std::endl;
   // fixme: maybe check not not supported error
-  safe_nvml(nvmlDeviceGetHandleByUUID(s.str().c_str(), &device));
+  safe_nvml(nvmlDeviceGetHandleByUUID(uuid.c_str(), &device));
+
+  GetOptimalCpuAffinity(device);
+
   safe_nvml(nvmlDeviceSetCpuAffinity(device));
   safe_nvml(nvmlShutdown());
 }
@@ -192,6 +218,7 @@ class EllpackHostCacheStreamImpl {
       // Host cache
       auto n_bytes = get_host_nbytes(old_impl);
       CHECK_LE(n_bytes, old_impl->gidx_buffer.size_bytes());
+      SetOptimalCpuAffinity();
       new_impl->gidx_buffer =
           common::MakeFixedVecWithPinnedMalloc<common::CompressedByteT>(n_bytes);
       if (n_bytes > 0) {
@@ -279,6 +306,7 @@ class EllpackHostCacheStreamImpl {
           d_res->DataAs<common::CompressedByteT>(), d_page->size(), d_res};
       CHECK(out_impl->d_gidx_buffer.empty());
     } else if (prefetch_copy) {
+      SetOptimalCpuAffinity();
       auto n_bytes = this->cache_->GidxSizeBytes(this->ptr_);
       out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n_bytes);
       if (!h_page->gidx_buffer.empty()) {
