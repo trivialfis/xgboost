@@ -105,7 +105,7 @@ void SetOptimalCpuAffinity() {
   GetCpuAffinity();
   // GetOptimalCpuAffinity(device);
 
-  safe_nvml(nvmlDeviceSetCpuAffinity(device));
+  // safe_nvml(nvmlDeviceSetCpuAffinity(device));
   safe_nvml(nvmlShutdown());
 }
 
