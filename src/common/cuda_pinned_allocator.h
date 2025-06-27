@@ -99,13 +99,13 @@ struct SamAllocPolicy {
     auto result = (n_bytes > kThresh)
                       ? reinterpret_cast<pointer>(std::aligned_alloc(kThresh, n_bytes))
                       : reinterpret_cast<pointer>(std::malloc(n_bytes));
-#if defined(__linux__)
-    // fixme: be lenient
-    CHECK_EQ(madvise(result, n_bytes, MADV_HUGEPAGE), 0);
-#endif  // defined(__linux__)
     if (!result) {
       throw std::bad_alloc{};
     }
+#if defined(__linux__)
+    // Be lenient, huge page may not be enabled.
+    madvise(result, n_bytes, MADV_HUGEPAGE);
+#endif  // defined(__linux__)
     dh::safe_cuda(cudaHostRegister(result, n_bytes, cudaHostRegisterDefault));
     return result;
   }
