@@ -14,6 +14,12 @@
 
 #include "common.h"
 
+#if defined(__linux__)
+
+#include <sys/mman.h>  // for madvise
+
+#endif  // defined(__linux__)
+
 namespace xgboost::common::cuda_impl {
 // \p pinned_allocator is a CUDA-specific host memory allocator
 //  that employs \c cudaMallocHost for allocation.
@@ -89,7 +95,14 @@ struct SamAllocPolicy {
     }
 
     size_type n_bytes = cnt * sizeof(value_type);
-    pointer result = reinterpret_cast<pointer>(std::malloc(n_bytes));
+    auto constexpr kThresh = 128ul * 1024 * 1024;
+    auto result = (n_bytes > kThresh)
+                      ? reinterpret_cast<pointer>(std::aligned_alloc(kThresh, n_bytes))
+                      : reinterpret_cast<pointer>(std::malloc(n_bytes));
+#if defined(__linux__)
+    // fixme: be lenient
+    CHECK_EQ(madvise(result, n_bytes, MADV_HUGEPAGE), 0);
+#endif  // defined(__linux__)
     if (!result) {
       throw std::bad_alloc{};
     }
