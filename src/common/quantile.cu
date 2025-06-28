@@ -742,5 +742,21 @@ void SketchContainer::MakeCuts(Context const* ctx, HistogramCuts* p_cuts, bool i
 
   p_cuts->SetCategorical(this->has_categorical_, max_cat);
   timer_.Stop(__func__);
+
+  auto const& indptr = p_cuts->cut_ptrs_.ConstHostVector();
+  auto const& min = p_cuts->min_vals_.ConstHostVector();
+  auto const& values = p_cuts->cut_values_.ConstHostVector();
+
+  std::cout << "SketchContainer::MakeCuts: " << std::endl;
+  for (std::size_t i = 1; i < indptr.size(); ++i) {
+    auto begin = indptr[i - 1];
+    auto end = indptr[i];
+    std::cout << min[i - 1] << std::endl;
+    for (auto j = begin; j != end; ++j) {
+      std::cout << values[j] << ", ";
+    }
+    std::cout << std::endl;
+  }
+  std::cout << "SketchContainer::MakeCuts: done." << std::endl;
 }
 }  // namespace xgboost::common

@@ -113,6 +113,9 @@ GradientQuantiser::GradientQuantiser(Context const* ctx, common::Span<GradientPa
    */
   to_fixed_point_ = GradientSumT(static_cast<T>(1) / to_floating_point_.GetGrad(),
                                  static_cast<T>(1) / to_floating_point_.GetHess());
+
+  std::cout << "to_floating_point_:" << to_floating_point_ << std::endl;
+  std::cout << "to_fixed_point_:" << to_fixed_point_ << std::endl;
 }
 
 XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,

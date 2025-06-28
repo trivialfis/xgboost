@@ -262,7 +262,22 @@ struct GPUHistMakerDevice {
     sampled_features->SetDevice(ctx_->Device());
     common::Span<bst_feature_t> feature_set =
         interaction_constraints.Query(sampled_features->DeviceSpan(), nidx);
+
+    auto d_node_hist = histogram_.GetNodeHistogram(nidx);
+    std::vector<decltype(d_node_hist)::value_type> h_node_hist(d_node_hist.size());
+    dh::CopyDeviceSpanToVector(&h_node_hist, d_node_hist);
+    std::cout << "Node: " << nidx << std::endl;
+    for (std::size_t i = 0; i < h_node_hist.size(); ++i) {
+      if (i % 16 == 0) {
+        std::cout << std::endl;
+      }
+      std::cout << h_node_hist[i] << ", ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "root_sum:" << root_sum << std::endl;
     EvaluateSplitInputs inputs{nidx, 0, root_sum, feature_set, histogram_.GetNodeHistogram(nidx)};
+    quantiser->Print();
     EvaluateSplitSharedInputs shared_inputs{gpu_param,
                                             *quantiser,
                                             p_fmat->Info().feature_types.ConstDeviceSpan(),
@@ -341,6 +356,18 @@ struct GPUHistMakerDevice {
                                       feature_groups_->DeviceAccessor(ctx_->Device()), this->gpair,
                                       d_ridx, d_node_hist, *quantiser);
     });
+
+    // std::vector<decltype(d_node_hist)::value_type> h_node_hist(d_node_hist.size());
+    // dh::CopyDeviceSpanToVector(&h_node_hist, d_node_hist);
+    // std::cout << "Node: " << nidx << " batch:" << k << std::endl;
+    // for (std::size_t i = 0; i < h_node_hist.size(); ++i) {
+    //   if (i % 16 == 0) {
+    //     std::cout << std::endl;
+    //   }
+    //   std::cout << h_node_hist[i] << ", ";
+    // }
+    // std::cout << std::endl;
+
     monitor.Stop(__func__);
   }
 
@@ -759,7 +786,9 @@ struct GPUHistMakerDevice {
     (*p_tree)[kRootNIdx].SetLeaf(param.learning_rate * weight);
 
     // Generate first split
+    std::cout << "root_sum_quantised" << std::endl;
     auto root_entry = this->EvaluateRootSplit(p_fmat, root_sum_quantised);
+    std::cout << "Root:" << root_entry << std::endl;
 
     this->monitor.Stop(__func__);
     return root_entry;
@@ -775,6 +804,11 @@ struct GPUHistMakerDevice {
     // The set of leaves that can be expanded asynchronously
     auto expand_set = driver.Pop();
     while (!expand_set.empty()) {
+      std::cout << "Expand set" << std::endl;
+      for (auto const& c : expand_set) {
+        std::cout << c << "\n";
+      }
+      std::cout << std::endl;
       for (auto& candidate : expand_set) {
         this->ApplySplit(candidate, p_tree);
       }
@@ -792,6 +826,11 @@ struct GPUHistMakerDevice {
 
       this->EvaluateSplits(p_fmat, valid_candidates, *p_tree, new_candidates);
       dh::DefaultStream().Sync();
+      std::cout << "Candidates" << std::endl;
+      for (auto c : new_candidates) {
+        std::cout << c << "\n";
+      }
+      std::cout << std::endl;
 
       driver.Push(new_candidates.begin(), new_candidates.end());
       expand_set = driver.Pop();

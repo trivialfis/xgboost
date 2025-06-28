@@ -35,5 +35,8 @@ class GradientQuantiser {
     auto h = gpair.GetQuantisedHess() * to_floating_point_.GetHess();
     return {g, h};
   }
+  void Print() const {
+    std::cout << "GQ:" << to_fixed_point_ << "\n" << to_floating_point_ << std::endl;
+  }
 };
 }  // namespace xgboost::tree
