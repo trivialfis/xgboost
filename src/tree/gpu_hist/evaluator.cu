@@ -86,7 +86,7 @@ common::Span<bst_feature_t const> GPUHistEvaluator::SortHistogram(
                         auto lw = evaluator.CalcWeightCat(shared_inputs.param, grad);
                         return thrust::make_tuple(i, lw);
                       }
-                      return thrust::make_tuple(i, 0.0f);
+                      return thrust::make_tuple(i, 0.0);
                     });
   // Sort an array segmented according to
   // - nodes
