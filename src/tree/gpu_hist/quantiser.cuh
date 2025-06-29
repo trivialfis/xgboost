@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2024, XGBoost Contributors
+ * Copyright 2020-2025, XGBoost Contributors
  */
 #pragma once
 #include "xgboost/base.h"     // for GradientPairPrecise, GradientPairInt64
@@ -16,6 +16,9 @@ class GradientQuantiser {
   GradientPairPrecise to_floating_point_;
 
  public:
+  GradientQuantiser() = default;
+  GradientQuantiser(GradientPairPrecise to_fixed, GradientPairPrecise to_float)
+      : to_fixed_point_{to_fixed}, to_floating_point_{to_float} {}
   GradientQuantiser(Context const* ctx, common::Span<GradientPair const> gpair,
                     MetaInfo const& info);
   [[nodiscard]] XGBOOST_DEVICE GradientPairInt64 ToFixedPoint(GradientPair const& gpair) const {

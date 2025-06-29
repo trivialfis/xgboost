@@ -3,6 +3,7 @@
  */
 #include <gtest/gtest.h>
 #include <thrust/host_vector.h>
+#include <thrust/sequence.h>
 
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
 #include "../../collective/test_worker.h"  // for BaseMGPUTest
@@ -608,5 +609,56 @@ TEST_F(MGPUHistTest, ColumnSplitEvaluateSingleCategoricalSplit) {
     this->DoTest([] { VerifyColumnSplitEvaluateSingleSplit(true); }, false, true);
   }
   this->DoTest([] { VerifyColumnSplitEvaluateSingleSplit(true); }, true, true);
+}
+
+TEST(GpuSplit, Input) {
+  auto ctx = MakeCUDACtx(0);
+
+  std::vector<GradientPairInt64> h_node_hist;
+  std::ifstream fin{"./d_node_hist"};
+  while (!fin.eof()) {
+    std::int64_t grad = 0, hess = 0;
+    fin >> grad;
+    auto c = fin.get();
+    ASSERT_EQ(c, '/');
+    fin >> hess;
+    c = fin.get();
+    ASSERT_EQ(c, ',');
+    c = fin.peek();
+    if (c == '\n') {
+      fin.get();
+    }
+    h_node_hist.emplace_back(grad, hess);
+  }
+  std::cout << h_node_hist.size() << std::endl;
+  thrust::device_vector<GradientPairInt64> d_node_hist{h_node_hist};
+
+  thrust::device_vector<bst_feature_t> feature_set(512);
+  thrust::sequence(feature_set.begin(), feature_set.end(), 0);
+
+  dh::device_vector<FeatureType> feature_types(feature_set.size(), FeatureType::kNumerical);
+  auto d_feature_types = dh::ToSpan(feature_types);
+
+  GradientPairPrecise to_floating_point_{2.32831e-10, 1.45519e-11};
+  GradientPairPrecise to_fixed_point{4.29497e+09, 6.87195e+10};
+  auto quantiser = GradientQuantiser{to_fixed_point, to_floating_point_};
+  TrainParam param;
+  param.UpdateAllowUnknown(Args{{"max_depth", "8"}, {"max_bin", "50"}});
+  auto gparam = GPUTrainingParam{param};
+
+  EvaluateSplitInputs input{0, 0, quantiser.ToFixedPoint(parent_sum_), dh::ToSpan(feature_set),
+                            dh::ToSpan(d_node_hist)};
+  EvaluateSplitSharedInputs shared_inputs{gparam,
+                                          quantiser,
+                                          d_feature_types,
+                                          cuts_.cut_ptrs_.ConstDeviceSpan(),
+                                          cuts_.cut_values_.ConstDeviceSpan(),
+                                          cuts_.min_vals_.ConstDeviceSpan(),
+                                          true};
+
+  GPUHistEvaluator evaluator{param, static_cast<bst_feature_t>(feature_set.size()), ctx.Device()};
+
+  evaluator.Reset(&ctx, cuts_, dh::ToSpan(feature_types), feature_set.size(), param, false);
+  DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
 }
 }  // namespace xgboost::tree
