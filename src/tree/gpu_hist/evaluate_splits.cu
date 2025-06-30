@@ -131,6 +131,8 @@ class EvaluateSplitAgent {
 
       // Best thread updates the split
       if (threadIdx.x == best_thread) {
+        printf("best_t: %d, gain: %f, g: %" PRId64 ", h: %" PRId64 "\n", int(best_thread), gain,
+               bin.GetQuantisedGrad(), bin.GetQuantisedHess());
         // Use pointer from cut to indicate begin and end of bins for each feature.
         int split_gidx = (scan_begin + threadIdx.x) - 1;
         float fvalue =
