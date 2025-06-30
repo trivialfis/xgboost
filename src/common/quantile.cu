@@ -748,10 +748,18 @@ void SketchContainer::MakeCuts(Context const* ctx, HistogramCuts* p_cuts, bool i
   auto const& values = p_cuts->cut_values_.ConstHostVector();
 
   std::cout << "SketchContainer::MakeCuts: " << std::endl;
+  std::cout << "indptrs:" << std::endl;
+  for (unsigned int i : indptr) {
+    std::cout << i << ", ";
+  }
+  std::cout << "Mins" << std::endl;
+  for (float i : min) {
+    std::cout << i << ", ";
+  }
+  std::cout << "Values" << std::endl;
   for (std::size_t i = 1; i < indptr.size(); ++i) {
     auto begin = indptr[i - 1];
     auto end = indptr[i];
-    std::cout << min[i - 1] << std::endl;
     for (auto j = begin; j != end; ++j) {
       std::cout << values[j] << ", ";
     }
