@@ -798,5 +798,6 @@ TEST(GpuSplit, Input) {
 
   evaluator.Reset(&ctx, cuts, dh::ToSpan(feature_types), feature_set.size(), param, false);
   DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
+  std::cout << result << std::endl;
 }
 }  // namespace xgboost::tree
