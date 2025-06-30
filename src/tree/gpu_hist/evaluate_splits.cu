@@ -131,8 +131,8 @@ class EvaluateSplitAgent {
 
       // Best thread updates the split
       if (threadIdx.x == best_thread) {
-        printf("best_t: %d, gain: %f, g: %" PRId64 ", h: %" PRId64 "\n", int(best_thread), gain,
-               bin.GetQuantisedGrad(), bin.GetQuantisedHess());
+        // printf("best_t: %d, gain: %f, g: %" PRId64 ", h: %" PRId64 "\n", int(best_thread), gain,
+        //        bin.GetQuantisedGrad(), bin.GetQuantisedHess());
         // Use pointer from cut to indicate begin and end of bins for each feature.
         int split_gidx = (scan_begin + threadIdx.x) - 1;
         float fvalue =
@@ -371,6 +371,12 @@ void GPUHistEvaluator::LaunchEvaluateSplits(
       shared_inputs,
       this->SortedIdx(d_inputs.size(), shared_inputs.feature_values.size()),
       evaluator, dh::ToSpan(feature_best_splits));
+  auto d_fbs = dh::ToSpan(feature_best_splits);
+  std::vector<DeviceSplitCandidate> h_fbs(d_fbs.size());
+  dh::CopyDeviceSpanToVector(&h_fbs, d_fbs);
+  for (auto c : h_fbs) {
+    std::cout << c << std::endl;
+  }
 
   // Reduce to get best candidate for left and right child over all features
   auto reduce_offset =
