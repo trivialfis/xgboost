@@ -149,9 +149,9 @@ class EvaluateSplitAgent {
         best_split->Update(gain, missing_left ? kLeftDir : kRightDir, fvalue, fidx, left, right,
                            false, param, rounding);
         if (blockIdx.x == 0) {
-          printf("update gain %f, gain: %f, before %f, l: %d, r: %d\n", best_split->loss_chg, gain,
+          printf("update gain %f, gain: %f, before %f, l: %d, r: %d, ptr:%p\n", best_split->loss_chg, gain,
                  before, int(rounding.ToFloatingPoint(left).GetHess() >= param.min_child_weight),
-                 rounding.ToFloatingPoint(right).GetHess() >= param.min_child_weight);
+                 rounding.ToFloatingPoint(right).GetHess() >= param.min_child_weight, best_split);
         }
       }
     }
