@@ -380,9 +380,10 @@ void GPUHistEvaluator::LaunchEvaluateSplits(
       shared_inputs,
       this->SortedIdx(d_inputs.size(), shared_inputs.feature_values.size()),
       evaluator, dh::ToSpan(feature_best_splits));
-  // auto d_fbs = dh::ToSpan(feature_best_splits);
-  // std::vector<DeviceSplitCandidate> h_fbs(d_fbs.size());
-  // dh::CopyDeviceSpanToVector(&h_fbs, d_fbs);
+  auto d_fbs = dh::ToSpan(feature_best_splits);
+  std::vector<DeviceSplitCandidate> h_fbs(d_fbs.size());
+  dh::CopyDeviceSpanToVector(&h_fbs, d_fbs);
+  std::cout << h_fbs.front() << std::endl;
   // for (auto c : h_fbs) {
   //   std::cout << c << std::endl;
   // }
