@@ -145,10 +145,11 @@ class EvaluateSplitAgent {
             split_gidx < static_cast<int>(gidx_begin) ? min_fvalue : feature_values[split_gidx];
         GradientPairInt64 left = missing_left ? bin + missing : bin;
         GradientPairInt64 right = parent_sum - left;
+        auto before = best_split->loss_chg;
         best_split->Update(gain, missing_left ? kLeftDir : kRightDir, fvalue, fidx, left, right,
                            false, param, rounding);
         if (blockIdx.x == 0) {
-          printf("update gain %f\n", best_split->loss_chg);
+          printf("update gain %f, gain: %f, before %f\n", best_split->loss_chg, gain, before);
         }
       }
     }
