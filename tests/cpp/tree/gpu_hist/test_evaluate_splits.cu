@@ -738,8 +738,11 @@ common::HistogramCuts ReprCuts(Context const* ctx) {
     }
 
   }
+  cuts.cut_values_.SetDevice(ctx->Device());
   cuts.cut_values_.ConstDevicePointer();
+  cuts.cut_ptrs_.SetDevice(ctx->Device());
   cuts.cut_ptrs_.ConstDevicePointer();
+  cuts.min_vals_.SetDevice(ctx->Device());
   cuts.min_vals_.ConstDevicePointer();
   return cuts;
 }
