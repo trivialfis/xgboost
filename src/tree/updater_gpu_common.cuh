@@ -66,7 +66,7 @@ struct DeviceSplitCandidate {
 
   XGBOOST_DEVICE DeviceSplitCandidate() {}  // NOLINT
 
-  XGBOOST_DEVICE void Update(float loss_chg_in, DefaultDirection dir_in, float fvalue_in,
+  XGBOOST_DEVICE void Update(double loss_chg_in, DefaultDirection dir_in, float fvalue_in,
                              int findex_in, GradientPairInt64 left_sum_in,
                              GradientPairInt64 right_sum_in, bool cat,
                              const GPUTrainingParam& param, const GradientQuantiser& quantiser) {
