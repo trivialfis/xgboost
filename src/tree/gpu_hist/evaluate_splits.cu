@@ -123,6 +123,10 @@ class EvaluateSplitAgent {
       double gain = thread_active ? LossChangeMissing(bin, missing, parent_sum, param, nidx, fidx,
                                                       evaluator, missing_left, rounding)
                                   : kNullGain;
+      if (blockIdx.x == 0) {
+        printf("t: %d, gain: %f, g: %" PRId64 ", h: %" PRId64 "\n", int(threadIdx.x), gain,
+               bin.GetQuantisedGrad(), bin.GetQuantisedHess());
+      }
       // Find thread with best gain
       auto best = MaxReduceT(temp_storage->max_reduce).Reduce({threadIdx.x, gain}, cub::ArgMax());
       // This reduce result is only valid in thread 0
@@ -371,12 +375,12 @@ void GPUHistEvaluator::LaunchEvaluateSplits(
       shared_inputs,
       this->SortedIdx(d_inputs.size(), shared_inputs.feature_values.size()),
       evaluator, dh::ToSpan(feature_best_splits));
-  auto d_fbs = dh::ToSpan(feature_best_splits);
-  std::vector<DeviceSplitCandidate> h_fbs(d_fbs.size());
-  dh::CopyDeviceSpanToVector(&h_fbs, d_fbs);
-  for (auto c : h_fbs) {
-    std::cout << c << std::endl;
-  }
+  // auto d_fbs = dh::ToSpan(feature_best_splits);
+  // std::vector<DeviceSplitCandidate> h_fbs(d_fbs.size());
+  // dh::CopyDeviceSpanToVector(&h_fbs, d_fbs);
+  // for (auto c : h_fbs) {
+  //   std::cout << c << std::endl;
+  // }
 
   // Reduce to get best candidate for left and right child over all features
   auto reduce_offset =
