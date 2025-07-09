@@ -11,6 +11,7 @@
 #include <limits>   // for numeric_limits
 #include <memory>   // for unique_ptr
 #include <new>      // for bad_array_new_length
+#include <omp.h>
 
 #include "common.h"
 
@@ -70,6 +71,44 @@ struct ManagedAllocPolicy {
   void deallocate(pointer p, size_type) { dh::safe_cuda(cudaFree(p)); }  // NOLINT
 };
 
+#if defined(_OPENMP)
+#else
+#endif  // defined(_OPENMP)
+
+/**
+ * @brief Wrapper for the OpenMP allocator.
+ *
+ * Some useful links for reference and introduction:
+ *
+ * https://www.openmp.org/spec-html/5.0/openmpsu53.html#x78-2400002.11.2
+ * https://www.iwomp.org/wp-content/uploads/iwomp-2023-advanced-openmp-tutorial.pdf
+ */
+class OmpAllocator {
+  omp_allocator_handle_t alloc_;
+
+ public:
+  OmpAllocator()
+      : alloc_{[] {
+          omp_memspace_handle_t ms = omp_default_mem_space;
+          std::array<omp_alloctrait_t, 3> traits{
+              omp_alloctrait_t{omp_atk_partition, omp_atv_nearest},
+              omp_alloctrait_t{omp_atk_sync_hint, omp_atv_uncontended},
+              omp_alloctrait_t{omp_atk_alignment, alignof(max_align_t)}};
+          return omp_init_allocator(ms, traits.size(), traits.data());
+        }()} {}
+  ~OmpAllocator() { omp_destroy_allocator(alloc_); }
+
+  OmpAllocator(OmpAllocator const&) = delete;
+  OmpAllocator& operator=(OmpAllocator const&) = delete;
+
+  [[nodiscard]] void* Allocate(std::size_t n_bytes) {
+    return omp_aligned_alloc(alignof(max_align_t), n_bytes, alloc_);
+  }
+  void Deallocate(void* ptr) { omp_free(ptr, alloc_); }
+};
+
+[[nodiscard]] OmpAllocator& GlobalOmpAllocator();
+
 // This is actually a pinned memory allocator in disguise. We utilize HMM or ATS for
 // efficient tracked memory allocation.
 template <typename T>
@@ -89,7 +128,8 @@ struct SamAllocPolicy {
     }
 
     size_type n_bytes = cnt * sizeof(value_type);
-    pointer result = reinterpret_cast<pointer>(std::malloc(n_bytes));
+    auto& alloc = GlobalOmpAllocator();
+    pointer result = reinterpret_cast<pointer>(alloc.Allocate(n_bytes));
     if (!result) {
       throw std::bad_alloc{};
     }
@@ -99,7 +139,7 @@ struct SamAllocPolicy {
 
   void deallocate(pointer p, size_type) {  // NOLINT
     dh::safe_cuda(cudaHostUnregister(p));
-    std::free(p);
+    GlobalOmpAllocator().Deallocate(p);
   }
 };
 

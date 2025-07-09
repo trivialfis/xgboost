@@ -18,6 +18,12 @@
 #include "cuda_rt_utils.h"  // for CurrentDevice
 
 namespace xgboost::common::cuda_impl {
+
+[[nodiscard]] OmpAllocator& GlobalOmpAllocator() {
+  static OmpAllocator alloc;
+  return alloc;
+}
+
 [[nodiscard]] MemPoolHdl CreateHostMemPool() {
   auto mem_pool = std::unique_ptr<cudaMemPool_t, void (*)(cudaMemPool_t*)>{
       [] {
