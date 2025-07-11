@@ -1,3 +1,6 @@
+/**
+ * Copyright 2025, by XGBoost Contributors
+ */
 #include <gtest/gtest.h>
 
 #include <filesystem>  // for path
@@ -105,15 +108,13 @@ TEST(Numa, CpuListParser) {
 TEST(Numa, GetCpus) {
   std::vector<std::int32_t> cpus;
   GetNumaNodeCpus(&cpus);
+  ASSERT_FALSE(cpus.empty());
 }
 
 TEST(Numa, GetMaxNodes) {
   auto n_nodes = GetMaxNumNodes();
-  std::cout << n_nodes << std::endl;
+  ASSERT_GE(n_nodes, sizeof(std::uint64_t) * 8);
 }
 
-TEST(Numa, GetMemBind) {
-  auto bind = GetNumaMemBind();
-  std::cout << "bind:" << bind << std::endl;
-}
+TEST(Numa, GetMemBind) { [[maybe_unused]] auto bind = GetNumaMemBind(); }
 }  // namespace xgboost::common

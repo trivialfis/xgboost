@@ -1,8 +1,15 @@
 /**
  * Copyright 2025, by XGBoost Contributors
  */
+#include "numa_utils.h"
+
+#if defined(__linux__)
+
 #include <linux/mempolicy.h>  // for MPOL_BIND
-#include <sys/syscall.h>
+#include <sys/syscall.h>      // for syscall
+
+#endif  // defined(__linux__)
+
 #include <unistd.h>
 
 #include <cstdint>     // for int32_t
@@ -15,16 +22,23 @@
 #include "cuda_rt_utils.h"
 #include "error_msg.h"  // for SystemError
 #include "xgboost/logging.h"
+#include "xgboost/windefs.h"  // for xgboost_IS_WIN
 
 namespace xgboost::common {
+
 namespace {
 namespace fs = std::filesystem;
-
+#if defined(__linux__)
 // Wrapper for the system call
-auto GetMemPolicy(int *mode, unsigned long *nodemask, unsigned long maxnode, void *addr,
-                  unsigned long flags) {
+auto GetMemPolicy(int *mode, unsigned long *nodemask, unsigned long maxnode, void *addr,  // NOLINT
+                  unsigned long flags) {                                                  // NOLINT
   return syscall(SYS_get_mempolicy, mode, nodemask, maxnode, addr, flags);
 }
+
+auto GetMemPolicy(int *policy, unsigned long *nmask, unsigned long maxnode) {  // NOLINT
+  return GetMemPolicy(policy, nmask, maxnode, nullptr, 0);
+}
+#endif  // defined(__linux__)
 }  // namespace
 
 void ReadCpuList(fs::path const &path, std::vector<std::int32_t> *p_cpus) {
@@ -66,21 +80,21 @@ void ReadCpuList(fs::path const &path, std::vector<std::int32_t> *p_cpus) {
 }
 
 void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
+  p_cpus->clear();
+#if defined(__linux__)
   std::int32_t nodeid = curt::GetNumaId();
   std::string nodename = "node" + std::to_string(nodeid);
   auto p_cpulist = fs::path{"/sys/devices/system/node"} / fs::path{nodename} / fs::path{"cpulist"};
-  p_cpus->clear();
+
   if (!fs::exists(p_cpulist)) {
     return;
   }
   ReadCpuList(p_cpulist, p_cpus);
+#endif  // defined(__linux__)
 }
 
-auto GetMemPolicy(int *policy, unsigned long *nmask, unsigned long maxnode) {
-  return GetMemPolicy(policy, nmask, maxnode, nullptr, 0);
-}
-
-[[nodiscard]] std::size_t GetMaxNumNodes() {
+[[nodiscard]] std::int32_t GetMaxNumNodes() {
+#if defined(__linux__)
   auto p_possible = fs::path{"/sys/devices/system/node/possible"};
   std::int32_t max_n_nodes = -1;
   if (fs::exists(p_possible)) {
@@ -95,6 +109,9 @@ auto GetMemPolicy(int *policy, unsigned long *nmask, unsigned long maxnode) {
   if (max_n_nodes <= 0) {
     max_n_nodes = sizeof(uint64_t) * 8;
   }
+  // Just in case if it keeps getting into error
+  constexpr decltype(max_n_nodes) kThresh = 16384;
+
   while (true) {
     std::vector<std::uint64_t> mask(max_n_nodes, 0);
 
@@ -104,14 +121,29 @@ auto GetMemPolicy(int *policy, unsigned long *nmask, unsigned long maxnode) {
       return max_n_nodes;
     }
     max_n_nodes *= 2;
+
+    if (max_n_nodes > kThresh) {
+      break;
+    }
   }
+  return -1;
+#else
+  return -1;
+#endif  // defined(__linux__)
 }
 
 [[nodiscard]] bool GetNumaMemBind() {
+#if defined(__linux__)
   std::int32_t mode = -1;
   auto max_n_nodes = GetMaxNumNodes();
+  if (max_n_nodes <= 0) {
+    return false;
+  }
   std::vector<std::uint64_t> mask(max_n_nodes / 8);
   CHECK_GE(GetMemPolicy(&mode, mask.data(), max_n_nodes), 0) << error::SystemError().message();
   return mode == MPOL_BIND;
+#else
+  return false;
+#endif  // defined(__linux__)
 }
 }  // namespace xgboost::common

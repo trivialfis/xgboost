@@ -12,7 +12,13 @@ void ReadCpuList(std::filesystem::path const &path, std::vector<std::int32_t> *p
 
 void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus);
 
-[[nodiscard]] std::size_t GetMaxNumNodes();
+/**
+ * @brief Find the maximum number of NUMA nodes.
+ */
+[[nodiscard]] std::int32_t GetMaxNumNodes();
 
+/**
+ * @brief Check whether the memory policy is set to bind.
+ */
 [[nodiscard]] bool GetNumaMemBind();
 }  // namespace xgboost::common
