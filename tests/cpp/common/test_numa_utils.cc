@@ -107,14 +107,23 @@ TEST(Numa, CpuListParser) {
 
 TEST(Numa, GetCpus) {
   std::vector<std::int32_t> cpus;
-  GetNumaNodeCpus(&cpus);
-  ASSERT_FALSE(cpus.empty());
+  if (GetNumaNumNodes() > 0) {
+    GetNumaNodeCpus(0, &cpus);
+    ASSERT_FALSE(cpus.empty());
+  } else {
+    GTEST_SKIP();
+  }
 }
 
-TEST(Numa, GetMaxNodes) {
-  auto n_nodes = GetMaxNumNodes();
-  ASSERT_GE(n_nodes, sizeof(std::uint64_t) * 8);
+TEST(Numa, GetMaxNumNodes) {
+  auto n_nodes = GetNumaMaxNumNodes();
+  ASSERT_GE(n_nodes, 0);
 }
 
 TEST(Numa, GetMemBind) { [[maybe_unused]] auto bind = GetNumaMemBind(); }
+
+TEST(Numa, GetNumNodes) {
+  auto n_nodes = GetNumaNumNodes();
+  ASSERT_GE(n_nodes, 1);
+}
 }  // namespace xgboost::common

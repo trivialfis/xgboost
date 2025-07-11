@@ -18,11 +18,9 @@
 #include <string>      // for string
 #include <vector>      // for vector
 
-#include "common.h"  // for TrimLast
-#include "cuda_rt_utils.h"
+#include "common.h"     // for TrimLast
 #include "error_msg.h"  // for SystemError
 #include "xgboost/logging.h"
-#include "xgboost/windefs.h"  // for xgboost_IS_WIN
 
 namespace xgboost::common {
 
@@ -79,11 +77,10 @@ void ReadCpuList(fs::path const &path, std::vector<std::int32_t> *p_cpus) {
   }
 }
 
-void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
+void GetNumaNodeCpus(std::int32_t node_id, std::vector<std::int32_t> *p_cpus) {
   p_cpus->clear();
 #if defined(__linux__)
-  std::int32_t nodeid = curt::GetNumaId();
-  std::string nodename = "node" + std::to_string(nodeid);
+  std::string nodename = "node" + std::to_string(node_id);
   auto p_cpulist = fs::path{"/sys/devices/system/node"} / fs::path{nodename} / fs::path{"cpulist"};
 
   if (!fs::exists(p_cpulist)) {
@@ -93,7 +90,7 @@ void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
 #endif  // defined(__linux__)
 }
 
-[[nodiscard]] std::int32_t GetMaxNumNodes() {
+[[nodiscard]] std::int32_t GetNumaMaxNumNodes() {
 #if defined(__linux__)
   auto p_possible = fs::path{"/sys/devices/system/node/possible"};
   std::int32_t max_n_nodes = -1;
@@ -106,12 +103,10 @@ void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
     }
   }
 
-  if (max_n_nodes <= 0) {
-    max_n_nodes = sizeof(uint64_t) * 8;
-  }
   // Just in case if it keeps getting into error
   constexpr decltype(max_n_nodes) kThresh = 16384;
-
+  // Estimate the size of the CPU set based on the error returned from get mempolicy.
+  // Strategy used by hwloc and libnuma.
   while (true) {
     std::vector<std::uint64_t> mask(max_n_nodes, 0);
 
@@ -135,7 +130,7 @@ void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
 [[nodiscard]] bool GetNumaMemBind() {
 #if defined(__linux__)
   std::int32_t mode = -1;
-  auto max_n_nodes = GetMaxNumNodes();
+  auto max_n_nodes = GetNumaMaxNumNodes();
   if (max_n_nodes <= 0) {
     return false;
   }
@@ -144,6 +139,28 @@ void GetNumaNodeCpus(std::vector<std::int32_t> *p_cpus) {
   return mode == MPOL_BIND;
 #else
   return false;
+#endif  // defined(__linux__)
+}
+
+[[nodiscard]] std::int32_t GetNumaNumNodes() {
+#if defined(__linux__)
+  fs::path p_node{"/sys/devices/system/node"};
+  if (!fs::exists(p_node)) {
+    return -1;
+  }
+  std::int32_t n_nodes{0};
+  for (auto const &entry : fs::directory_iterator{p_node}) {
+    auto name = entry.path().filename().string();
+    if (name.find("node") == 0) {  // starts with `node`
+      n_nodes += 1;
+    }
+  }
+  if (n_nodes == 0) {
+    return -1;
+  }
+  return n_nodes;
+#else
+  return -1;
 #endif  // defined(__linux__)
 }
 }  // namespace xgboost::common
