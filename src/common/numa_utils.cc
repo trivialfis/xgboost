@@ -1,3 +1,7 @@
+#include <linux/mempolicy.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <algorithm>   // for find
 #include <cstdint>     // for int32_t
 #include <filesystem>  // for path
@@ -31,6 +35,32 @@ void GetNumaNodeCpus(std::vector<std::int32_t>* p_cpus) {
   auto& cpus = *p_cpus;
   for (auto i = start; i <= end; ++i) {
     cpus.push_back(i);
+  }
+}
+
+void SetNumaCpuAffinity(std::vector<std::int32_t> const& cpus) {
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+
+  for (auto cpu_id : cpus) {
+    CPU_SET(cpu_id, &cpuset);
+  }
+  // fixme: is there a way to set for the entire process?
+  if (sched_setaffinity(0, sizeof(cpuset), &cpuset) == -1) {
+    std::perror("sched_setaffinity");
+    // fixme, error handling.
+  }
+}
+
+void SetNumaMemoryAffinity(std::int32_t node_id) {
+  std::uintmax_t nodemask = 1UL << node_id;
+  int mode = MPOL_BIND;
+  auto maxnode = sizeof(nodemask) * 8;  // fixme: not true
+
+  auto ret = syscall(SYS_set_mempolicy, mode, &nodemask, maxnode);
+  if (ret != 0) {
+    std::perror("set_mempolicy");
+    // fixme: error handling.
   }
 }
 }  // namespace xgboost::common
