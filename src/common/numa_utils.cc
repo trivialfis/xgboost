@@ -1,3 +1,6 @@
+/**
+ * Copyright 2025, by XGBoost Contributors
+ */
 #include <linux/mempolicy.h>  // for MPOL_BIND
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -24,7 +27,6 @@ auto GetMemPolicy(int *mode, unsigned long *nodemask, unsigned long maxnode, voi
 }
 }  // namespace
 
-// Read a file with the `cpulist` format.
 void ReadCpuList(fs::path const &path, std::vector<std::int32_t> *p_cpus) {
   auto &cpus = *p_cpus;
   cpus.clear();

@@ -1,3 +1,6 @@
+/**
+ * Copyright 2025, by XGBoost Contributors
+ */
 #pragma once
 #include <cstdint>  // for int32_t
 #include <filesystem>
