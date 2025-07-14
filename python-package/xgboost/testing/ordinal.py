@@ -527,3 +527,8 @@ def run_specified_cat(  # pylint: disable=too-many-locals
 
     predt3 = booster.inplace_predict(array)
     assert_allclose(device, predt0, predt3)
+
+
+def run_training_continuation(device: Literal["cpu", "cuda"]) -> None:
+    Df, _ = get_df_impl(device)
+    df = Df({"c": ["cdef", "abc"]}, dtype="category")
