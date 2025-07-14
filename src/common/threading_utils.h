@@ -198,6 +198,7 @@ void ParallelFor(Index size, std::int32_t n_threads, Sched sched, Func&& fn) {
   using OmpInd = Index;
 #endif
   OmpInd length = static_cast<OmpInd>(size);
+  CHECK_EQ(static_cast<Index>(length), size) << "Overflow";
   CHECK_GE(n_threads, 1);
 
   dmlc::OMPException exc;
