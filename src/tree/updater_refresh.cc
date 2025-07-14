@@ -67,33 +67,31 @@ class TreeRefresher : public TreeUpdater {
     }
     exc.Rethrow();
 
-    auto get_stats = [&]() {
-      // start accumulating statistics
-      for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
-        auto page = batch.GetView();
-        common::ParallelFor(batch.Size(), ctx_->Threads(), [&](auto i) {
-          SparsePage::Inst inst = page[i];
-          const int tid = omp_get_thread_num();
-          const auto ridx = batch.base_rowid + i;
-          RegTree::FVec &feats = fvec_temp[tid];
-          feats.Fill(inst);
-          int offset = 0;
-          for (auto tree : trees) {
-            AddStats(*tree, feats, gpair_h, ridx, dmlc::BeginPtr(stemp[tid]) + offset);
-            offset += tree->NumNodes();
-          }
-          feats.Drop();
-        });
-      }
-      // aggregate the statistics
-      auto num_nodes = static_cast<int>(stemp[0].size());
-      common::ParallelFor(num_nodes, ctx_->Threads(), [&](int nid) {
-        for (int tid = 1; tid < n_threads; ++tid) {
-          stemp[0][nid].Add(stemp[tid][nid]);
+    // Start accumulating statistics
+    for (const auto &batch : p_fmat->GetBatches<SparsePage>()) {
+      auto page = batch.GetView();
+      common::ParallelFor(batch.Size(), ctx_->Threads(), [&](auto i) {
+        SparsePage::Inst inst = page[i];
+        const int tid = omp_get_thread_num();
+        const auto ridx = batch.base_rowid + i;
+        RegTree::FVec &feats = fvec_temp[tid];
+        feats.Fill(inst);
+        std::int32_t offset = 0;
+        for (auto tree : trees) {
+          AddStats(*tree, feats, gpair_h, ridx, dmlc::BeginPtr(stemp[tid]) + offset);
+          offset += tree->NumNodes();
         }
+        feats.Drop();
       });
-    };
-    get_stats();
+    }
+    // Aggregate the statistics
+    auto num_nodes = static_cast<int>(stemp[0].size());
+    common::ParallelFor(num_nodes, ctx_->Threads(), [&](auto nidx) {
+      for (int tid = 1; tid < n_threads; ++tid) {
+        stemp[0][nidx].Add(stemp[tid][nidx]);
+      }
+    });
+
     // Synchronize the aggregated result.
     auto &sum_grad = stemp[0];
     // x2 for gradient and hessian.
@@ -112,7 +110,7 @@ class TreeRefresher : public TreeUpdater {
   static void AddStats(RegTree const &tree, RegTree::FVec const &feat,
                        std::vector<GradientPair> const &gpair, bst_idx_t ridx, GradStats *gstats) {
     // start from groups that belongs to current data
-    auto pid = 0;
+    bst_node_t pid = 0;
     gstats[pid].Add(gpair[ridx]);
     auto const &cats = tree.GetCategoriesMatrix();
     // traverse tree
@@ -124,23 +122,25 @@ class TreeRefresher : public TreeUpdater {
     }
   }
 
-  void Refresh(TrainParam const *param, const GradStats *gstats, int nid, RegTree *p_tree) const {
+  void Refresh(TrainParam const *param, const GradStats *gstats, bst_node_t nidx,
+               RegTree *p_tree) const {
     RegTree &tree = *p_tree;
-    tree.Stat(nid).base_weight = static_cast<float>(CalcWeight(*param, gstats[nid]));
-    tree.Stat(nid).sum_hess = static_cast<float>(gstats[nid].sum_hess);
-    if (tree[nid].IsLeaf()) {
+    tree.Stat(nidx).base_weight = static_cast<float>(CalcWeight(*param, gstats[nidx]));
+    tree.Stat(nidx).sum_hess = static_cast<float>(gstats[nidx].sum_hess);
+    if (tree[nidx].IsLeaf()) {
       if (param->refresh_leaf) {
-        tree[nid].SetLeaf(tree.Stat(nid).base_weight * param->learning_rate);
+        tree[nidx].SetLeaf(tree.Stat(nidx).base_weight * param->learning_rate);
       }
       return;
     }
 
-    tree.Stat(nid).loss_chg =
-        static_cast<float>(xgboost::tree::CalcGain(*param, gstats[tree[nid].LeftChild()]) +
-                           xgboost::tree::CalcGain(*param, gstats[tree[nid].RightChild()]) -
-                           xgboost::tree::CalcGain(*param, gstats[nid]));
-    this->Refresh(param, gstats, tree[nid].LeftChild(), p_tree);
-    this->Refresh(param, gstats, tree[nid].RightChild(), p_tree);
+    tree.Stat(nidx).loss_chg =
+        static_cast<float>(xgboost::tree::CalcGain(*param, gstats[tree[nidx].LeftChild()]) +
+                           xgboost::tree::CalcGain(*param, gstats[tree[nidx].RightChild()]) -
+                           xgboost::tree::CalcGain(*param, gstats[nidx]));
+
+    this->Refresh(param, gstats, tree[nidx].LeftChild(), p_tree);
+    this->Refresh(param, gstats, tree[nidx].RightChild(), p_tree);
   }
 };
 
