@@ -23,11 +23,15 @@ CatContainer::CatContainer(enc::HostColumnsView const& df) : CatContainer{} {
   this->feature_segments_.Resize(df.feature_segments.size());
   auto& seg = this->feature_segments_.HostVector();
   std::copy_n(df.feature_segments.data(), df.feature_segments.size(), seg.begin());
-
+  std::cout << __func__ << std::endl;
   for (auto const& col : df.columns) {
+    std::cout << "column" << std::endl;
     auto op = [this](auto const& str) {
       using CatStr = std::remove_cv_t<std::remove_reference_t<decltype(str)>>;
       using T = typename cpu_impl::ViewToStorageImpl<CatStr>::Type;
+      static_assert(std::is_same_v<typename CatStr::OffsetT, typename T::OffsetT>);
+      std::cout << "sizeof:" << sizeof(typename T::OffsetT) << " :"
+                << sizeof(typename CatStr::OffsetT) << " offset:" << str.offsets.size() << std::endl;
       this->cpu_impl_->columns.emplace_back();
       this->cpu_impl_->columns.back().emplace<T>();
       auto& v = std::get<T>(this->cpu_impl_->columns.back());
@@ -35,6 +39,17 @@ CatContainer::CatContainer(enc::HostColumnsView const& df) : CatContainer{} {
       v.values.resize(str.values.size());
       std::copy_n(str.offsets.data(), str.offsets.size(), v.offsets.data());
       std::copy_n(str.values.data(), str.values.size(), v.values.data());
+      std::cout << "v.offsets" << std::endl;
+      for (std::size_t i = 1; i< v.offsets.size(); ++i) {
+        std::cout << v.offsets[i-1] << ", ";
+        auto begin = v.offsets[i-1];
+        auto end = v.offsets[i];
+        for (auto j = begin; j < end; ++j) {
+          std::cout << v.values[j] << ", ";
+        }
+        std::cout << std::endl;
+      }
+      std::cout << std::endl;
     };
     std::visit(enc::Overloaded{
                    [&](enc::CatStrArrayViewI32 str) { op(str); },

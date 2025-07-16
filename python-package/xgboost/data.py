@@ -803,7 +803,7 @@ class ArrowTransformed(TransformedDf):
             if isinstance(col, pa.DictionaryArray):
                 cats = col.dictionary
                 codes = col.indices
-                print(cats, codes, sep="\n")
+                # print(cats, codes, sep="\n")
                 # fixme: numeric index.
                 jnames, jcodes, buf = _arrow_cat_inf(cats, codes)
                 self.temporary_buffers.append(buf)
@@ -838,6 +838,7 @@ class ArrowTransformed(TransformedDf):
             array_inf(col)
 
         self.aitfs = aitfs
+        print(aitfs)
 
     def array_interface(self) -> bytes:
         """Return a byte string for JSON encoded array interface."""

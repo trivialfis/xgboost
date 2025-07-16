@@ -731,6 +731,7 @@ XGB_DLL int XGBDMatrixGetCategories(DMatrixHandle handle, char const **out) {
                                    auto jdvec = linalg::ArrayInterface(dvec);
 
                                    get<Array>(jout).emplace_back(Object{});
+                                   std::cout << "jovec:" << jovec << std::endl;
                                    get<Array>(jout).back()["offsets"] = std::move(jovec);
                                    get<Array>(jout).back()["values"] = std::move(jdvec);
                                  }),

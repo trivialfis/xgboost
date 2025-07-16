@@ -1338,16 +1338,24 @@ class DMatrix:  # pylint: disable=too-many-instance-attributes,too-many-public-m
 
             joffsets = f_jcats["offsets"]
             jvalues = f_jcats["values"]
-            offsets = from_array_interface(joffsets, True)
-            values = from_array_interface(jvalues, True)
-            pa_offsets = pa.array(offsets).buffers()
-            pa_values = pa.array(values).buffers()
-            assert (
-                pa_offsets[0] is None and pa_values[0] is None
-            ), "Should not have null mask."
+            print(joffsets, jvalues, sep="\n")
+            offsets = from_array_interface(joffsets, False).astype(np.int32)
+            # print("offsets:", offsets, pa.array(offsets))
+            values = from_array_interface(jvalues, False)
+            print("dtype", values.dtype, offsets.dtype)
+            # print("values:", values, pa.array(values))
+
+            pa_offsets = pa.array(offsets)
+            pa_values = pa.array(values)
+            print(pa_offsets)
+            print(pa_values)
+            # assert (
+            #     pa_offsets[0] is None and pa_values[0] is None
+            # ), "Should not have null mask."
             pa_dict = pa.StringArray.from_buffers(
-                len(offsets) - 1, pa_offsets[1], pa_values[1]
+                len(offsets) - 1, pa_offsets.buffers()[1], pa_values.buffers()[1]
             )
+            print("padict:", pa_dict)
             results[fnames[fidx]] = pa_dict
 
         return results

@@ -28,6 +28,8 @@ struct EncErrorPolicy {
 namespace cpu_impl {
 template <typename OffT>
 struct CatStrArray {
+  using OffsetT = OffT;
+
   std::vector<OffT> offsets;
   std::vector<enc::CatCharT> values;
 

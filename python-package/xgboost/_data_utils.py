@@ -272,6 +272,7 @@ def _arrow_cat_inf(  # pylint: disable=too-many-locals
     assert cats.offset == 0
     buffers: List[pa.Buffer] = cats.buffers()
     mask, offset, data = buffers
+    print(type(offset))
     assert offset.is_cpu
 
     off_len = len(cats) + 1
@@ -282,6 +283,12 @@ def _arrow_cat_inf(  # pylint: disable=too-many-locals
     if offset.size == get_n_bytes(np.int32):
         typestr = "<i4"
     elif offset.size == get_n_bytes(np.int64):
+        pdcats = pa.Array.from_pandas(cats.to_pandas())
+        print("pdcats:", pdcats)
+        nm, noff, nd = pdcats.buffers()
+        print(offset.size, noff.size)
+        # pa.array(cats, type=pa.StringArray())
+        # pa.Int32Array.from_buffers(pa.int64(), len(offset), [None, offset])
         typestr = "<i8"
 
     joffset: ArrayInf = {
