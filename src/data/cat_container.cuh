@@ -8,8 +8,9 @@
 #include "cat_container.h"               // for EncErrorPolicy
 
 namespace xgboost::cuda_impl {
+template <typename OffT>
 struct CatStrArray {
-  dh::device_vector<std::int32_t> offsets;
+  dh::device_vector<OffT> offsets;
   dh::device_vector<enc::CatCharT> values;
 
   CatStrArray() = default;
@@ -19,7 +20,7 @@ struct CatStrArray {
   CatStrArray(CatStrArray&& that) = default;
   CatStrArray& operator=(CatStrArray&& that) = default;
 
-  [[nodiscard]] explicit operator enc::CatStrArrayView() const {
+  [[nodiscard]] explicit operator enc::CatStrArrayView<OffT>() const {
     return {dh::ToSpan(offsets), dh::ToSpan(values)};
   }
   [[nodiscard]] std::size_t size() const {  // NOLINT
@@ -32,12 +33,15 @@ struct CatStrArray {
   }
 };
 
+using CatStrArrayI32 = CatStrArray<std::int32_t>;
+using CatStrArrayI64 = CatStrArray<std::int64_t>;
+
 template <typename T>
 struct ViewToStorageImpl;
 
-template <>
-struct ViewToStorageImpl<enc::CatStrArrayView> {
-  using Type = CatStrArray;
+template <typename OffT>
+struct ViewToStorageImpl<enc::CatStrArrayView<OffT>> {
+  using Type = CatStrArray<OffT>;
 };
 
 template <typename T>

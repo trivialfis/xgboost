@@ -15,7 +15,6 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    Type,
     TypeAlias,
     TypeGuard,
     Union,

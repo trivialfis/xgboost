@@ -26,23 +26,27 @@ struct EncErrorPolicy {
 };
 
 namespace cpu_impl {
+template <typename OffT>
 struct CatStrArray {
-  std::vector<std::int32_t> offsets;
+  std::vector<OffT> offsets;
   std::vector<enc::CatCharT> values;
 
-  [[nodiscard]] explicit operator enc::CatStrArrayView() const { return {offsets, values}; }
+  [[nodiscard]] explicit operator enc::CatStrArrayView<OffT>() const { return {offsets, values}; }
   [[nodiscard]] std::size_t size() const {  // NOLINT
-    return enc::CatStrArrayView(*this).size();
+    return enc::CatStrArrayView<OffT>(*this).size();
   }
 };
+
+using CatStrArrayI32 = CatStrArray<std::int32_t>;
+using CatStrArrayI64 = CatStrArray<std::int64_t>;
 
 // Type mapping from the CPU view type to the storage type.
 template <typename T>
 struct ViewToStorageImpl;
 
-template <>
-struct ViewToStorageImpl<enc::CatStrArrayView> {
-  using Type = CatStrArray;
+template <typename OffT>
+struct ViewToStorageImpl<enc::CatStrArrayView<OffT>> {
+  using Type = CatStrArray<OffT>;
 };
 
 template <typename T>
@@ -74,8 +78,11 @@ struct CatContainerImpl {
   void Finalize() {
     this->columns_v.clear();
     for (auto const& col : this->columns) {
-      std::visit(enc::Overloaded{[this](CatStrArray const& str) {
-                                   this->columns_v.emplace_back(enc::CatStrArrayView(str));
+      std::visit(enc::Overloaded{[this](CatStrArrayI32 const& str) {
+                                   this->columns_v.emplace_back(enc::CatStrArrayViewI32(str));
+                                 },
+                                 [this](CatStrArrayI64 const& str) {
+                                   this->columns_v.emplace_back(enc::CatStrArrayViewI64(str));
                                  },
                                  [this](auto&& values) {
                                    this->columns_v.emplace_back(common::Span{values});

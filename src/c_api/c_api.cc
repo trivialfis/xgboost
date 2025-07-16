@@ -721,7 +721,7 @@ XGB_DLL int XGBDMatrixGetCategories(DMatrixHandle handle, char const **out) {
         get<Array>(jout).emplace_back();
         continue;
       }
-      std::visit(enc::Overloaded{[&](enc::CatStrArrayView const &str) {
+      std::visit(enc::Overloaded{enc::MakeCatStrViewOp([&](auto const &str) {
                                    auto const &offsets = str.offsets;
                                    auto ovec = linalg::MakeVec(offsets.data(), offsets.size());
                                    auto jovec = linalg::ArrayInterface(ovec);
@@ -733,7 +733,7 @@ XGB_DLL int XGBDMatrixGetCategories(DMatrixHandle handle, char const **out) {
                                    get<Array>(jout).emplace_back(Object{});
                                    get<Array>(jout).back()["offsets"] = std::move(jovec);
                                    get<Array>(jout).back()["values"] = std::move(jdvec);
-                                 },
+                                 }),
                                  [&](auto &&values) {
                                    auto vec = linalg::MakeVec(values.data(), values.size());
                                    auto jvec = linalg::ArrayInterface(vec);

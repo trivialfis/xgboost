@@ -60,8 +60,10 @@ using CatCharT = std::int8_t;
 /**
  * @brief String names of categorical data. Represented in the arrow StringArray format.
  */
+template <typename OffT>
 struct CatStrArrayView {
-  Span<std::int32_t const> offsets;
+  static_assert(std::is_same_v<OffT, std::int32_t> || std::is_same_v<OffT, std::int64_t>);
+  Span<OffT const> offsets;
   Span<CatCharT const> values;
 
   [[nodiscard]] ENC_DEVICE bool empty() const { return offsets.empty(); }  // NOLINT
@@ -73,6 +75,28 @@ struct CatStrArrayView {
     return this->offsets.size_bytes() + values.size_bytes();
   }
 };
+
+using CatStrArrayViewI32 = CatStrArrayView<std::int32_t>;
+using CatStrArrayViewI64 = CatStrArrayView<std::int64_t>;
+
+namespace detail {
+template <typename Op>
+struct StrViewOp {
+  Op op;
+
+  explicit StrViewOp(Op &&fn) : op{std::forward<Op>(fn)} {}
+
+  template <typename OffT>
+  decltype(auto) operator()(enc::CatStrArrayView<OffT> const &str) {
+    return op(str);
+  }
+};
+}  // namespace detail
+
+template <typename Fn>
+decltype(auto) MakeCatStrViewOp(Fn &&fn) {
+  return detail::StrViewOp{std::forward<Fn>(fn)};
+}
 
 // We keep a single type list here for supported types and use various transformations to
 // add specializations. This way we can modify the type list with ease.
@@ -86,8 +110,8 @@ using CatPrimIndexTypes =
 /**
  * @brief All the column types supported by the encoder.
  */
-using CatIndexViewTypes =
-    decltype(std::tuple_cat(std::tuple<CatStrArrayView>{}, PrimToSpan<CatPrimIndexTypes>::Type{}));
+using CatIndexViewTypes = decltype(std::tuple_cat(
+    std::tuple<CatStrArrayViewI32, CatStrArrayViewI64>{}, PrimToSpan<CatPrimIndexTypes>::Type{}));
 
 /**
  * @brief Host categories view for a single column.
@@ -215,7 +239,8 @@ void ArgSort(InIt in_first, InIt in_last, OutIt out_first, Comp comp = std::less
   std::stable_sort(out_first, out_last, op);
 }
 
-[[nodiscard]] inline std::int32_t SearchSorted(CatStrArrayView haystack,
+template <typename OffT>
+[[nodiscard]] inline std::int32_t SearchSorted(CatStrArrayView<OffT> haystack,
                                                Span<std::int32_t const> ref_sorted_idx,
                                                Span<std::int8_t const> needle) {
   auto it = MakeIndexTransformIter([](auto i) { return static_cast<std::int32_t>(i); });
@@ -276,7 +301,7 @@ void SortNames(ExecPolicy const &policy, HostCatIndexView const &cats,
   if (sorted_idx.size() != n_categories) {
     policy.Error("Invalid size of sorted index.");
   }
-  std::visit(Overloaded{[&](CatStrArrayView const &str) {
+  std::visit(Overloaded{MakeCatStrViewOp([&](auto const &str) {
                           cpu_impl::ArgSort(it, it + str.size(), sorted_idx.begin(), [&](T l, T r) {
                             auto l_beg = str.offsets[l];
                             auto l_str = str.values.subspan(l_beg, str.offsets[l + 1] - l_beg);
@@ -286,7 +311,7 @@ void SortNames(ExecPolicy const &policy, HostCatIndexView const &cats,
 
                             return l_str < r_str;
                           });
-                        },
+                        }),
                         [&](auto &&values) {
                           cpu_impl::ArgSort(it, it + values.size(), sorted_idx.begin(),
                                             [&](T l, T r) { return values[l] < values[r]; });
@@ -362,23 +387,25 @@ void Recode(ExecPolicy const &policy, HostColumnsView orig_enc, Span<std::int32_
         std::visit([](auto &&arg) { return arg.size(); }, new_enc.columns[f_idx]);
     std::vector<std::int32_t> searched_idx(n_new_categories, -1);
     auto const &col = new_enc.columns[f_idx];
-    std::visit(Overloaded{[&](CatStrArrayView const &str) {
-                            for (std::size_t j = 1, m = n_new_categories + 1; j < m; ++j) {
-                              auto begin = str.offsets[j - 1];
-                              auto end = str.offsets[j];
-                              auto needle = str.values.subspan(begin, end - begin);
-                              searched_idx[j - 1] = cpu_impl::SearchSorted(
-                                  std::get<CatStrArrayView>(orig_enc.columns[f_idx]),
-                                  ref_sorted_idx, needle);
-                              if (searched_idx[j - 1] == detail::NotFound()) {
-                                std::stringstream ss;
-                                for (auto c : needle) {
-                                  ss.put(c);
-                                }
-                                detail::ReportMissing(policy, ss.str(), f_idx);
-                              }
-                            }
-                          },
+    auto op = [&](auto const &str) {
+      using StrView = std::remove_cv_t<std::remove_reference_t<decltype(str)>>;
+      for (std::size_t j = 1, m = n_new_categories + 1; j < m; ++j) {
+        auto begin = str.offsets[j - 1];
+        auto end = str.offsets[j];
+        auto needle = str.values.subspan(begin, end - begin);
+        searched_idx[j - 1] = cpu_impl::SearchSorted(std::get<StrView>(orig_enc.columns[f_idx]),
+                                                     ref_sorted_idx, needle);
+        if (searched_idx[j - 1] == detail::NotFound()) {
+          std::stringstream ss;
+          for (auto c : needle) {
+            ss.put(c);
+          }
+          detail::ReportMissing(policy, ss.str(), f_idx);
+        }
+      }
+    };
+    std::visit(Overloaded{[&](CatStrArrayViewI32 const &str) { op(str); },
+                          [&](CatStrArrayViewI64 const &str) { op(str); },
                           [&](auto &&values) {
                             using T = typename std::decay_t<decltype(values)>::value_type;
                             for (std::size_t j = 0; j < n_new_categories; ++j) {
@@ -402,7 +429,8 @@ void Recode(ExecPolicy const &policy, HostColumnsView orig_enc, Span<std::int32_
   }
 }
 
-inline std::ostream &operator<<(std::ostream &os, CatStrArrayView const &strings) {
+template <typename OffT>
+inline std::ostream &operator<<(std::ostream &os, CatStrArrayView<OffT> const &strings) {
   auto const &offset = strings.offsets;
   auto const &data = strings.values;
   os << "[";
@@ -425,7 +453,11 @@ inline std::ostream &operator<<(std::ostream &os, HostColumnsView const &h_enc) 
   for (std::size_t i = 0; i < h_enc.columns.size(); ++i) {
     auto const &col = h_enc.columns[i];
     os << "f" << i << ": ";
-    std::visit(enc::Overloaded{[&](enc::CatStrArrayView const &str) { os << str; },
+    auto op = [&](auto const &str) {
+      os << str;
+    };
+    std::visit(enc::Overloaded{[&](enc::CatStrArrayViewI32 const &str) { op(str); },
+                               [&](enc::CatStrArrayViewI64 const &str) { op(str); },
                                [&](auto &&values) {
                                  os << "[";
                                  for (std::size_t j = 0, n = values.size(); j < n; ++j) {

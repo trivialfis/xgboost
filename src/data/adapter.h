@@ -464,26 +464,46 @@ template <bool allow_mask, typename CategoricalIndex>
   // and data are represented by a single masked array.
   auto const& joffset = get<Object const>(jnames.at("offsets"));
   auto offset = ArrayInterface<1>{joffset};
+  std::cout << "Offset:" << std::endl;
+  for (std::size_t i = 0; i < offset.n; ++i) {
+    std::cout << offset(i) << ", ";
+  }
+  std::cout << std::endl;
   auto const& jstr = get<Object const>(jnames.at("values"));
   auto strbuf = ArrayInterface<1>(jstr);
   CHECK_EQ(strbuf.type, ArrayInterfaceHandler::kI1);
 
-  auto names = enc::CatStrArrayView{
-      common::Span{static_cast<std::int32_t const*>(offset.data), offset.Shape<0>()},
-      common::Span<std::int8_t const>{reinterpret_cast<std::int8_t const*>(strbuf.data), strbuf.n}};
-  cat_columns.emplace_back(names);
+  auto& n_bytes = *p_n_bytes;
+  std::size_t n_cats = 0;
+  if (offset.type == ArrayInterfaceHandler::kI4) {
+    auto names = enc::CatStrArrayViewI32{
+        common::Span{static_cast<std::int32_t const*>(offset.data), offset.Shape<0>()},
+        common::Span<std::int8_t const>{reinterpret_cast<std::int8_t const*>(strbuf.data),
+                                        strbuf.n}};
+    cat_columns.emplace_back(names);
+    n_cats = names.size();
+    n_bytes += names.SizeBytes();
+  } else if (offset.type == ArrayInterfaceHandler::kI8) {
+    auto names = enc::CatStrArrayViewI64{
+        common::Span{static_cast<std::int64_t const*>(offset.data), offset.Shape<0>()},
+        common::Span<std::int8_t const>{reinterpret_cast<std::int8_t const*>(strbuf.data),
+                                        strbuf.n}};
+    cat_columns.emplace_back(names);
+    n_cats = names.size();
+    n_bytes += names.SizeBytes();
+  } else {
+    LOG(FATAL) << "Invalid type for the offset in the categories.";
+  }
 
   // arrow Integer array for encoded categories
   auto const& jcodes = get<Object const>(jcol[1]);
   auto codes = ArrayInterface<1>{jcodes};
   p_columns->push_back(codes);
 
-  auto& n_bytes = *p_n_bytes;
   n_bytes += codes.ElementSize() * codes.Shape<0>();
-  n_bytes += names.SizeBytes();
 
   *p_n_samples = std::max(*p_n_samples, static_cast<bst_idx_t>(codes.Shape<0>()));
-  return names.size();
+  return n_cats;
 }
 
 /**

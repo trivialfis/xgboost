@@ -8,6 +8,7 @@
 #include "../c_api/c_api_error.h"  // for API_BEGIN, API_END
 #include "array_interface.h"       // for ArrayInterface
 #include "xgboost/c_api.h"
+#include "../data/cat_container.h"
 #include "xgboost/logging.h"
 
 namespace xgboost::data {
@@ -30,6 +31,7 @@ ColumnarAdapter::ColumnarAdapter(StringView columns) {
         // string index
         n_cats =
             GetArrowDictionary(jcol, &this->cats_, &this->columns_, &this->n_bytes_, &n_samples);
+        std::cout << "n_cats:" << n_cats << std::endl;
       }
     } else {
       // Numeric values
@@ -52,6 +54,28 @@ ColumnarAdapter::ColumnarAdapter(StringView columns) {
   this->cat_segments_ = std::move(cat_segments);
   CHECK(consistent) << "Size of columns should be the same.";
   batch_ = ColumnarAdapterBatch{columns_};
+  // for (auto const& col : this->cats_) {
+  //   std::visit(enc::Overloaded{enc::MakeCatStrViewOp([](auto const& str) {
+  //                                std::cout << "Offset:" << std::endl;
+  //                                for (std::size_t i = 0; i < str.offsets.size(); ++i) {
+  //                                  std::cout << str.offsets[i] << ", ";
+  //                                }
+  //                                for (std::size_t i = 1; i < str.offsets.size(); ++i) {
+  //                                  auto begin = str.offsets[i - 1];
+  //                                  auto end = str.offsets[i];
+  //                                  std::cout << "begin:" << begin << " end:" << end << std::endl;
+  //                                  for (std::size_t j = begin; j < end; ++j) {
+  //                                    std::cout << str.values[j];
+  //                                  }
+  //                                  std::cout << std::endl;
+  //                                }
+  //                              }),
+  //                              [](auto&&) {
+
+  //                              }},
+
+  //              col);
+  // }
 }
 
 template <typename DataIterHandle, typename XGBCallbackDataIterNext, typename XGBoostBatchCSR>

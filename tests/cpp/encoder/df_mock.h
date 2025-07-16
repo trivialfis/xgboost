@@ -29,7 +29,7 @@ auto MakeStrArrayImpl(Strs&&... strs) {
     offsets.push_back(name.size());
   }
   std::partial_sum(offsets.cbegin(), offsets.cend(), offsets.begin());
-  return xgboost::cpu_impl::CatStrArray{offsets, values};
+  return xgboost::cpu_impl::CatStrArrayI32{offsets, values};
 }
 }  // namespace enc
 
@@ -68,8 +68,11 @@ class DfTest {
     MakeImpl(&df.columns_, &df.segments_, std::forward<Col>(columns)...);
     for (std::size_t i = 0; i < df.columns_.size(); ++i) {
       auto const& col = df.columns_[i];
-      std::visit(Overloaded{[&](xgboost::cpu_impl::CatStrArray const& str) {
-                              df.columns_v_.emplace_back(enc::CatStrArrayView(str));
+      std::visit(Overloaded{[&](xgboost::cpu_impl::CatStrArrayI32 const& str) {
+                              df.columns_v_.emplace_back(enc::CatStrArrayViewI32(str));
+                            },
+                            [&](xgboost::cpu_impl::CatStrArrayI64 const& str) {
+                              df.columns_v_.emplace_back(enc::CatStrArrayViewI64(str));
                             },
                             [&](auto&& args) {
                               df.columns_v_.emplace_back(Span{args});

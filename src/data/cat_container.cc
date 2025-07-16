@@ -25,17 +25,20 @@ CatContainer::CatContainer(enc::HostColumnsView const& df) : CatContainer{} {
   std::copy_n(df.feature_segments.data(), df.feature_segments.size(), seg.begin());
 
   for (auto const& col : df.columns) {
+    auto op = [this](auto const& str) {
+      using CatStr = std::remove_cv_t<std::remove_reference_t<decltype(str)>>;
+      using T = typename cpu_impl::ViewToStorageImpl<CatStr>::Type;
+      this->cpu_impl_->columns.emplace_back();
+      this->cpu_impl_->columns.back().emplace<T>();
+      auto& v = std::get<T>(this->cpu_impl_->columns.back());
+      v.offsets.resize(str.offsets.size());
+      v.values.resize(str.values.size());
+      std::copy_n(str.offsets.data(), str.offsets.size(), v.offsets.data());
+      std::copy_n(str.values.data(), str.values.size(), v.values.data());
+    };
     std::visit(enc::Overloaded{
-                   [this](enc::CatStrArrayView str) {
-                     using T = typename cpu_impl::ViewToStorageImpl<enc::CatStrArrayView>::Type;
-                     this->cpu_impl_->columns.emplace_back();
-                     this->cpu_impl_->columns.back().emplace<T>();
-                     auto& v = std::get<T>(this->cpu_impl_->columns.back());
-                     v.offsets.resize(str.offsets.size());
-                     v.values.resize(str.values.size());
-                     std::copy_n(str.offsets.data(), str.offsets.size(), v.offsets.data());
-                     std::copy_n(str.values.data(), str.values.size(), v.values.data());
-                   },
+                   [&](enc::CatStrArrayViewI32 str) { op(str); },
+                   [&](enc::CatStrArrayViewI64 str) { op(str); },
                    [this](auto&& values) {
                      using T =
                          typename cpu_impl::ViewToStorageImpl<std::decay_t<decltype(values)>>::Type;
@@ -96,6 +99,23 @@ struct PrimToUbj<double> {
 };
 }  // anonymous namespace
 
+template <typename Op>
+struct StrOp {
+  Op op;
+
+  explicit StrOp(Op&& fn) : op{std::forward<Op>(fn)} {}
+
+  template <typename OffT>
+  decltype(auto) operator()(cpu_impl::CatStrArray<OffT> const& str) {
+    return op(str);
+  }
+};
+
+template <typename Fn>
+decltype(auto) MakeStrOp(Fn&& fn) {
+  return StrOp{std::forward<Fn>(fn)};
+}
+
 void CatContainer::Save(Json* p_out) const {
   [[maybe_unused]] auto _ = this->HostView();
   auto& out = *p_out;
@@ -106,33 +126,33 @@ void CatContainer::Save(Json* p_out) const {
     auto& f_out = arr[fidx];
 
     auto const& col = columns[fidx];
-    std::visit(enc::Overloaded{
-                   [&f_out](cpu_impl::CatStrArray const& str) {
-                     f_out = Object{};
-                     I32Array joffsets{str.offsets.size()};
-                     auto const& f_offsets = str.offsets;
-                     std::copy(f_offsets.cbegin(), f_offsets.cend(), joffsets.GetArray().begin());
-                     f_out["offsets"] = std::move(joffsets);
+    std::visit(
+        enc::Overloaded{
+            MakeStrOp([&f_out](auto const& str) {
+              f_out = Object{};
+              I64Array joffsets{str.offsets.size()};
+              auto const& f_offsets = str.offsets;
+              std::copy(f_offsets.cbegin(), f_offsets.cend(), joffsets.GetArray().begin());
+              f_out["offsets"] = std::move(joffsets);
 
-                     I8Array jnames{str.values.size()};  // fixme: uint8
-                     auto const& f_names = str.values;
-                     std::copy(f_names.cbegin(), f_names.cend(), jnames.GetArray().begin());
-                     f_out["values"] = std::move(jnames);
-                   },
-                   [&f_out](auto&& values) {
-                     using T =
-                         std::remove_cv_t<typename std::decay_t<decltype(values)>::value_type>;
-                     using JT = typename PrimToUbj<T>::Type;
-                     JT array{values.size()};
-                     std::copy_n(values.data(), values.size(), array.GetArray().begin());
+              I8Array jnames{str.values.size()};  // fixme: uint8
+              auto const& f_names = str.values;
+              std::copy(f_names.cbegin(), f_names.cend(), jnames.GetArray().begin());
+              f_out["values"] = std::move(jnames);
+            }),
+            [&f_out](auto&& values) {
+              using T = std::remove_cv_t<typename std::decay_t<decltype(values)>::value_type>;
+              using JT = typename PrimToUbj<T>::Type;
+              JT array{values.size()};
+              std::copy_n(values.data(), values.size(), array.GetArray().begin());
 
-                     Object out{};
-                     out["type"] = static_cast<std::int64_t>(array.Type());
-                     out["values"] = std::move(array);
+              Object out{};
+              out["type"] = static_cast<std::int64_t>(array.Type());
+              out["values"] = std::move(array);
 
-                     f_out = std::move(out);
-                   }},
-               col);
+              f_out = std::move(out);
+            }},
+        col);
   }
 
   auto jf_segments = I32Array{this->feature_segments_.Size()};
@@ -177,8 +197,8 @@ void CatContainer::Load(Json const& in) {
     auto it = column.find("offsets");
     if (it != column.cend()) {
       // str
-      cpu_impl::CatStrArray str{};
-      LoadJson<std::int32_t>(column.at("offsets"), &str.offsets);
+      cpu_impl::CatStrArrayI64 str{};
+      LoadJson<std::int64_t>(column.at("offsets"), &str.offsets);
       LoadJson<enc::CatCharT>(column.at("values"), &str.values);
 
       columns.emplace_back(str);
