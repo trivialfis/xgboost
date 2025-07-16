@@ -137,10 +137,14 @@ def test_regressor() -> None:
 
 def test_categorical() -> None:
     import polars as pl
-
     df = pl.DataFrame(
-        {"f0": [1, 2, 3], "b": ["a", "b", "c"]},
-        schema=[("a", pl.Int64()), ("b", pl.Categorical())],
+        {"f0": [1, 3, 2, 4, 4], "f1": ["a", "c", "b", "e", "e"]},
+        schema=[("a", pl.Int64()), ("b", pl.Categorical(ordering="lexical"))],
     )
-    with pytest.raises(NotImplementedError, match="Categorical feature"):
-        xgb.DMatrix(df, enable_categorical=True)
+    with pytest.raises(ValueError, match="enable_categorical"):
+        xgb.DMatrix(df)
+
+    data = xgb.DMatrix(df, enable_categorical=True)
+    categories = data.get_categories()
+    assert categories is not None
+    print(categories)
