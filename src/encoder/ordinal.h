@@ -63,7 +63,9 @@ using CatCharT = std::int8_t;
 template <typename OffT>
 struct CatStrArrayView {
   static_assert(std::is_same_v<OffT, std::int32_t> || std::is_same_v<OffT, std::int64_t>);
-  Span<OffT const> offsets;
+  using OffsetT = OffT;
+
+  Span<OffsetT const> offsets;
   Span<CatCharT const> values;
 
   [[nodiscard]] ENC_DEVICE bool empty() const { return offsets.empty(); }  // NOLINT

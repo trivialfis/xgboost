@@ -25,6 +25,7 @@
 
 namespace enc {
 namespace cuda_impl {
+template <typename OffT>
 struct SegmentedSearchSortedStrOp {
   DeviceColumnsView haystack_v;             // The training set
   Span<std::int32_t const> ref_sorted_idx;  // Sorted index for the training set
@@ -33,8 +34,8 @@ struct SegmentedSearchSortedStrOp {
 
   [[nodiscard]] __device__ std::int32_t operator()(std::int32_t i) const {
     using detail::SearchKey;
-    auto haystack = cuda::std::get<CatStrArrayView>(haystack_v.columns[f_idx]);
-    auto needles = cuda::std::get<CatStrArrayView>(needles_v.columns[f_idx]);
+    auto haystack = cuda::std::get<CatStrArrayView<OffT>>(haystack_v.columns[f_idx]);
+    auto needles = cuda::std::get<CatStrArrayView<OffT>>(needles_v.columns[f_idx]);
     // Get the search key
     auto idx = i - needles_v.feature_segments[f_idx];  // index local to the feature
     auto begin = needles.offsets[idx];
@@ -172,8 +173,7 @@ void SortNames(ExecPolicy const& policy, DeviceColumnsView orig_enc,
                cuda::proclaim_return_type<bool>([=] __device__(Pair const& l, Pair const& r) {
                  if (l.first == r.first) {  // same feature
                    auto const& col = orig_enc.columns[l.first];
-                   return cuda::std::visit(
-                       Overloaded{[&l, &r](CatStrArrayView const& str) -> bool {
+                   auto str_op = [&l, &r] (auto const& str) -> bool {
                                     auto l_beg = str.offsets[l.second];
                                     auto l_end = str.offsets[l.second + 1];
                                     auto l_str = str.values.subspan(l_beg, l_end - l_beg);
@@ -182,7 +182,10 @@ void SortNames(ExecPolicy const& policy, DeviceColumnsView orig_enc,
                                     auto r_end = str.offsets[r.second + 1];
                                     auto r_str = str.values.subspan(r_beg, r_end - r_beg);
                                     return l_str < r_str;
-                                  },
+                   };
+                   return cuda::std::visit(
+                       Overloaded{[&](CatStrArrayViewI32 const& str) { return str_op(str); },
+                                  [&](CatStrArrayViewI64 const& str) { return str_op(str); },
                                   [&](auto&& values) {
                                     return values[l.second] < values[r.second];
                                   }},
@@ -247,11 +250,14 @@ void Recode(ExecPolicy const& policy, DeviceColumnsView orig_enc,
         auto f_idx = dh::SegmentId(new_enc.feature_segments, i);
         std::int32_t searched_idx{detail::NotFound()};
         auto const& col = orig_enc.columns[f_idx];
-        cuda::std::visit(Overloaded{[&](CatStrArrayView const& str) {
-                                      auto op = cuda_impl::SegmentedSearchSortedStrOp{
-                                          orig_enc, sorted_idx, new_enc, f_idx};
-                                      searched_idx = op(i);
-                                    },
+        auto str_op = [&](auto const& str) {
+          using OffT = typename std::remove_reference_t<decltype(str)>::OffsetT;
+          auto op =
+              cuda_impl::SegmentedSearchSortedStrOp<OffT>{orig_enc, sorted_idx, new_enc, f_idx};
+          searched_idx = op(i);
+        };
+        cuda::std::visit(Overloaded{[&](CatStrArrayViewI32 const& str) { str_op(str); },
+                                    [&](CatStrArrayViewI64 const& str) { str_op(str); },
                                     [&](auto&& values) {
                                       using T = typename std::decay_t<decltype(values)>::value_type;
                                       auto op = cuda_impl::SegmentedSearchSortedNumOp<T>{
@@ -299,9 +305,10 @@ void Recode(ExecPolicy const& policy, DeviceColumnsView orig_enc,
     std::stringstream name;
     auto const& col = h_columns[f_idx];
     cuda::std::visit(
-        Overloaded{[&](CatStrArrayView const& str) {
+        Overloaded{MakeCatStrViewOp([&](auto const& str) {
+                     using OffT = typename std::remove_reference_t<decltype(str)>::OffsetT;
                      std::vector<CatCharT> values(str.values.size());
-                     std::vector<std::int32_t> offsets(str.offsets.size());
+                     std::vector<OffT> offsets(str.offsets.size());
                      thrust::copy_n(dh::tcbegin(str.values), str.values.size(), values.data());
                      thrust::copy_n(dh::tcbegin(str.offsets), str.offsets.size(), offsets.data());
 
@@ -310,7 +317,7 @@ void Recode(ExecPolicy const& policy, DeviceColumnsView orig_enc,
                      for (auto v : cat) {
                        name.put(v);
                      }
-                   },
+                   }),
                    [&](auto&& values) {
                      using T = typename std::decay_t<decltype(values)>::value_type;
                      std::vector<std::remove_cv_t<T>> h_values(values.size());

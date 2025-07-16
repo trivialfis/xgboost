@@ -74,7 +74,7 @@ class DfTest {
   template <typename... Strs>
   static auto MakeStrs(Strs&&... strs) {
     auto array = MakeStrArrayImpl(std::forward<Strs>(strs)...);
-    return xgboost::cuda_impl::CatStrArray{array.offsets, array.values};
+    return xgboost::cuda_impl::CatStrArrayI32{array.offsets, array.values};
   }
 
   template <typename... Ints>

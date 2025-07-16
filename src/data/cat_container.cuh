@@ -10,7 +10,9 @@
 namespace xgboost::cuda_impl {
 template <typename OffT>
 struct CatStrArray {
-  dh::device_vector<OffT> offsets;
+  using OffsetT = OffT;
+
+  dh::device_vector<OffsetT> offsets;
   dh::device_vector<enc::CatCharT> values;
 
   CatStrArray() = default;
@@ -24,7 +26,7 @@ struct CatStrArray {
     return {dh::ToSpan(offsets), dh::ToSpan(values)};
   }
   [[nodiscard]] std::size_t size() const {  // NOLINT
-    return enc::CatStrArrayView(*this).size();
+    return enc::CatStrArrayView<OffsetT>(*this).size();
   }
 
   void Copy(CatStrArray const& that) {
