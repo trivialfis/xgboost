@@ -238,6 +238,8 @@ if(USE_CUDA)
   find_package(CUDAToolkit REQUIRED)
 endif()
 
+find_package(ucc REQUIRED)
+
 if(USE_NVCOMP)
   find_package(nvcomp REQUIRED)
   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_LESS 12.8)
@@ -300,6 +302,7 @@ endif()
 # core xgboost
 add_subdirectory(${xgboost_SOURCE_DIR}/src)
 target_link_libraries(objxgboost PUBLIC dmlc)
+target_link_libraries(objxgboost PRIVATE ucc::ucc)
 
 # Link -lstdc++fs for GCC 8.x
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
