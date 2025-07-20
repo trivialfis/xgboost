@@ -8,6 +8,11 @@
 #include <tuple>   // for tuple
 #include <vector>  // for vector
 
+#define __cccl_ptx_isa 900
+#include <cuda/ptx>
+// #include <cuda/barrier>
+// #include <cuda/annotated_ptr>
+
 #include "../../../../src/tree/gpu_hist/histogram.cuh"
 #include "../../../../src/tree/gpu_hist/row_partitioner.cuh"  // for RowPartitioner
 #include "../../../../src/tree/hist/hist_param.h"             // for HistMakerTrainParam
@@ -577,4 +582,8 @@ INSTANTIATE_TEST_SUITE_P(
       }
       return ss.str();
     });
+
+TEST(Histogram, ReduceSharedMem){
+
+}
 }  // namespace xgboost::tree

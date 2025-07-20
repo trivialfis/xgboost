@@ -3,6 +3,11 @@
  */
 #include <thrust/iterator/transform_iterator.h>  // for make_transform_iterator
 
+#define _CG_HAS_CLUSTER_GROUP
+#include <cooperative_groups.h>
+#define __cccl_ptx_isa 900
+#include <cuda/ptx>  // for cuda::ptx::cp_reduce_async_bulk
+
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
 
@@ -40,6 +45,8 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix,
   // entry_idx += idx % feature_stride <== Final index.
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
+
+namespace cg = cooperative_groups;
 }  // anonymous namespace
 
 struct Clip {
@@ -231,6 +238,56 @@ class HistogramAgent {
       }
     }
   }
+
+  __device__ void ProcessFullTileDistributedShared(std::size_t offset) {
+    auto cluster = cg::this_cluster();
+
+    std::size_t idx[kItemsPerThread];
+    Idx ridx[kItemsPerThread];
+    bst_bin_t gidx[kItemsPerThread];
+    GradientPair gpair[kItemsPerThread];
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      idx[i] = offset + i * kBlockThreads + threadIdx.x;
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      ridx[i] = d_ridx_[idx[i] / feature_stride_];
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      gpair[i] = d_gpair_[ridx[i]];
+      auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+      gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
+      if (kDense || gidx[i] != matrix_.NullValue()) {
+        if constexpr (kCompressed) {
+          gidx[i] += matrix_.feature_segments[fidx];
+        }
+      } else {
+        // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+        // result might equal to the `NullValue`.
+        gidx[i] = -1;
+      }
+    }
+
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      // Avoid atomic add if it's a null value.
+
+      // Find destination block rank and offset for computing
+      // distributed shared memory histogram
+      auto dst_block_rank = gidx[i] / bins_per_block;
+      int dst_offset = gidx[i] % bins_per_block;
+
+      // Pointer to target block shared memory
+      int* dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
+      if (gidx[i] != -1) {
+        auto adjusted = rounding_.ToFixedPoint(gpair[i]);
+        AtomicAddGpairShared(smem_arr_ + dst_offset, adjusted);
+      }
+    }
+  }
+
   __device__ void BuildHistogramWithShared() {
     dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
     __syncthreads();
@@ -240,6 +297,25 @@ class HistogramAgent {
       ProcessFullTileShared(offset);
       offset += kItemsPerTile * gridDim.x;
     }
+    ProcessPartialTileShared(offset);
+
+    // Write shared memory back to global memory
+    __syncthreads();
+    for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
+      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
+    }
+  }
+
+  __device__ void BuildHistogramWithDistributedShared() {
+    dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
+    __syncthreads();
+
+    std::size_t offset = blockIdx.x * kItemsPerTile;
+    while (offset + kItemsPerTile <= n_elements_) {
+      ProcessFullTileDistributedShared(offset);
+      offset += kItemsPerTile * gridDim.x;
+    }
+    cub::ThreadReduce();
     ProcessPartialTileShared(offset);
 
     // Write shared memory back to global memory
@@ -314,20 +390,22 @@ struct HistogramKernel {
     kGlobalDense = 4,
     kSharedDense = 5,
   };
-  // Kernel for working with dense Ellpack using the global memory.
+  // Kernel for working with compressed Ellpack using the global memory.
   decltype(GlobalCompr) global_compr_kernel{
       SharedMemHistKernel<Accessor, true, false, false, kBlockThreads, kItemsPerThread>};
   // Kernel for working with sparse Ellpack using the global memory.
   decltype(Global) global_kernel{
       SharedMemHistKernel<Accessor, false, false, false, kBlockThreads, kItemsPerThread>};
-  // Kernel for working with dense Ellpack using the shared memory.
+  // Kernel for working with compressed Ellpack using the shared memory.
   decltype(SharedCompr) shared_compr_kernel{
       SharedMemHistKernel<Accessor, true, false, true, kBlockThreads, kItemsPerThread>};
   // Kernel for working with sparse Ellpack using the shared memory.
   decltype(Shared) shared_kernel{
       SharedMemHistKernel<Accessor, false, false, true, kBlockThreads, kItemsPerThread>};
+  // Kernel for working with fully dense matrix using the global memory.
   decltype(GlobalDense) global_dense_kernel{
       SharedMemHistKernel<Accessor, true, true, false, kBlockThreads, kItemsPerThread>};
+  // Kernel for working with fully dense matrix using the shared memory.
   decltype(SharedDense) shared_dense_kernel{
       SharedMemHistKernel<Accessor, true, true, true, kBlockThreads, kItemsPerThread>};
 
@@ -348,13 +426,14 @@ struct HistogramKernel {
     this->smem_size = this->shared ? this->smem_size : 0;
 
     auto init = [&](auto& kernel, KernelType k) {
+      // fixme: find a new way to set the `shared` attribute that accounts for TBC.
+      // fixme: check how many blocks are needed for the histogram.
       if (this->shared) {
         dh::safe_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            this->max_shared_memory));
       }
 
       // determine the launch configuration
-      std::int32_t num_groups = feature_groups.NumGroups();
       std::int32_t n_mps = 0;
       dh::safe_cuda(cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, ctx->Ordinal()));
 
@@ -413,14 +492,51 @@ class DeviceHistogramDispatchAccessor {
       CHECK_NE(grid_size, 0);
       grid_size = std::min(grid_size, static_cast<std::uint32_t>(
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
-      dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
-                       static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-          kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+
+      if (!this->kernel_->shared) {
+        cudaLaunchConfig_t config;
+        auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
+        config.gridDim = dim3{grid_size, n_groups, 1u};
+        config.blockDim = dim3{static_cast<std::uint32_t>(kBlockThreads), 1u, 1u};
+        config.dynamicSmemBytes = this->kernel_->smem_size;
+        config.stream = ctx->Stream();
+        config.attrs = nullptr;
+        config.numAttrs = 0;
+
+        std::int32_t cluster_size = -1;
+        dh::safe_cuda(cudaOccupancyMaxPotentialClusterSize(&cluster_size, kernel, &config));
+        // cluster size is 0 with older hardware (< sm90)
+        // it's 8 with >= sm90 unless explicitly specified
+        CHECK_GE(cluster_size, 0);
+        std::cout << "cluster_size:" << cluster_size << std::endl;
+
+        if (cluster_size > 0) {
+          cudaLaunchAttribute attribute[1];
+          attribute[0].id = cudaLaunchAttributeClusterDimension;
+          attribute[0].val.clusterDim.x = 2;  // Cluster size in X-dimension
+          attribute[0].val.clusterDim.y = 1;
+          attribute[0].val.clusterDim.z = 1;
+          config.attrs = attribute;
+          config.numAttrs = 1;
+          // fixme: check the cute utitlies.
+          dh::safe_cuda(cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx,
+                                           histogram.data(), gpair.data(), rounding));
+        } else {
+          dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
+                           static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
+              kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+        }
+      } else {
+        dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
+                         static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
+            kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+      }
+
     };
 
     using K = HistogramKernel<EllpackDeviceAccessor>::KernelType;
     if (!this->kernel_->shared) {  // Use global memory
-      CHECK_EQ(this->kernel_->smem_size, 0);
+      // CHECK_EQ(this->kernel_->smem_size, 0);
       if (matrix.IsDense()) {
         CHECK(this->kernel_->force_global ||
               (feature_groups.ShmemSize() >= this->kernel_->max_shared_memory));
@@ -431,6 +547,9 @@ class DeviceHistogramDispatchAccessor {
         launcher(this->kernel_->global_compr_kernel, this->kernel_->grid_sizes[K::kGlobalCompr]);
       } else {
         // Sparse
+        // dxgb-bench datagen --n_samples_per_batch=2097152 --n_batches=8 --n_features=512 --sparsity=0.75 --device=cuda
+        // [0]     Train-rmse:20.45931
+        // [1]     Train-rmse:20.40368
         launcher(this->kernel_->global_kernel, this->kernel_->grid_sizes[K::kGlobal]);
       }
     } else {  // Use shared memory
