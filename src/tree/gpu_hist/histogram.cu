@@ -202,7 +202,7 @@ class HistogramAgent {
 
   __device__ void ProcessPartialTileDistributedShared(std::size_t offset) {
     auto cluster = cg::this_cluster();
-    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
 
     for (std::size_t idx = offset + threadIdx.x,
                      n = std::min(offset + kBlockThreads * kItemsPerTile, n_elements_);
@@ -277,7 +277,7 @@ class HistogramAgent {
     GradientPair gpair[kItemsPerThread];
 
     auto cluster = cg::this_cluster();
-    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
 
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
@@ -309,12 +309,15 @@ class HistogramAgent {
 
       // Find destination block rank and offset for computing
       // distributed shared memory histogram
-      bst_bin_t dst_block_rank = gidx[i] / bins_per_block;
-      bst_bin_t dst_offset = gidx[i] % bins_per_block;
-
-      // Pointer to target block shared memory
-      auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
       if (gidx[i] != -1) {
+        bst_bin_t dst_block_rank = gidx[i] / bins_per_block;
+        bst_bin_t dst_offset = gidx[i] % bins_per_block;
+        // printf("bins_per_block: %d, dst: %d, gidx: %d, cs: %d\n", int(bins_per_block), dst_block_rank, gidx[i], int(cluster.num_blocks()));
+        // SPAN_CHECK(dst_block_rank <= 1);
+
+        // Pointer to target block shared memory
+        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
+        SPAN_LT(dst_offset, bins_per_block);
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
         AtomicAddGpairShared(dst_smem + dst_offset, adjusted);
       }
@@ -340,7 +343,10 @@ class HistogramAgent {
   }
 
   __device__ void BuildHistogramWithDistributedShared() {
-    dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
+    auto cluster = cg::this_cluster();
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
+
+    dh::BlockFill(smem_arr_, bins_per_block, GradientPairInt64{});
     __syncthreads();
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
@@ -350,23 +356,22 @@ class HistogramAgent {
     }
     ProcessPartialTileDistributedShared(offset);
 
-    auto cluster = cg::this_cluster();
-    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
     auto rank = cluster.block_rank();
-    SPAN_CHECK(rank <= 1);
+    // SPAN_CHECK(rank <= 1);
     bst_bin_t start_bin = rank * bins_per_block;
     bst_bin_t end_bin = -1;
-    if (rank == cluster.size() - 1) {
+    if (rank == cluster.num_blocks() - 1) {
       end_bin = n_bins_;
     } else {
       end_bin = (rank + 1) * bins_per_block;
     }
 
     // Write shared memory back to global memory
-    SPAN_CHECK(group_.start_bin == 0);
-    __syncthreads();
+    // SPAN_CHECK(group_.start_bin == 0);
+    // __syncthreads();
+    cluster.sync();
     for (auto i : dh::BlockStrideRange(start_bin, end_bin)) {
-      AtomicAddGpairGlobal(d_node_hist_ + i, smem_arr_[i]);
+      AtomicAddGpairGlobal(d_node_hist_ + i, smem_arr_[i-start_bin]);
     }
   }
 
@@ -477,12 +482,16 @@ struct HistogramKernel {
     std::cout << "shared:" << this->shared << " size:" << this->smem_size
               << " max:" << this->max_shared_memory << std::endl;
     this->smem_size = this->shared ? this->smem_size : 0;
+    if (this->smem_size > this->max_shared_memory) {
+      this->smem_size = this->max_shared_memory;
+    }
     CHECK_NE(this->smem_size, 0);  // fixme: test only
 
     auto init = [&](auto& kernel, KernelType k) {
       // fixme: find a new way to set the `shared` attribute that accounts for TBC.
       // fixme: check how many blocks are needed for the histogram.
       if (this->shared) {
+        std::cout << "set shared:" << this->max_shared_memory << std::endl;
         dh::safe_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            this->max_shared_memory));
       }
@@ -548,7 +557,7 @@ class DeviceHistogramDispatchAccessor {
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
 
       if (this->kernel_->shared &&
-          (this->kernel_->smem_size > this->kernel_->max_shared_memory &&
+          (this->kernel_->smem_size >= this->kernel_->max_shared_memory &&
            this->kernel_->smem_size < this->kernel_->max_shared_memory * 2)) {
         cudaLaunchConfig_t config;
         auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
@@ -574,8 +583,11 @@ class DeviceHistogramDispatchAccessor {
           attribute[0].val.clusterDim.z = 1;
           config.attrs = attribute;
           config.numAttrs = 1;
+          if (grid_size % 2 != 0) {
+            config.gridDim.x += 1;
+          }
           // fixme: check the cute utitlies.
-          std::cout << "launch cluster" << std::endl;
+          // std::cout << "launch cluster" << std::endl;
           dh::safe_cuda(
               cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx, histogram.data(),
                                  static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding));
@@ -591,7 +603,7 @@ class DeviceHistogramDispatchAccessor {
             kernel, matrix, feature_groups, d_ridx, histogram.data(),
             static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding);
       }
-
+      // dh::DebugSyncDevice(__FILE__, __LINE__);
     };
 
     using K = HistogramKernel<EllpackDeviceAccessor>::KernelType;
