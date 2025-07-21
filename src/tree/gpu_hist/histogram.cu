@@ -270,14 +270,15 @@ class HistogramAgent {
     }
   }
 
-  __device__ void ProcessFullTileDistributedShared(std::size_t offset) {
+  __device__ void ProcessFullTileDistributedShared(std::size_t offset,
+                                                   cg::cluster_group const& cluster,
+                                                   bst_bin_t bins_per_block) {
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
     GradientPair gpair[kItemsPerThread];
-
-    auto cluster = cg::this_cluster();
-    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
+    bst_bin_t dst_rank[kItemsPerThread];
+    bst_bin_t dst_offset[kItemsPerThread];
 
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
@@ -296,6 +297,8 @@ class HistogramAgent {
         if constexpr (kCompressed) {
           gidx[i] += matrix_.feature_segments[fidx];
         }
+        dst_rank[i] = gidx[i] / bins_per_block;
+        dst_offset[i] = gidx[i] % bins_per_block;
       } else {
         // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
         // result might equal to the `NullValue`.
@@ -310,16 +313,14 @@ class HistogramAgent {
       // Find destination block rank and offset for computing
       // distributed shared memory histogram
       if (gidx[i] != -1) {
-        bst_bin_t dst_block_rank = gidx[i] / bins_per_block;
-        bst_bin_t dst_offset = gidx[i] % bins_per_block;
+        // bst_bin_t dst_offset = gidx[i] % bins_per_block;
         // printf("bins_per_block: %d, dst: %d, gidx: %d, cs: %d\n", int(bins_per_block), dst_block_rank, gidx[i], int(cluster.num_blocks()));
         // SPAN_CHECK(dst_block_rank <= 1);
 
         // Pointer to target block shared memory
-        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
-        SPAN_LT(dst_offset, bins_per_block);
+        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_rank[i]);
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(dst_smem + dst_offset, adjusted);
+        AtomicAddGpairShared(dst_smem + dst_offset[i], adjusted);
       }
     }
   }
@@ -351,7 +352,7 @@ class HistogramAgent {
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
     while (offset + kItemsPerTile <= n_elements_) {
-      ProcessFullTileDistributedShared(offset);
+      ProcessFullTileDistributedShared(offset, cluster, bins_per_block);
       offset += kItemsPerTile * gridDim.x;
     }
     ProcessPartialTileDistributedShared(offset);
@@ -359,17 +360,13 @@ class HistogramAgent {
     auto rank = cluster.block_rank();
     // SPAN_CHECK(rank <= 1);
     bst_bin_t start_bin = rank * bins_per_block;
-    bst_bin_t end_bin = -1;
-    if (rank == cluster.num_blocks() - 1) {
-      end_bin = n_bins_;
-    } else {
-      end_bin = (rank + 1) * bins_per_block;
-    }
+    bst_bin_t end_bin = std::min(start_bin + bins_per_block, n_bins_);
 
     // Write shared memory back to global memory
     // SPAN_CHECK(group_.start_bin == 0);
     // __syncthreads();
     cluster.sync();
+
     for (auto i : dh::BlockStrideRange(start_bin, end_bin)) {
       AtomicAddGpairGlobal(d_node_hist_ + i, smem_arr_[i-start_bin]);
     }
