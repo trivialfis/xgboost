@@ -348,7 +348,7 @@ class HistogramAgent {
     auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
 
     dh::BlockFill(smem_arr_, bins_per_block, GradientPairInt64{});
-    __syncthreads();
+    cluster.sync();
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
     while (offset + kItemsPerTile <= n_elements_) {
