@@ -150,6 +150,7 @@ class HistogramAgent {
 
   GradientPairInt64* smem_arr_;
   GradientPairInt64* d_node_hist_;
+  bst_bin_t n_bins_{0};
   using Idx = cuda_impl::RowIndexT;
 
   dh::LDGIterator<const Idx> d_ridx_;
@@ -164,11 +165,12 @@ class HistogramAgent {
 
  public:
   __device__ HistogramAgent(GradientPairInt64* smem_arr,
-                            GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
+                            GradientPairInt64* __restrict__ d_node_hist, bst_bin_t n_bins, const FeatureGroup& group,
                             Accessor const& matrix, common::Span<const Idx> d_ridx,
                             const GradientQuantiser& rounding, const GradientPair* d_gpair)
       : smem_arr_{smem_arr},
         d_node_hist_{d_node_hist},
+        n_bins_{n_bins},
         d_ridx_(d_ridx.data()),
         group_{group},
         matrix_(matrix),
@@ -246,6 +248,8 @@ class HistogramAgent {
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
     GradientPair gpair[kItemsPerThread];
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
+
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       idx[i] = offset + i * kBlockThreads + threadIdx.x;
@@ -276,14 +280,14 @@ class HistogramAgent {
 
       // Find destination block rank and offset for computing
       // distributed shared memory histogram
-      auto dst_block_rank = gidx[i] / bins_per_block;
-      int dst_offset = gidx[i] % bins_per_block;
+      bst_bin_t dst_block_rank = gidx[i] / bins_per_block;
+      bst_bin_t dst_offset = gidx[i] % bins_per_block;
 
       // Pointer to target block shared memory
-      int* dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
+      auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
       if (gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(smem_arr_ + dst_offset, adjusted);
+        AtomicAddGpairShared(dst_smem + dst_offset, adjusted);
       }
     }
   }
@@ -315,7 +319,6 @@ class HistogramAgent {
       ProcessFullTileDistributedShared(offset);
       offset += kItemsPerTile * gridDim.x;
     }
-    cub::ThreadReduce();
     ProcessPartialTileShared(offset);
 
     // Write shared memory back to global memory
@@ -347,13 +350,14 @@ __global__ void __launch_bounds__(kBlockThreads)
     SharedMemHistKernel(Accessor const matrix, const FeatureGroupsAccessor feature_groups,
                         common::Span<const RowPartitioner::RowIndexT> d_ridx,
                         GradientPairInt64* __restrict__ d_node_hist,
+                        bst_bin_t n_bins,
                         const GradientPair* __restrict__ d_gpair,
                         GradientQuantiser const rounding) {
   extern __shared__ char smem[];
   const FeatureGroup group = feature_groups[blockIdx.y];
   auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
   auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
-      smem_arr, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
+      smem_arr, d_node_hist, n_bins, group, matrix, d_ridx, rounding, d_gpair);
   if (use_shared_memory_histograms) {
     agent.BuildHistogramWithShared();
   } else {
@@ -519,17 +523,20 @@ class DeviceHistogramDispatchAccessor {
           config.attrs = attribute;
           config.numAttrs = 1;
           // fixme: check the cute utitlies.
-          dh::safe_cuda(cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx,
-                                           histogram.data(), gpair.data(), rounding));
+          dh::safe_cuda(
+              cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx, histogram.data(),
+                                 static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding));
         } else {
           dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
                            static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-              kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+              kernel, matrix, feature_groups, d_ridx, histogram.data(),
+              static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding);
         }
       } else {
         dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
                          static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-            kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+            kernel, matrix, feature_groups, d_ridx, histogram.data(),
+            static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding);
       }
 
     };
