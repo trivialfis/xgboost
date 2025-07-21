@@ -277,8 +277,8 @@ class HistogramAgent {
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
     GradientPair gpair[kItemsPerThread];
-    bst_bin_t dst_rank[kItemsPerThread];
-    bst_bin_t dst_offset[kItemsPerThread];
+    // bst_bin_t dst_rank[kItemsPerThread];
+    // bst_bin_t dst_offset[kItemsPerThread];
 
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
@@ -297,8 +297,8 @@ class HistogramAgent {
         if constexpr (kCompressed) {
           gidx[i] += matrix_.feature_segments[fidx];
         }
-        dst_rank[i] = gidx[i] / bins_per_block;
-        dst_offset[i] = gidx[i] % bins_per_block;
+        // dst_rank[i] = gidx[i] / bins_per_block;
+        // dst_offset[i] = gidx[i] % bins_per_block;
       } else {
         // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
         // result might equal to the `NullValue`.
@@ -313,14 +313,15 @@ class HistogramAgent {
       // Find destination block rank and offset for computing
       // distributed shared memory histogram
       if (gidx[i] != -1) {
-        // bst_bin_t dst_offset = gidx[i] % bins_per_block;
+        bst_bin_t dst_offset = gidx[i] % bins_per_block;
+        bst_bin_t dst_rank = gidx[i] / bins_per_block;
         // printf("bins_per_block: %d, dst: %d, gidx: %d, cs: %d\n", int(bins_per_block), dst_block_rank, gidx[i], int(cluster.num_blocks()));
         // SPAN_CHECK(dst_block_rank <= 1);
 
         // Pointer to target block shared memory
-        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_rank[i]);
+        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_rank);
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(dst_smem + dst_offset[i], adjusted);
+        AtomicAddGpairShared(dst_smem + dst_offset, adjusted);
       }
     }
   }
@@ -470,10 +471,12 @@ struct HistogramKernel {
 
   HistogramKernel(Context const* ctx, FeatureGroupsAccessor const& feature_groups,
                   bool force_global_memory)
-      : max_shared_memory{dh::MaxSharedMemoryOptin(ctx->Ordinal())},
+      : max_shared_memory{dh::MaxSharedMemoryOptin(ctx->Ordinal()) / 2},
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
+    std::cout << "optin:" << dh::MaxSharedMemoryOptin(ctx->Ordinal())
+              << " dft:" << this->max_shared_memory << std::endl;
     this->smem_size = feature_groups.ShmemSize();
     this->shared = !force_global_memory && this->smem_size <= (this->max_shared_memory * 2);
     std::cout << "shared:" << this->shared << " size:" << this->smem_size
@@ -565,14 +568,14 @@ class DeviceHistogramDispatchAccessor {
         config.attrs = nullptr;
         config.numAttrs = 0;
 
-        std::int32_t cluster_size = -1;
-        dh::safe_cuda(cudaOccupancyMaxPotentialClusterSize(&cluster_size, kernel, &config));
+        std::int32_t cluster_size = 2;
+        // dh::safe_cuda(cudaOccupancyMaxPotentialClusterSize(&cluster_size, kernel, &config));
         // cluster size is 0 with older hardware (< sm90)
         // it's 8 with >= sm90 unless explicitly specified
-        CHECK_GE(cluster_size, 0);
+        // CHECK_GE(cluster_size, 0);
         // std::cout << "cluster_size:" << cluster_size << std::endl;
 
-        if (cluster_size > 0) {
+        if (true) {
           cudaLaunchAttribute attribute[1];
           attribute[0].id = cudaLaunchAttributeClusterDimension;
           attribute[0].val.clusterDim.x = 2;  // Cluster size in X-dimension
@@ -581,7 +584,11 @@ class DeviceHistogramDispatchAccessor {
           config.attrs = attribute;
           config.numAttrs = 1;
           if (grid_size % 2 != 0) {
-            config.gridDim.x += 1;
+            if (config.gridDim.x > 2) {
+              config.gridDim.x -= 1;
+            } else {
+              config.gridDim.x += 1;
+            }
           }
           // fixme: check the cute utitlies.
           // std::cout << "launch cluster" << std::endl;
