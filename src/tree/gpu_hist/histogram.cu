@@ -349,14 +349,18 @@ class HistogramAgent {
     auto bins_per_block = common::DivRoundUp(n_bins_, cluster.num_blocks());
 
     dh::BlockFill(smem_arr_, bins_per_block, GradientPairInt64{});
-    cluster.sync();
+    auto t0 = cluster.barrier_arrive();
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
+    cluster.barrier_wait(std::move(t0));
+
     while (offset + kItemsPerTile <= n_elements_) {
       ProcessFullTileDistributedShared(offset, cluster, bins_per_block);
       offset += kItemsPerTile * gridDim.x;
     }
     ProcessPartialTileDistributedShared(offset);
+
+    auto t1 = cluster.barrier_arrive();
 
     auto rank = cluster.block_rank();
     // SPAN_CHECK(rank <= 1);
@@ -364,9 +368,7 @@ class HistogramAgent {
     bst_bin_t end_bin = std::min(start_bin + bins_per_block, n_bins_);
 
     // Write shared memory back to global memory
-    // SPAN_CHECK(group_.start_bin == 0);
-    // __syncthreads();
-    cluster.sync();
+    cluster.barrier_wait(std::move(t1));
 
     for (auto i : dh::BlockStrideRange(start_bin, end_bin)) {
       AtomicAddGpairGlobal(d_node_hist_ + i, smem_arr_[i-start_bin]);
@@ -489,7 +491,7 @@ struct HistogramKernel {
       // fixme: find a new way to set the `shared` attribute that accounts for TBC.
       // fixme: check how many blocks are needed for the histogram.
       if (this->shared) {
-        std::cout << "set shared:" << this->max_shared_memory << std::endl;
+        // std::cout << "set shared:" << this->max_shared_memory << std::endl;
         dh::safe_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            this->max_shared_memory));
       }
@@ -567,26 +569,19 @@ class DeviceHistogramDispatchAccessor {
         config.numAttrs = 0;
 
         std::int32_t cluster_size = 2;
-        // dh::safe_cuda(cudaOccupancyMaxPotentialClusterSize(&cluster_size, kernel, &config));
         // cluster size is 0 with older hardware (< sm90)
         // it's 8 with >= sm90 unless explicitly specified
-        // CHECK_GE(cluster_size, 0);
-        // std::cout << "cluster_size:" << cluster_size << std::endl;
 
         if (true) {
           cudaLaunchAttribute attribute[1];
           attribute[0].id = cudaLaunchAttributeClusterDimension;
-          attribute[0].val.clusterDim.x = 2;  // Cluster size in X-dimension
+          attribute[0].val.clusterDim.x = cluster_size;
           attribute[0].val.clusterDim.y = 1;
           attribute[0].val.clusterDim.z = 1;
           config.attrs = attribute;
           config.numAttrs = 1;
           if (grid_size % 2 != 0) {
-            if (config.gridDim.x > 2) {
-              config.gridDim.x -= 1;
-            } else {
-              config.gridDim.x += 1;
-            }
+            config.gridDim.x += 1;
           }
           // fixme: check the cute utitlies.
           // std::cout << "launch cluster" << std::endl;
