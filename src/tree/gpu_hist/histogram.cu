@@ -353,6 +353,7 @@ class HistogramAgent {
     auto cluster = cg::this_cluster();
     auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
     auto rank = cluster.block_rank();
+    SPAN_CHECK(rank <= 1);
     bst_bin_t start_bin = rank * bins_per_block;
     bst_bin_t end_bin = -1;
     if (rank == cluster.size() - 1) {
@@ -400,7 +401,12 @@ __global__ void __launch_bounds__(kBlockThreads)
   auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
       smem_arr, d_node_hist, n_bins, group, matrix, d_ridx, rounding, d_gpair);
   if (use_shared_memory_histograms) {
-    agent.BuildHistogramWithShared();
+    auto cluster = cg::this_cluster();
+    if (cluster.size() > 1) {
+      agent.BuildHistogramWithDistributedShared();
+    } else {
+      agent.BuildHistogramWithShared();
+    }
   } else {
     agent.BuildHistogramWithGlobal();
   }
@@ -467,8 +473,11 @@ struct HistogramKernel {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
     this->smem_size = feature_groups.ShmemSize();
-    this->shared = !force_global_memory && this->smem_size <= this->max_shared_memory;
+    this->shared = !force_global_memory && this->smem_size <= (this->max_shared_memory * 2);
+    std::cout << "shared:" << this->shared << " size:" << this->smem_size
+              << " max:" << this->max_shared_memory << std::endl;
     this->smem_size = this->shared ? this->smem_size : 0;
+    CHECK_NE(this->smem_size, 0);  // fixme: test only
 
     auto init = [&](auto& kernel, KernelType k) {
       // fixme: find a new way to set the `shared` attribute that accounts for TBC.
@@ -538,7 +547,9 @@ class DeviceHistogramDispatchAccessor {
       grid_size = std::min(grid_size, static_cast<std::uint32_t>(
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
 
-      if (!this->kernel_->shared) {
+      if (this->kernel_->shared &&
+          (this->kernel_->smem_size > this->kernel_->max_shared_memory &&
+           this->kernel_->smem_size < this->kernel_->max_shared_memory * 2)) {
         cudaLaunchConfig_t config;
         auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
         config.gridDim = dim3{grid_size, n_groups, 1u};
@@ -553,7 +564,7 @@ class DeviceHistogramDispatchAccessor {
         // cluster size is 0 with older hardware (< sm90)
         // it's 8 with >= sm90 unless explicitly specified
         CHECK_GE(cluster_size, 0);
-        std::cout << "cluster_size:" << cluster_size << std::endl;
+        // std::cout << "cluster_size:" << cluster_size << std::endl;
 
         if (cluster_size > 0) {
           cudaLaunchAttribute attribute[1];
@@ -564,6 +575,7 @@ class DeviceHistogramDispatchAccessor {
           config.attrs = attribute;
           config.numAttrs = 1;
           // fixme: check the cute utitlies.
+          std::cout << "launch cluster" << std::endl;
           dh::safe_cuda(
               cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx, histogram.data(),
                                  static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding));
