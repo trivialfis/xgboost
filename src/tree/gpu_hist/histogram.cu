@@ -471,12 +471,10 @@ struct HistogramKernel {
 
   HistogramKernel(Context const* ctx, FeatureGroupsAccessor const& feature_groups,
                   bool force_global_memory)
-      : max_shared_memory{dh::MaxSharedMemoryOptin(ctx->Ordinal()) / 2},
+      : max_shared_memory{dh::MaxSharedMemoryOptin(ctx->Ordinal())},
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
-    std::cout << "optin:" << dh::MaxSharedMemoryOptin(ctx->Ordinal())
-              << " dft:" << this->max_shared_memory << std::endl;
     this->smem_size = feature_groups.ShmemSize();
     this->shared = !force_global_memory && this->smem_size <= (this->max_shared_memory * 2);
     std::cout << "shared:" << this->shared << " size:" << this->smem_size
