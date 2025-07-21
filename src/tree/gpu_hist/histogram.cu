@@ -200,6 +200,35 @@ class HistogramAgent {
     }
   }
 
+  __device__ void ProcessPartialTileDistributedShared(std::size_t offset) {
+    auto cluster = cg::this_cluster();
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
+
+    for (std::size_t idx = offset + threadIdx.x,
+                     n = std::min(offset + kBlockThreads * kItemsPerTile, n_elements_);
+         idx < n; idx += kBlockThreads) {
+      Idx ridx = d_ridx_[idx / feature_stride_];
+      auto fidx = FeatIdx(group_, idx, feature_stride_);
+      bst_bin_t compressed_bin = matrix_.gidx_iter[IterIdx(matrix_, ridx, fidx)];
+      if (kDense || compressed_bin != matrix_.NullValue()) {
+        // The matrix is compressed with feature-local bins.
+        if (kCompressed) {
+          compressed_bin += this->matrix_.feature_segments[fidx];
+        }
+        // Avoid atomic add if it's a null value.
+        auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
+
+        bst_bin_t dst_block_rank = compressed_bin / bins_per_block;
+        bst_bin_t dst_offset = compressed_bin % bins_per_block;
+        auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_block_rank);
+
+        // Subtract start_bin to write to group-local histogram. If this is not a dense
+        // matrix, then start_bin is 0 since featuregrouping doesn't support sparse data.
+        AtomicAddGpairShared(dst_smem + dst_offset, adjusted);
+      }
+    }
+  }
+
   // Instruction level parallelism by loop unrolling
   // Allows the kernel to pipeline many operations while waiting for global memory
   // Increases the throughput of this kernel significantly
@@ -242,12 +271,12 @@ class HistogramAgent {
   }
 
   __device__ void ProcessFullTileDistributedShared(std::size_t offset) {
-    auto cluster = cg::this_cluster();
-
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
     GradientPair gpair[kItemsPerThread];
+
+    auto cluster = cg::this_cluster();
     auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
 
 #pragma unroll
@@ -319,12 +348,24 @@ class HistogramAgent {
       ProcessFullTileDistributedShared(offset);
       offset += kItemsPerTile * gridDim.x;
     }
-    ProcessPartialTileShared(offset);
+    ProcessPartialTileDistributedShared(offset);
+
+    auto cluster = cg::this_cluster();
+    auto bins_per_block = common::DivRoundUp(n_bins_, cluster.size());
+    auto rank = cluster.block_rank();
+    bst_bin_t start_bin = rank * bins_per_block;
+    bst_bin_t end_bin = -1;
+    if (rank == cluster.size() - 1) {
+      end_bin = n_bins_;
+    } else {
+      end_bin = (rank + 1) * bins_per_block;
+    }
 
     // Write shared memory back to global memory
+    SPAN_CHECK(group_.start_bin == 0);
     __syncthreads();
-    for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
-      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
+    for (auto i : dh::BlockStrideRange(start_bin, end_bin)) {
+      AtomicAddGpairGlobal(d_node_hist_ + i, smem_arr_[i]);
     }
   }
 
