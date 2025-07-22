@@ -429,7 +429,7 @@ class HistogramAgent {
                                          cuda::device::barrier_native_handle(bar), arrival_token)) {
     }
 
-    if (rank % 2 != 0)  {
+    if (rank % 2 == 0)  {
       return;
     }
 
