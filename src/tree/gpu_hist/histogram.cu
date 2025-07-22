@@ -3,12 +3,11 @@
  */
 #include <thrust//iterator/transform_iterator.h>  // for make_transform_iterator
 
-#define _CG_HAS_CLUSTER_GROUP
+// #define _CG_HAS_CLUSTER_GROUP
 #include <cooperative_groups.h>
-#define __cccl_ptx_isa 900
+// #define __cccl_ptx_isa 900
 #include <cuda/ptx>  // for cuda::ptx::cp_reduce_async_bulk
 #include <cuda/barrier>
-#include <cccl/cuda/ptx>
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
