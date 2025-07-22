@@ -380,6 +380,10 @@ class HistogramAgent {
     dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
     __syncthreads();
 
+#pragma nv_diag_suppress static_var_with_dynamic_init
+    __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
+    init(&bar, blockDim.x);
+
     std::size_t offset = blockIdx.x * kItemsPerTile;
     while (offset + kItemsPerTile <= n_elements_) {
       ProcessFullTileShared(offset);
@@ -387,40 +391,49 @@ class HistogramAgent {
     }
     ProcessPartialTileShared(offset);
 
-    // Write shared memory back to global memory
-    __syncthreads();
-
-    // __shared__ __mbarrier_t bar;
-    // __mbarrier_init(&bar, 2);
-
-    __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
-
     auto cluster = cg::this_cluster();
+    cluster.sync();
+
     auto rank = cluster.block_rank();
     auto oth_rank = rank ^ 1;
 
     std::uint64_t* remote_bar =
         cluster.map_shared_rank(cuda::device::barrier_native_handle(bar), oth_rank);
 
-    // auto arrival_token = __mbarrier_arrive(&bar);
-    // if (rank % 2 == 1 && threadIdx.x == 0) {
-    //   auto dst_smem = reinterpret_cast<std::uint64_t*>(cluster.map_shared_rank(smem_arr_, 0));
-    //   auto src = reinterpret_cast<std::uint64_t*>(smem_arr_);
-    //   cuda::ptx::cp_reduce_async_bulk(cuda::ptx::space_cluster, cuda::ptx::space_shared,
-    //                                   cuda::ptx::op_add, dst_smem, src, group_.num_bins,
-    //                                   cuda::device::barrier_native_handle(bar));
-    // }
+    using cuda::ptx::scope_cluster;
+    using cuda::ptx::sem_acquire;
+    using cuda::ptx::sem_release;
+    using cuda::ptx::space_cluster;
+    using cuda::ptx::space_shared;
 
-    bar.arrive_and_wait();
-    cluster.sync();
+    std::uint64_t arrival_token = 0;
+    if (rank % 2 != 0 && threadIdx.x == 0) {
+      // Thread 0 arrives and indicates it expects to receive a certain number of bytes as well
+      arrival_token = cuda::ptx::mbarrier_arrive_expect_tx(
+          sem_release, scope_cluster, space_shared, cuda::device::barrier_native_handle(bar),
+          sizeof(GradientPairInt64) * group_.num_bins);
+    } else {
+      arrival_token = cuda::ptx::mbarrier_arrive(sem_release, scope_cluster, space_shared,
+                                                 cuda::device::barrier_native_handle(bar));
+    }
 
-    // while (!__mbarrier_test_wait(&bar, arrival_token)) {
-    // }
+    if (rank % 2 == 0 && threadIdx.x == 0) {
+      auto dst_smem = reinterpret_cast<std::uint64_t*>(cluster.map_shared_rank(smem_arr_, 0));
+      auto src = reinterpret_cast<std::uint64_t*>(smem_arr_);
+      cuda::ptx::cp_reduce_async_bulk(cuda::ptx::space_cluster, cuda::ptx::space_shared,
+                                      cuda::ptx::op_add, dst_smem, src,
+                                      group_.num_bins * sizeof(GradientPairInt64), remote_bar);
+    }
 
-    // if (cluster.block_rank() == 1)  {
-    //   return;
-    // }
+    while (!cuda::ptx::mbarrier_try_wait(sem_acquire, scope_cluster,
+                                         cuda::device::barrier_native_handle(bar), arrival_token)) {
+    }
 
+    if (rank % 2 != 0)  {
+      return;
+    }
+
+    // Write shared memory back to global memory
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
       AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
     }
