@@ -417,7 +417,8 @@ class HistogramAgent {
     }
 
     if (rank % 2 == 0 && threadIdx.x == 0) {
-      auto dst_smem = reinterpret_cast<std::uint64_t*>(cluster.map_shared_rank(smem_arr_, 0));
+      auto dst_smem =
+          reinterpret_cast<std::uint64_t*>(cluster.map_shared_rank(smem_arr_, oth_rank));
       auto src = reinterpret_cast<std::uint64_t*>(smem_arr_);
       cuda::ptx::cp_reduce_async_bulk(cuda::ptx::space_cluster, cuda::ptx::space_shared,
                                       cuda::ptx::op_add, dst_smem, src,
