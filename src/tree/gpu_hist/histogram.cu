@@ -391,13 +391,9 @@ class HistogramAgent {
     ProcessPartialTileShared(offset);
 
     auto cluster = cg::this_cluster();
-    cluster.sync();
 
     auto rank = cluster.block_rank();
     auto oth_rank = rank ^ 1;
-
-    std::uint64_t* remote_bar =
-        cluster.map_shared_rank(cuda::device::barrier_native_handle(bar), oth_rank);
 
     using cuda::ptx::scope_cluster;
     using cuda::ptx::sem_acquire;
@@ -415,6 +411,11 @@ class HistogramAgent {
       arrival_token = cuda::ptx::mbarrier_arrive(sem_release, scope_cluster, space_shared,
                                                  cuda::device::barrier_native_handle(bar));
     }
+
+    cluster.sync();
+
+    std::uint64_t* remote_bar =
+        cluster.map_shared_rank(cuda::device::barrier_native_handle(bar), oth_rank);
 
     if (rank % 2 == 0 && threadIdx.x == 0) {
       auto dst_smem =
@@ -544,8 +545,8 @@ struct HistogramKernel {
     static_assert(sizeof(BarrierT) < sizeof(std::uint64_t) * 8);
     this->smem_size = feature_groups.ShmemSize() + sizeof(BarrierT);
     this->shared = !force_global_memory && this->smem_size <= (this->max_shared_memory * 2);
-    std::cout << "shared:" << this->shared << " size:" << this->smem_size
-              << " max:" << this->max_shared_memory << std::endl;
+    // std::cout << "shared:" << this->shared << " size:" << this->smem_size
+    //           << " max:" << this->max_shared_memory << std::endl;
     this->smem_size = this->shared ? this->smem_size : 0;
     if (this->smem_size > this->max_shared_memory) {
       this->smem_size = this->max_shared_memory;
