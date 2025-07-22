@@ -1,12 +1,14 @@
 /**
  * Copyright 2020-2025, XGBoost Contributors
  */
-#include <thrust/iterator/transform_iterator.h>  // for make_transform_iterator
+#include <thrust//iterator/transform_iterator.h>  // for make_transform_iterator
 
 #define _CG_HAS_CLUSTER_GROUP
 #include <cooperative_groups.h>
 #define __cccl_ptx_isa 900
 #include <cuda/ptx>  // for cuda::ptx::cp_reduce_async_bulk
+#include <cuda/barrier>
+#include <cccl/cuda/ptx>
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
@@ -47,6 +49,8 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix,
 }
 
 namespace cg = cooperative_groups;
+
+using BarrierT = cuda::barrier<cuda::thread_scope_block>;
 }  // anonymous namespace
 
 struct Clip {
@@ -315,9 +319,6 @@ class HistogramAgent {
       if (gidx[i] != -1) {
         bst_bin_t dst_offset = gidx[i] % bins_per_block;
         bst_bin_t dst_rank = gidx[i] / bins_per_block;
-        // printf("bins_per_block: %d, dst: %d, gidx: %d, cs: %d\n", int(bins_per_block), dst_block_rank, gidx[i], int(cluster.num_blocks()));
-        // SPAN_CHECK(dst_block_rank <= 1);
-
         // Pointer to target block shared memory
         auto dst_smem = cluster.map_shared_rank(smem_arr_, dst_rank);
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
@@ -375,6 +376,56 @@ class HistogramAgent {
     }
   }
 
+  __device__ void BuildHistogramWithSharedDense() {
+    dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
+    __syncthreads();
+
+    std::size_t offset = blockIdx.x * kItemsPerTile;
+    while (offset + kItemsPerTile <= n_elements_) {
+      ProcessFullTileShared(offset);
+      offset += kItemsPerTile * gridDim.x;
+    }
+    ProcessPartialTileShared(offset);
+
+    // Write shared memory back to global memory
+    __syncthreads();
+
+    // __shared__ __mbarrier_t bar;
+    // __mbarrier_init(&bar, 2);
+
+    __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
+
+    auto cluster = cg::this_cluster();
+    auto rank = cluster.block_rank();
+    auto oth_rank = rank ^ 1;
+
+    std::uint64_t* remote_bar =
+        cluster.map_shared_rank(cuda::device::barrier_native_handle(bar), oth_rank);
+
+    // auto arrival_token = __mbarrier_arrive(&bar);
+    // if (rank % 2 == 1 && threadIdx.x == 0) {
+    //   auto dst_smem = reinterpret_cast<std::uint64_t*>(cluster.map_shared_rank(smem_arr_, 0));
+    //   auto src = reinterpret_cast<std::uint64_t*>(smem_arr_);
+    //   cuda::ptx::cp_reduce_async_bulk(cuda::ptx::space_cluster, cuda::ptx::space_shared,
+    //                                   cuda::ptx::op_add, dst_smem, src, group_.num_bins,
+    //                                   cuda::device::barrier_native_handle(bar));
+    // }
+
+    bar.arrive_and_wait();
+    cluster.sync();
+
+    // while (!__mbarrier_test_wait(&bar, arrival_token)) {
+    // }
+
+    // if (cluster.block_rank() == 1)  {
+    //   return;
+    // }
+
+    for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
+      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
+    }
+  }
+
   __device__ void BuildHistogramWithGlobal() {
     for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements_)) {
       Idx ridx = d_ridx_[idx / feature_stride_];
@@ -408,7 +459,7 @@ __global__ void __launch_bounds__(kBlockThreads)
   if (use_shared_memory_histograms) {
     auto cluster = cg::this_cluster();
     if (cluster.size() > 1) {
-      agent.BuildHistogramWithDistributedShared();
+      agent.BuildHistogramWithSharedDense();
     } else {
       agent.BuildHistogramWithShared();
     }
@@ -477,7 +528,8 @@ struct HistogramKernel {
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
-    this->smem_size = feature_groups.ShmemSize();
+    static_assert(sizeof(BarrierT) < sizeof(std::uint64_t) * 8);
+    this->smem_size = feature_groups.ShmemSize() + sizeof(BarrierT);
     this->shared = !force_global_memory && this->smem_size <= (this->max_shared_memory * 2);
     std::cout << "shared:" << this->shared << " size:" << this->smem_size
               << " max:" << this->max_shared_memory << std::endl;
@@ -556,50 +608,35 @@ class DeviceHistogramDispatchAccessor {
       grid_size = std::min(grid_size, static_cast<std::uint32_t>(
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
 
-      if (this->kernel_->shared &&
-          (this->kernel_->smem_size >= this->kernel_->max_shared_memory &&
-           this->kernel_->smem_size < this->kernel_->max_shared_memory * 2)) {
-        cudaLaunchConfig_t config;
-        auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
-        config.gridDim = dim3{grid_size, n_groups, 1u};
-        config.blockDim = dim3{static_cast<std::uint32_t>(kBlockThreads), 1u, 1u};
-        config.dynamicSmemBytes = this->kernel_->smem_size;
-        config.stream = ctx->Stream();
-        config.attrs = nullptr;
-        config.numAttrs = 0;
+      cudaLaunchConfig_t config;
+      auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
+      config.gridDim = dim3{grid_size, n_groups, 1u};
+      config.blockDim = dim3{static_cast<std::uint32_t>(kBlockThreads), 1u, 1u};
+      CHECK_GT(this->kernel_->smem_size, 0);
+      config.dynamicSmemBytes = this->kernel_->smem_size;
+      config.stream = ctx->Stream();
+      config.attrs = nullptr;
+      config.numAttrs = 0;
 
-        std::int32_t cluster_size = 2;
-        // cluster size is 0 with older hardware (< sm90)
-        // it's 8 with >= sm90 unless explicitly specified
+      std::int32_t cluster_size = 2;
+      // cluster size is 0 with older hardware (< sm90)
+      // it's 8 with >= sm90 unless explicitly specified
 
-        if (true) {
-          cudaLaunchAttribute attribute[1];
-          attribute[0].id = cudaLaunchAttributeClusterDimension;
-          attribute[0].val.clusterDim.x = cluster_size;
-          attribute[0].val.clusterDim.y = 1;
-          attribute[0].val.clusterDim.z = 1;
-          config.attrs = attribute;
-          config.numAttrs = 1;
-          if (grid_size % 2 != 0) {
-            config.gridDim.x += 1;
-          }
-          // fixme: check the cute utitlies.
-          // std::cout << "launch cluster" << std::endl;
-          dh::safe_cuda(
-              cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx, histogram.data(),
-                                 static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding));
-        } else {
-          dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
-                           static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-              kernel, matrix, feature_groups, d_ridx, histogram.data(),
-              static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding);
-        }
-      } else {
-        dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
-                         static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-            kernel, matrix, feature_groups, d_ridx, histogram.data(),
-            static_cast<bst_bin_t>(histogram.size()), gpair.data(), rounding);
+      cudaLaunchAttribute attribute[1];
+      attribute[0].id = cudaLaunchAttributeClusterDimension;
+      attribute[0].val.clusterDim.x = cluster_size;
+      attribute[0].val.clusterDim.y = 1;
+      attribute[0].val.clusterDim.z = 1;
+      config.attrs = attribute;
+      config.numAttrs = 1;
+      if (grid_size % 2 != 0) {
+        config.gridDim.x += 1;
       }
+      // fixme: check the cute utitlies.
+      // std::cout << "launch cluster" << std::endl;
+      dh::safe_cuda(cudaLaunchKernelEx(&config, kernel, matrix, feature_groups, d_ridx,
+                                       histogram.data(), static_cast<bst_bin_t>(histogram.size()),
+                                       gpair.data(), rounding));
       // dh::DebugSyncDevice(__FILE__, __LINE__);
     };
 
