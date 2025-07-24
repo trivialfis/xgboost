@@ -543,7 +543,7 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
   dh::DeviceUVector<std::size_t> segments(row_stride + 1);
   auto d_segments = dh::ToSpan(segments);
   thrust::for_each_n(ctx->CUDACtx()->CTP(), cnt_it, d_segments.size(),
-                     [=] XGBOOST_DEVICE(std::size_t i) { d_segments[i] = i * row_stride; });
+                     [=] XGBOOST_DEVICE(std::size_t i) { d_segments[i] = i * n_samples; });
 
   src->Visit(ctx, {}, [&](auto&& acc) {
     std::cout << "acc.NullValue():" << acc.NullValue() << std::endl;
@@ -570,10 +570,11 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
     dh::device_vector<bst_bin_t> largest(row_stride, 0);
     auto max_it = make_val_it(std::numeric_limits<bst_bin_t>::min());
     cub::DeviceSegmentedReduce::Max(tmp.data().get(), n_bytes, max_it, largest.begin(), row_stride,
-                                    dh::tbegin(d_segments), dh::tbegin(d_segments) + 1);
+                                    dh::tbegin(d_segments), dh::tbegin(d_segments) + 1,
+                                    ctx->CUDACtx()->Stream());
 
     for (std::size_t i = 0; i < row_stride; ++i) {
-      std::cout << smallest[i] << "/" << largest[i] << ", ";
+      std::cout << largest[i] << "-" << smallest[i] << "=" << (largest[i] - smallest[i]) << ", ";
     }
     std::cout << std::endl;
 
@@ -582,10 +583,21 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
 
     auto margin_it = thrust::make_transform_iterator(cnt_it, ComprMarginOp{d_largest, d_smallest});
     auto max_margin_it = thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
-
+    std::cout << "col:" << std::distance(margin_it, max_margin_it) << std::endl;
     n_symbols += CopyIterValToHost<decltype(n_symbols)>(ctx->CUDACtx(), max_margin_it);
   });
-  std::cout << "old:" << src->info.n_symbols << " n_symbols:" << n_symbols << std::endl;
+
+  std::size_t old_size = common::CompressedBufferWriter::CalculateBufferSize(row_stride * n_samples,
+                                                                             src->info.n_symbols);
+  std::size_t new_size =
+      common::CompressedBufferWriter::CalculateBufferSize(row_stride * n_samples, n_symbols);
+
+  std::cout << "old:" << src->info.n_symbols << " n_symbols:" << n_symbols
+            << " old size:" << common::HumanMemUnit(old_size)
+            << " old bits:" << common::detail::SymbolBits(src->info.n_symbols)
+            << " new bits:" << common::detail::SymbolBits(n_symbols)
+            << " new:" << common::HumanMemUnit(new_size)
+            << " ratio:" << (new_size / static_cast<double>(old_size)) << std::endl;
 
   auto dst = new EllpackPageImpl{ctx, src->CutsShared(), false, row_stride, n_samples};
   return dst;
