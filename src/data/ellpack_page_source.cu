@@ -114,14 +114,6 @@ EllpackMemCache::~EllpackMemCache() = default;
   return {h_ref, d_ref, c_ref};
 }
 
-void EllpackMemCache::PushBack(std::size_t offset, std::unique_ptr<EllpackPageImpl>&& h_page,
-                               DPage&& d_page, CPage&& c_page) {
-  this->offsets.push_back(offset);
-  this->h_pages.emplace_back(std::forward<std::unique_ptr<EllpackPageImpl>>(h_page));
-  this->d_pages.emplace_back(std::forward<DPage>(d_page));
-  this->c_pages.emplace_back(std::forward<CPage>(c_page));
-}
-
 /**
  * Cache stream.
  */
@@ -258,8 +250,10 @@ class EllpackHostCacheStreamImpl {
       auto old_impl = page.Impl();
       auto [commited, d_page, c_page] = commit_page(old_impl);
 
-      auto offset = old_impl->n_rows * old_impl->info.row_stride;
-      this->cache_->PushBack(offset, std::move(commited), std::move(d_page), std::move(c_page));
+      this->cache_->offsets.push_back(old_impl->n_rows * old_impl->info.row_stride);
+      this->cache_->h_pages.emplace_back(std::move(commited));
+      this->cache_->d_pages.emplace_back(std::move(d_page));
+      this->cache_->c_pages.emplace_back(std::move(c_page));
       return new_page;
     }
 
@@ -280,8 +274,12 @@ class EllpackHostCacheStreamImpl {
           common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(&ctx, n_bytes, 0);
       auto offset = new_impl->Copy(&ctx, impl, 0);
 
+      this->cache_->offsets.push_back(offset);
+
       // Make sure we can always access the back of the vectors
-      this->cache_->PushBack(offset, std::move(new_impl), {}, {});
+      this->cache_->h_pages.emplace_back(std::move(new_impl));
+      this->cache_->d_pages.emplace_back();
+      this->cache_->c_pages.emplace_back();
     } else {
       // Concatenate into the device pages even though `d_pages` and `c_pages` are
       // used. We split the page at the commit stage.

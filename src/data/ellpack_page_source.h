@@ -122,9 +122,6 @@ struct EllpackMemCache {
   [[nodiscard]] PagePtr At(std::int32_t k) const;
   // Get a reference to the last concatenated page.
   [[nodiscard]] PageRef Back();
-  // Push a new page into the cache.
-  void PushBack(std::size_t offset, std::unique_ptr<EllpackPageImpl>&& h_page, DPage&& d_page,
-                CPage&& c_page);
 };
 
 // Pimpl to hide CUDA calls from the host compiler.
