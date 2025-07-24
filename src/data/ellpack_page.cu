@@ -129,7 +129,7 @@ __global__ void CompressBinEllpackKernel(
 
 template <typename PtrT, typename Iter>
 std::enable_if_t<std::is_pod_v<PtrT>, PtrT> CopyIterValToHost(CUDAContext const* cuctx,
-                                                              Iter max_it) {
+                                                              Iter const& max_it) {
   PtrT n_symbols_dense;
   dh::CachingDeviceUVector<PtrT> max_element(1);
   auto d_me = max_element.data();
@@ -498,14 +498,6 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, GHistIndexMatrix const& pag
 }
 
 namespace {
-struct ComprKeyOp {
-  bst_idx_t n_samples;
-  XGBOOST_DEVICE auto operator()(std::size_t i) const {
-    auto cidx = i / n_samples;
-    return cidx;
-  }
-};
-
 template <typename Accessor>
 struct ComprValOp {
   Accessor acc;
@@ -522,7 +514,7 @@ struct ComprValOp {
     auto cidx = i / n_samples;
     auto t_idx = ridx * row_stride + cidx;
     bst_bin_t gidx = acc.gidx_iter[t_idx];
-    if (gidx != acc.NullValue()) {
+    if (gidx != static_cast<bst_bin_t>(acc.NullValue())) {
       return gidx;
     }
     // Missing value, make an extreme value. It must not be in the reduction result
@@ -545,11 +537,17 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
   auto row_stride = src->info.row_stride;
   auto n_samples = src->n_rows;
   bst_idx_t n_symbols = 1;  // 1 for null value
+
+  auto cnt_it = thrust::make_counting_iterator(0ul);
+
+  dh::DeviceUVector<std::size_t> segments(row_stride + 1);
+  auto d_segments = dh::ToSpan(segments);
+  thrust::for_each_n(ctx->CUDACtx()->CTP(), cnt_it, d_segments.size(),
+                     [=] XGBOOST_DEVICE(std::size_t i) { d_segments[i] = i * row_stride; });
+
   src->Visit(ctx, {}, [&](auto&& acc) {
     std::cout << "acc.NullValue():" << acc.NullValue() << std::endl;
-    auto cnt_it = thrust::make_counting_iterator(0ul);
     // Reduce by column
-    auto key_it = dh::MakeTransformIterator<std::size_t>(cnt_it, ComprKeyOp{n_samples});
     auto make_val_it = [=](bst_bin_t missing) {
       auto val_it =
           thrust::make_transform_iterator(cnt_it, ComprValOp{acc, missing, n_samples, row_stride});
@@ -557,14 +555,23 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
     };
 
     dh::device_vector<bst_bin_t> smallest(row_stride, 0);
-    thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
-                          make_val_it(std::numeric_limits<bst_bin_t>::max()),
-                          thrust::make_discard_iterator(), smallest.begin(), cuda::std::less{});
+    auto min_it = make_val_it(std::numeric_limits<bst_bin_t>::max());
+
+    std::size_t n_bytes = 0;
+
+    cub::DeviceSegmentedReduce::Min(nullptr, n_bytes, min_it, smallest.begin(), row_stride,
+                                    dh::tbegin(d_segments), dh::tbegin(d_segments) + 1,
+                                    ctx->CUDACtx()->Stream());
+    dh::TemporaryArray<char> tmp(n_bytes);
+    cub::DeviceSegmentedReduce::Min(tmp.data().get(), n_bytes, min_it, smallest.begin(), row_stride,
+                                    dh::tbegin(d_segments), dh::tbegin(d_segments) + 1,
+                                    ctx->CUDACtx()->Stream());
 
     dh::device_vector<bst_bin_t> largest(row_stride, 0);
-    thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
-                          make_val_it(std::numeric_limits<bst_bin_t>::min()),
-                          thrust::make_discard_iterator(), largest.begin(), cuda::std::greater{});
+    auto max_it = make_val_it(std::numeric_limits<bst_bin_t>::min());
+    cub::DeviceSegmentedReduce::Max(tmp.data().get(), n_bytes, max_it, largest.begin(), row_stride,
+                                    dh::tbegin(d_segments), dh::tbegin(d_segments) + 1);
+
     for (std::size_t i = 0; i < row_stride; ++i) {
       std::cout << smallest[i] << "/" << largest[i] << ", ";
     }
@@ -574,11 +581,12 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
     auto d_largest = dh::ToSpan(largest);
 
     auto margin_it = thrust::make_transform_iterator(cnt_it, ComprMarginOp{d_largest, d_smallest});
-    auto max_it = thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
+    auto max_margin_it = thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
 
-    n_symbols += CopyIterValToHost<decltype(n_symbols)>(ctx->CUDACtx(), max_it);
+    n_symbols += CopyIterValToHost<decltype(n_symbols)>(ctx->CUDACtx(), max_margin_it);
   });
   std::cout << "old:" << src->info.n_symbols << " n_symbols:" << n_symbols << std::endl;
+
   auto dst = new EllpackPageImpl{ctx, src->CutsShared(), false, row_stride, n_samples};
   return dst;
 }
