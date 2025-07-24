@@ -191,6 +191,9 @@ class EllpackHostCacheStreamImpl {
     // Finish writing a (concatenated) cache page.
     auto commit_page = [&](EllpackPageImpl const* old_impl) {
       CHECK_EQ(old_impl->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
+      if (!old_impl->IsDenseCompressed()) {
+        std::unique_ptr<EllpackPageImpl> nptr{CompressSparseEllpack(&ctx, old_impl)};
+      }
       auto new_impl = std::make_unique<EllpackPageImpl>();
       new_impl->CopyInfo(old_impl);
 

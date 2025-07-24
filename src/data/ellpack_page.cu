@@ -127,6 +127,19 @@ __global__ void CompressBinEllpackKernel(
   wr.AtomicWriteSymbol(buffer, bin, (irow + base_row) * row_stride + cpr_fidx);
 }
 
+template <typename PtrT, typename Iter>
+std::enable_if_t<std::is_pod_v<PtrT>, PtrT> CopyIterValToHost(CUDAContext const* cuctx,
+                                                              Iter max_it) {
+  PtrT n_symbols_dense;
+  dh::CachingDeviceUVector<PtrT> max_element(1);
+  auto d_me = max_element.data();
+  dh::LaunchN(1, cuctx->Stream(), [=] XGBOOST_DEVICE(std::size_t i) { d_me[i] = *max_it; });
+  dh::safe_cuda(cudaMemcpyAsync(&n_symbols_dense, d_me, sizeof(PtrT), cudaMemcpyDeviceToHost,
+                                cuctx->Stream()));
+  cuctx->Stream().Sync();
+  return n_symbols_dense;
+}
+
 // Calculate the number of symbols for the compressed ellpack. Similar to what the CPU
 // implementation does, we compress the dense data by subtracting the bin values with the
 // starting bin of its feature if it's dense. In addition, we treat the data as dense if
@@ -154,12 +167,7 @@ __global__ void CompressBinEllpackKernel(
       [=] XGBOOST_DEVICE(std::size_t i) { return dptrs[i] - dptrs[i - 1]; });
   CHECK_GE(dptrs.size(), 2);
   auto max_it = thrust::max_element(cuctx->CTP(), it, it + dptrs.size() - 1);
-  dh::CachingDeviceUVector<PtrT> max_element(1);
-  auto d_me = max_element.data();
-  dh::LaunchN(1, cuctx->Stream(), [=] XGBOOST_DEVICE(std::size_t i) { d_me[i] = *max_it; });
-  dh::safe_cuda(cudaMemcpyAsync(&n_symbols_dense, d_me, sizeof(PtrT), cudaMemcpyDeviceToHost,
-                                cuctx->Stream()));
-  cuctx->Stream().Sync();
+  n_symbols_dense = CopyIterValToHost<PtrT>(ctx->CUDACtx(), max_it);
   // Decide the type of the data.
   CHECK_LE(row_stride, n_features);
   if (is_dense) {
@@ -501,26 +509,25 @@ struct ComprKeyOp {
 template <typename Accessor>
 struct ComprValOp {
   Accessor acc;
-  bool smallest;
+  bst_bin_t missing;
   bst_idx_t n_samples;
   bst_idx_t row_stride;
 
-  ComprValOp(Accessor acc, bool smallest, bst_idx_t n_samples, bst_idx_t row_stride)
-      : acc{acc}, smallest{smallest}, n_samples{n_samples}, row_stride{row_stride} {}
+  ComprValOp(Accessor acc, bst_bin_t missing, bst_idx_t n_samples, bst_idx_t row_stride)
+      : acc{acc}, missing{missing}, n_samples{n_samples}, row_stride{row_stride} {}
 
   XGBOOST_DEVICE auto operator()(std::size_t i) const {
     // Transform the index from column-major to row-major.
     auto ridx = i % n_samples;
     auto cidx = i / n_samples;
     auto t_idx = ridx * row_stride + cidx;
-    auto gidx = acc.gidx_iter[t_idx];
+    bst_bin_t gidx = acc.gidx_iter[t_idx];
     if (gidx != acc.NullValue()) {
       return gidx;
     }
     // Missing value, make an extreme value. It must not be in the reduction result
     // since Ellpack would have removed the column if it's entirely missing.
-    return smallest ? std::numeric_limits<decltype(gidx)>::max()
-                    : std::numeric_limits<decltype(gidx)>::min();
+    return missing;
   }
 };
 
@@ -539,32 +546,39 @@ EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const
   auto n_samples = src->n_rows;
   bst_idx_t n_symbols = 1;  // 1 for null value
   src->Visit(ctx, {}, [&](auto&& acc) {
+    std::cout << "acc.NullValue():" << acc.NullValue() << std::endl;
     auto cnt_it = thrust::make_counting_iterator(0ul);
     // Reduce by column
     auto key_it = dh::MakeTransformIterator<std::size_t>(cnt_it, ComprKeyOp{n_samples});
-    auto make_val_it = [=](bool smallest) {
+    auto make_val_it = [=](bst_bin_t missing) {
       auto val_it =
-          thrust::make_transform_iterator(cnt_it, ComprValOp{acc, smallest, n_samples, row_stride});
+          thrust::make_transform_iterator(cnt_it, ComprValOp{acc, missing, n_samples, row_stride});
       return val_it;
     };
 
     dh::device_vector<bst_bin_t> smallest(row_stride, 0);
     thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
-                          make_val_it(true), thrust::make_discard_iterator(), smallest.begin(),
-                          cuda::std::less{});
+                          make_val_it(std::numeric_limits<bst_bin_t>::max()),
+                          thrust::make_discard_iterator(), smallest.begin(), cuda::std::less{});
 
     dh::device_vector<bst_bin_t> largest(row_stride, 0);
     thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
-                          make_val_it(false), thrust::make_discard_iterator(), largest.begin(),
-                          cuda::std::greater{});
+                          make_val_it(std::numeric_limits<bst_bin_t>::min()),
+                          thrust::make_discard_iterator(), largest.begin(), cuda::std::greater{});
+    for (std::size_t i = 0; i < row_stride; ++i) {
+      std::cout << smallest[i] << "/" << largest[i] << ", ";
+    }
+    std::cout << std::endl;
 
     auto d_smallest = dh::ToSpan(smallest);
     auto d_largest = dh::ToSpan(largest);
 
     auto margin_it = thrust::make_transform_iterator(cnt_it, ComprMarginOp{d_largest, d_smallest});
-    n_symbols += *thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
+    auto max_it = thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
+
+    n_symbols += CopyIterValToHost<decltype(n_symbols)>(ctx->CUDACtx(), max_it);
   });
-  std::cout << "n_symbols:" << n_symbols << std::endl;
+  std::cout << "old:" << src->info.n_symbols << " n_symbols:" << n_symbols << std::endl;
   auto dst = new EllpackPageImpl{ctx, src->CutsShared(), false, row_stride, n_samples};
   return dst;
 }
