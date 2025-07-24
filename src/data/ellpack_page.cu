@@ -489,6 +489,86 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, GHistIndexMatrix const& pag
   this->monitor_.Stop("CopyGHistToEllpack");
 }
 
+namespace {
+struct ComprKeyOp {
+  bst_idx_t n_samples;
+  XGBOOST_DEVICE auto operator()(std::size_t i) const {
+    auto cidx = i / n_samples;
+    return cidx;
+  }
+};
+
+template <typename Accessor>
+struct ComprValOp {
+  Accessor acc;
+  bool smallest;
+  bst_idx_t n_samples;
+  bst_idx_t row_stride;
+
+  ComprValOp(Accessor acc, bool smallest, bst_idx_t n_samples, bst_idx_t row_stride)
+      : acc{acc}, smallest{smallest}, n_samples{n_samples}, row_stride{row_stride} {}
+
+  XGBOOST_DEVICE auto operator()(std::size_t i) const {
+    // Transform the index from column-major to row-major.
+    auto ridx = i % n_samples;
+    auto cidx = i / n_samples;
+    auto t_idx = ridx * row_stride + cidx;
+    auto gidx = acc.gidx_iter[t_idx];
+    if (gidx != acc.NullValue()) {
+      return gidx;
+    }
+    // Missing value, make an extreme value. It must not be in the reduction result
+    // since Ellpack would have removed the column if it's entirely missing.
+    return smallest ? std::numeric_limits<decltype(gidx)>::max()
+                    : std::numeric_limits<decltype(gidx)>::min();
+  }
+};
+
+struct ComprMarginOp {
+  using S = common::Span<bst_bin_t const>;
+
+  S d_largest;
+  S d_smallest;
+  XGBOOST_DEVICE auto operator()(std::size_t i) const { return d_largest[i] - d_smallest[i]; }
+};
+}  // namespace
+
+EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const* src) {
+  CHECK(src->d_gidx_buffer.empty());
+  auto row_stride = src->info.row_stride;
+  auto n_samples = src->n_rows;
+  bst_idx_t n_symbols = 1;  // 1 for null value
+  src->Visit(ctx, {}, [&](auto&& acc) {
+    auto cnt_it = thrust::make_counting_iterator(0ul);
+    // Reduce by column
+    auto key_it = dh::MakeTransformIterator<std::size_t>(cnt_it, ComprKeyOp{n_samples});
+    auto make_val_it = [=](bool smallest) {
+      auto val_it =
+          thrust::make_transform_iterator(cnt_it, ComprValOp{acc, smallest, n_samples, row_stride});
+      return val_it;
+    };
+
+    dh::device_vector<bst_bin_t> smallest(row_stride, 0);
+    thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
+                          make_val_it(true), thrust::make_discard_iterator(), smallest.begin(),
+                          cuda::std::less{});
+
+    dh::device_vector<bst_bin_t> largest(row_stride, 0);
+    thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + src->n_rows * row_stride,
+                          make_val_it(false), thrust::make_discard_iterator(), largest.begin(),
+                          cuda::std::greater{});
+
+    auto d_smallest = dh::ToSpan(smallest);
+    auto d_largest = dh::ToSpan(largest);
+
+    auto margin_it = thrust::make_transform_iterator(cnt_it, ComprMarginOp{d_largest, d_smallest});
+    n_symbols += *thrust::max_element(ctx->CUDACtx()->CTP(), margin_it, margin_it + row_stride);
+  });
+  std::cout << "n_symbols:" << n_symbols << std::endl;
+  auto dst = new EllpackPageImpl{ctx, src->CutsShared(), false, row_stride, n_samples};
+  return dst;
+}
+
 EllpackPageImpl::~EllpackPageImpl() noexcept(false) {
   // Sync the stream to make sure all running CUDA kernels finish before deallocation.
   auto status = dh::DefaultStream().Sync(false);

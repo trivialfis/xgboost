@@ -401,6 +401,20 @@ class EllpackPageImpl {
   common::Monitor monitor_;
 };
 
+/**
+ * @brief Compress a sparse Ellpack page.
+ *
+ * Dense ellpack can be further compressed by the feature index base. For sparse data, we
+ * use the smallest bin for each column instead. It's opportunistic and is not as
+ * effective due to the uncertain distribution of missing values, but better than nothing.
+ *
+ * This is only used for external memory. For in-core training, the memory usage would be
+ * too high as we need to allocate a new page.
+ *
+ * @return Pointer to the compressed page, caller takes the ownership.
+ */
+EllpackPageImpl* CompressSparseEllpack(Context const* ctx, EllpackPageImpl const* src);
+
 [[nodiscard]] inline bst_idx_t GetRowStride(DMatrix* dmat) {
   if (dmat->IsDense()) {
     return dmat->Info().num_col_;
