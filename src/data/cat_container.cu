@@ -130,7 +130,6 @@ struct CatContainerImpl {
     dh::safe_cuda(cudaMemcpyAsync(thrust::raw_pointer_cast(columns_v.data()), h_columns_v.data(),
                                   dh::ToSpan(columns_v).size_bytes(), cudaMemcpyDefault,
                                   ctx->CUDACtx()->Stream()));
-    ctx->CUDACtx()->Stream().Sync();
   }
 
   template <typename VariantT>
