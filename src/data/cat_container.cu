@@ -52,6 +52,7 @@ struct CatContainerImpl {
     auto d_data = dh::ToSpan(this->storage.data);
     auto d_offsets = dh::ToSpan(this->storage.offsets);
 
+    // Gather all the pointers for batch copy.
     std::vector<void const*> src_ptrs;
     std::vector<std::size_t> sizes;
     std::vector<void*> dst_ptrs;
@@ -84,12 +85,22 @@ struct CatContainerImpl {
                 }},
             col_v);
     }
+
+    // Copy into the container
     std::size_t fail_idx = 0;
-    auto status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(dst_ptrs.data(), src_ptrs.data(),
-                                                               sizes.data(), sizes.size(),
-                                                               &fail_idx, ctx->CUDACtx()->Stream());
+    cudaError_t status;
+    if constexpr (std::is_same_v<enc::HostColumnsView, decltype(that)>) {
+      status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(dst_ptrs.data(), src_ptrs.data(),
+                                                            sizes.data(), sizes.size(), &fail_idx,
+                                                            ctx->CUDACtx()->Stream());
+    } else {
+      status = dh::MemcpyBatchAsync<cudaMemcpyDeviceToDevice>(dst_ptrs.data(), src_ptrs.data(),
+                                                              sizes.data(), sizes.size(), &fail_idx,
+                                                              ctx->CUDACtx()->Stream());
+    }
     dh::safe_cuda(status);
 
+    // Construct the views
     std::vector<decltype(columns_v)::value_type> h_columns_v(this->columns_v.size());
     for (std::size_t f_idx = 0, n = that.columns.size(); f_idx < n; ++f_idx) {
       std::size_t ptr_idx = 0;
