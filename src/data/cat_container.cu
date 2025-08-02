@@ -23,6 +23,106 @@ struct CatContainerImpl {
   std::vector<ColumnType> columns;
   dh::device_vector<enc::DeviceCatIndexView> columns_v;
 
+  TableCatStorage storage;
+
+  template <typename VariantT>  // fixme: doesn't handle host
+  void CopyFromEx(Context const* ctx, enc::detail::ColumnsViewImpl<VariantT> that) {
+    this->columns_v.resize(that.columns.size());
+
+    auto exec = ctx->CUDACtx()->CTP();
+
+    std::size_t n_bytes = 0;
+    for (auto const& col_v : that.columns) {
+      n_bytes += cuda::std::visit([&](auto&& values) { return values.size_bytes(); });
+    }
+
+    this->storage.data.resize(n_bytes);
+    this->storage.offsets.resize(that.columns.size() + 1);
+
+    auto d_data = dh::ToSpan(this->storage.data);
+    auto d_offsets = dh::ToSpan(this->storage.offsets);
+
+    std::vector<void const*> src_ptrs;
+    std::vector<std::size_t> sizes;
+    std::vector<void*> dst_ptrs;
+    for (std::size_t f_idx = 0, n = that.columns.size(); f_idx < n; ++f_idx) {
+      auto const& col_v = that.columns[f_idx];
+      std::size_t dst_off = 0;
+      cuda::std::visit(
+          enc::Overloaded{
+              [&](enc::CatStrArrayView const& str) {
+                auto p_off = str.offsets.data();
+                auto p_data = str.values.data();
+
+                src_ptrs.push_back(p_off);
+                src_ptrs.push_back(p_data);
+
+                sizes.push_back(str.values.size_bytes());
+                sizes.push_back(str.offsets.size_bytes());
+
+                dst_ptrs.push_back(d_data.subspan(dst_off, str.values.size_bytes()).data());
+                dst_off += str.values.size_bytes();
+                dst_ptrs.push_back(d_offsets.subspan(dst_off, str.offsets.size_bytes()).data());
+                dst_off += str.offsets.size_bytes();
+              },
+              [&](auto&& values) {
+                src_ptrs.push_back(values.data());
+                sizes.push_back(values.size_bytes());
+
+                dst_ptrs.push_back(d_data.subspan(dst_off, values.size_bytes()).data());
+                dst_off += values.size_bytes();
+              }},
+          col_v);
+    }
+    std::size_t fail_idx = 0;
+    auto status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(dst_ptrs.data(), src_ptrs.data(),
+                                                               sizes.data(), sizes.size(),
+                                                               &fail_idx, ctx->CUDACtx()->Stream());
+    dh::safe_cuda(status);
+
+    std::vector<decltype(columns_v)::value_type> h_columns_v(this->columns_v.size());
+    for (std::size_t f_idx = 0, n = that.columns.size(); f_idx < n; ++f_idx) {
+      std::size_t ptr_idx = 0;
+      cuda::std::visit(enc::Overloaded{
+          [&](enc::CatStrArrayView const& str) {
+            auto n = sizes[ptr_idx];
+            CHECK_EQ(n, str.values.size_bytes());
+            auto ptr = dst_ptrs[ptr_idx];
+            ptr_idx += 1;
+            static_assert(sizeof(enc::CatCharT) == 1);
+
+            using OffT = decltype(std::declval<enc::CatStrArrayView>().offsets)::value_type;
+
+            auto ptr_off = dst_ptrs[ptr_idx];
+            auto n_off = sizes[ptr_idx] / sizeof(OffT);
+            ptr_idx += 1;
+
+            h_columns_v[f_idx].emplace<enc::CatStrArrayView>();
+            auto& col_v = cuda::std::get<enc::CatStrArrayView>(h_columns_v[f_idx]);
+            col_v = {common::Span{static_cast<OffT const*>(ptr_off), n_off},
+                     common::Span{static_cast<enc::CatCharT const*>(ptr), n}};
+          },
+          [&](auto&& values) {
+            using T = std::remove_cv_t<typename std::decay_t<decltype(values)>::value_type>;
+            using V = common::Span<std::add_const_t<T>>;
+            h_columns_v[f_idx].emplace<V>();
+
+            auto ptr = dst_ptrs[ptr_idx];
+            CHECK_EQ(values.size_bytes(), sizes[ptr_idx]);
+
+            auto& col_v = cuda::std::get<V>(h_columns_v[f_idx]);
+            col_v = common::Span{static_cast<T const*>(ptr), values.size_bytes()};
+
+            ptr_idx += 1;
+          }});
+    }
+
+    dh::safe_cuda(cudaMemcpyAsync(thrust::raw_pointer_cast(columns_v.data()), h_columns_v.data(),
+                                  dh::ToSpan(columns_v).size_bytes(), cudaMemcpyDefault,
+                                  ctx->CUDACtx()->Stream()));
+    ctx->CUDACtx()->Stream().Sync();
+  }
+
   template <typename VariantT>
   void CopyFrom(Context const* ctx, enc::detail::ColumnsViewImpl<VariantT> that) {
     this->columns.resize(that.columns.size());
@@ -231,7 +331,7 @@ void CatContainer::Copy(Context const* ctx, CatContainer const& that) {
   if (this->HostCanRead()) {
     return this->cpu_impl_->columns.size();
   }
-  return this->cu_impl_->columns.size();
+  return this->cu_impl_->columns_v.size();
 }
 
 void CatContainer::Sort(Context const* ctx) {

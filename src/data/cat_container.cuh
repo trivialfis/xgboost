@@ -57,6 +57,12 @@ struct ViewToStorage<std::tuple<Ts...>> {
 using CatIndexTypes = ViewToStorage<enc::CatIndexViewTypes>::Type;
 using ColumnType = enc::cpu_impl::TupToVarT<CatIndexTypes>;
 
+// One contiguous storage for all columns.
+struct TableCatStorage {
+  dh::device_vector<std::size_t> offsets;  // column offset in bytes
+  dh::device_vector<std::int8_t> data;     // type-erased storage
+};
+
 struct EncThrustPolicy {
   template <typename T>
   using ThrustAllocator = dh::XGBDeviceAllocator<T>;

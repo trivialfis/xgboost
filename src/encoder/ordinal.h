@@ -72,6 +72,9 @@ struct CatStrArrayView {
   [[nodiscard]] std::size_t SizeBytes() const {
     return this->offsets.size_bytes() + values.size_bytes();
   }
+  [[nodiscard]] std::size_t size_bytes() const {  // NOLINT
+    return this->SizeBytes();
+  }
 };
 
 // We keep a single type list here for supported types and use various transformations to

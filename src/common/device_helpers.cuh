@@ -831,8 +831,6 @@ template <cudaMemcpyKind kind, typename T, typename U>
                                            std::size_t count, std::size_t *fail_idx,
                                            cudaStream_t stream) {
 #if CUDART_VERSION >= 12080
-  static_assert(kind == cudaMemcpyDeviceToHost || kind == cudaMemcpyHostToDevice,
-                "Not implemented.");
   cudaMemcpyAttributes attr;
   attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
   attr.flags = cudaMemcpyFlagPreferOverlapWithCompute;
@@ -848,8 +846,11 @@ template <cudaMemcpyKind kind, typename T, typename U>
   if constexpr (kind == cudaMemcpyDeviceToHost) {
     assign_device(&attr.srcLocHint);
     assign_host(&attr.dstLocHint);
-  } else {
+  } else if (kind == cudaMemcpyHostToDevice) {
     assign_host(&attr.srcLocHint);
+    assign_device(&attr.dstLocHint);
+  } else {
+    assign_device(&attr.srcLocHint);
     assign_device(&attr.dstLocHint);
   }
   return cudaMemcpyBatchAsync(dsts, srcs, const_cast<std::size_t *>(sizes), count, attr, fail_idx,
