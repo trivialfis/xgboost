@@ -8,8 +8,6 @@
 #include <vector>  // for vector
 
 #include "../common/categorical.h"  // for IsCat, Decision
-#include "../data/adapter.h"        // for COOTuple
-#include "../data/cat_container.h"  // for CatAccessor
 #include "xgboost/tree_model.h"     // for RegTree
 
 namespace xgboost::predictor {
