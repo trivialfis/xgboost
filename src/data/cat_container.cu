@@ -9,7 +9,8 @@
 #include "../common/cuda_context.cuh"    // for CUDAContext
 #include "../common/device_helpers.cuh"  // for ToSpan
 #include "../common/device_vector.cuh"   // for device_vector
-#include "../common/type.h"              // for GetValueT
+#include "../common/type.h"              // for GetValueT, EraseType
+#include "../data/array_interface.h"     // for IsCudaPtr
 #include "../encoder/ordinal.cuh"        // for SortNames
 #include "../encoder/ordinal.h"          // for DictionaryView
 #include "../encoder/types.h"            // for Overloaded
@@ -41,8 +42,9 @@ struct CatContainerImpl {
       typename VariantT,
       typename Columns = decltype(std::declval<enc::detail::ColumnsViewImpl<VariantT>>().columns)>
   void CopyFromImpl(Context const* ctx, Columns const& that) {
-    auto d_data = dh::ToSpan(this->storage.data);
-    auto d_offsets = dh::ToSpan(this->storage.offsets);
+    CHECK(!ArrayInterfaceHandler::IsCudaPtr(that.data()));
+    auto d_data = common::EraseType(dh::ToSpan(this->storage.data));
+    auto d_offsets = common::EraseType(dh::ToSpan(this->storage.offsets));
 
     // Gather all the pointers for batch copy.
     std::vector<void const*> src_ptrs;
@@ -80,17 +82,17 @@ struct CatContainerImpl {
 
     // Copy into the container
     std::size_t fail_idx = 0;
-    cudaError_t status;
     if constexpr (std::is_same_v<enc::HostColumnsView, decltype(that)>) {
-      status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(dst_ptrs.data(), src_ptrs.data(),
-                                                            sizes.data(), sizes.size(), &fail_idx,
-                                                            ctx->CUDACtx()->Stream());
+      auto status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(
+          dst_ptrs.data(), src_ptrs.data(), sizes.data(), sizes.size(), &fail_idx,
+          ctx->CUDACtx()->Stream());
+      dh::safe_cuda(status);
     } else {
-      status = dh::MemcpyBatchAsync<cudaMemcpyDeviceToDevice>(dst_ptrs.data(), src_ptrs.data(),
-                                                              sizes.data(), sizes.size(), &fail_idx,
-                                                              ctx->CUDACtx()->Stream());
+      auto status = dh::MemcpyBatchAsync<cudaMemcpyDeviceToDevice>(
+          dst_ptrs.data(), src_ptrs.data(), sizes.data(), sizes.size(), &fail_idx,
+          ctx->CUDACtx()->Stream());
+      dh::safe_cuda(status);
     }
-    dh::safe_cuda(status);
 
     // Construct the views
     std::vector<decltype(columns_v)::value_type> h_columns_v(this->columns_v.size());
@@ -107,7 +109,10 @@ struct CatContainerImpl {
                   using OffT = decltype(std::declval<enc::CatStrArrayView>().offsets)::value_type;
 
                   auto ptr_off = dst_ptrs[ptr_idx];
-                  auto n_off = sizes[ptr_idx] / sizeof(OffT);
+                  n = sizes[ptr_idx];
+                  CHECK_EQ(n, str.offsets.size_bytes());
+                  auto n_off = n / sizeof(OffT);
+                  CHECK_EQ(n_off, str.offsets.size());
                   ptr_idx += 1;
 
                   h_columns_v[f_idx].emplace<enc::CatStrArrayView>();
@@ -216,9 +221,9 @@ struct CatContainerImpl {
           col);
     }
     std::size_t fail_idx = 0;
-    auto status = dh::MemcpyBatchAsync<cudaMemcpyDeviceToDevice>(dst_ptrs.data(), src_ptrs.data(),
-                                                                 sizes.data(), sizes.size(),
-                                                                 &fail_idx, dh::DefaultStream());
+    auto status =
+        dh::MemcpyBatchAsync<cudaMemcpyDeviceToHost>(dst_ptrs.data(), src_ptrs.data(), sizes.data(),
+                                                     sizes.size(), &fail_idx, dh::DefaultStream());
     dh::safe_cuda(status);
     that->Finalize();
   }

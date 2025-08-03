@@ -3,7 +3,6 @@
  */
 #include <cstdint>  // for int64_t
 
-#include "../common/common.h"
 #include "../common/device_helpers.cuh"  // for DefaultStream, CUDAEvent
 #include "array_interface.h"
 #include "xgboost/logging.h"
