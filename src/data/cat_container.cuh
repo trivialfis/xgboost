@@ -55,7 +55,6 @@ struct ViewToStorage<std::tuple<Ts...>> {
 };
 
 using CatIndexTypes = ViewToStorage<enc::CatIndexViewTypes>::Type;
-using ColumnType = enc::cpu_impl::TupToVarT<CatIndexTypes>;
 
 // One contiguous storage for all columns.
 struct TableCatStorage {

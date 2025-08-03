@@ -37,10 +37,10 @@ struct CatContainerImpl {
 
   TableCatStorage storage;
 
-  template <typename VariantT>
-  void CopyImpl(Context const* ctx,
-                decltype(std::declval<enc::detail::ColumnsViewImpl<VariantT>>().columns)
-                    const& that) {
+  template <
+      typename VariantT,
+      typename Columns = decltype(std::declval<enc::detail::ColumnsViewImpl<VariantT>>().columns)>
+  void CopyFromImpl(Context const* ctx, Columns const& that) {
     auto d_data = dh::ToSpan(this->storage.data);
     auto d_offsets = dh::ToSpan(this->storage.offsets);
 
@@ -139,20 +139,19 @@ struct CatContainerImpl {
   void CopyFrom(Context const* ctx, CatContainerImpl const* that) {
     this->storage.data.resize(that->storage.data.size());
     this->storage.offsets.resize(that->storage.offsets.size());
+    this->columns_v.resize(that->columns_v.size());
 
     std::vector<decltype(columns_v)::value_type> h_columns_v(that->columns_v.size());
     dh::safe_cuda(cudaMemcpyAsync(
         h_columns_v.data(), thrust::raw_pointer_cast(that->columns_v.data()),
         dh::ToSpan(columns_v).size_bytes(), cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
 
-    this->CopyImpl<enc::DeviceCatIndexView>(ctx, common::Span{h_columns_v});
+    this->CopyFromImpl<enc::DeviceCatIndexView>(ctx, common::Span{h_columns_v});
   }
 
   template <typename VariantT>  // fixme: doesn't handle host
   void CopyFrom(Context const* ctx, enc::detail::ColumnsViewImpl<VariantT> that) {
     this->columns_v.resize(that.columns.size());
-
-    auto exec = ctx->CUDACtx()->CTP();
 
     std::size_t n_bytes = 0;
     for (auto const& col_v : that.columns) {
@@ -162,7 +161,7 @@ struct CatContainerImpl {
     this->storage.data.resize(n_bytes);
     this->storage.offsets.resize(that.columns.size() + 1);
 
-    this->CopyImpl<VariantT>(ctx, that.columns);
+    this->CopyFromImpl<VariantT>(ctx, that.columns);
   }
 
   void CopyTo(cpu_impl::CatContainerImpl* that) const {
