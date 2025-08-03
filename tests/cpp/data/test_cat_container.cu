@@ -10,13 +10,13 @@
 
 #include "../../../src/common/common.h"           // for safe_cuda
 #include "../../../src/common/threading_utils.h"  // for ParallelFor
-#include "../encoder/df_mock.h"
+#include "../encoder/df_mock.cuh"
 #include "../helpers.h"  // for MakeCUDACtx
 #include "test_cat_container.h"
 
 namespace xgboost {
 // Doesn't support GPU input yet since cuDF doesn't have cuda arrow export.
-using DfTest = enc::cpu_impl::DfTest;
+using DfTest = enc::cuda_impl::DfTest;
 namespace {
 auto eq_check = [](common::Span<bst_cat_t const> sorted_idx, std::vector<bst_cat_t> const& sol) {
   std::vector<bst_cat_t> h_sorted(sorted_idx.size());
