@@ -56,6 +56,9 @@ struct CatContainerImpl {
       std::size_t dst_off = 0;
       Visit(enc::Overloaded{
                 [&](enc::CatStrArrayView const& str) {
+                  if (str.values.empty()) {
+                    return;
+                  }
                   auto p_off = str.offsets.data();
                   auto p_data = str.values.data();
 
@@ -67,10 +70,13 @@ struct CatContainerImpl {
 
                   dst_ptrs.push_back(d_data.subspan(dst_off, str.values.size_bytes()).data());
                   dst_off += str.values.size_bytes();
-                  dst_ptrs.push_back(d_offsets.subspan(dst_off, str.offsets.size_bytes()).data());
+                  dst_ptrs.push_back(d_data.subspan(dst_off, str.offsets.size_bytes()).data());
                   dst_off += str.offsets.size_bytes();
                 },
                 [&](auto&& values) {
+                  if (values.empty()) {
+                    return;
+                  }
                   src_ptrs.push_back(values.data());
                   sizes.push_back(values.size_bytes());
 
@@ -100,6 +106,9 @@ struct CatContainerImpl {
       std::size_t ptr_idx = 0;
       Visit(enc::Overloaded{
                 [&](enc::CatStrArrayView const& str) {
+                  if (str.values.empty()) {
+                    return;
+                  }
                   auto n = sizes[ptr_idx];
                   CHECK_EQ(n, str.values.size_bytes());
                   auto ptr = dst_ptrs[ptr_idx];
@@ -121,6 +130,9 @@ struct CatContainerImpl {
                            common::Span{static_cast<enc::CatCharT const*>(ptr), n}};
                 },
                 [&](auto&& values) {
+                  if (values.empty()) {
+                    return;
+                  }
                   using T = std::remove_cv_t<typename std::decay_t<decltype(values)>::value_type>;
                   using V = common::Span<std::add_const_t<T>>;
                   h_columns_v[f_idx].emplace<V>();
