@@ -8,12 +8,57 @@
 
 #include "../../../src/encoder/types.h"        // for Overloaded
 #include "../../src/common/device_vector.cuh"  // for device_vector
-#include "../../src/data/cat_container.cuh"    // for CatIndexTypes
 #include "df_mock.h"                           // for MakeStrArrayImpl
 
 namespace enc::cuda_impl {
-using CatIndexTypes = ::xgboost::cuda_impl::CatIndexTypes;
-using ColumnType = enc::cpu_impl::TupToVarT<CatIndexTypes>;
+struct CatStrArray {
+  dh::device_vector<std::int32_t> offsets;
+  dh::device_vector<CatCharT> values;
+
+  CatStrArray() = default;
+  CatStrArray(CatStrArray const& that) = delete;
+  CatStrArray& operator=(CatStrArray const& that) = delete;
+
+  CatStrArray(CatStrArray&& that) = default;
+  CatStrArray& operator=(CatStrArray&& that) = default;
+
+  [[nodiscard]] explicit operator CatStrArrayView() const {
+    return {dh::ToSpan(offsets), dh::ToSpan(values)};
+  }
+  [[nodiscard]] std::size_t size() const {  // NOLINT
+    return CatStrArrayView(*this).size();
+  }
+
+  void Copy(CatStrArray const& that) {
+    this->offsets = that.offsets;
+    this->values = that.values;
+  }
+};
+
+template <typename T>
+struct ViewToStorageImpl;
+
+template <>
+struct ViewToStorageImpl<CatStrArrayView> {
+  using Type = CatStrArray;
+};
+
+template <typename T>
+struct ViewToStorageImpl<::xgboost::common::Span<T const>> {
+  using Type = dh::device_vector<T>;
+};
+
+template <typename... Ts>
+struct ViewToStorage;
+
+template <typename... Ts>
+struct ViewToStorage<std::tuple<Ts...>> {
+  using Type = std::tuple<typename ViewToStorageImpl<Ts>::Type...>;
+};
+
+using CatIndexTypes = ViewToStorage<CatIndexViewTypes>::Type;
+
+using ColumnType = cpu_impl::TupToVarT<CatIndexTypes>;
 
 class DfTest {
  public:
@@ -22,7 +67,7 @@ class DfTest {
 
  private:
   std::vector<ColumnType> columns_;
-  dh::device_vector<enc::DeviceCatIndexView> columns_v_;
+  dh::device_vector<DeviceCatIndexView> columns_v_;
   dh::device_vector<std::int32_t> segments_;
   std::vector<std::int32_t> h_segments_;
 
@@ -53,13 +98,12 @@ class DfTest {
     MakeImpl(&df.columns_, &df.segments_, std::forward<Col>(columns)...);
     for (std::size_t i = 0; i < df.columns_.size(); ++i) {
       auto const& col = df.columns_[i];
-      std::visit(Overloaded{[&](xgboost::cuda_impl::CatStrArray const& str) {
-                              df.columns_v_.push_back(enc::CatStrArrayView(str));
-                            },
-                            [&](auto&& args) {
-                              df.columns_v_.push_back(dh::ToSpan(args));
-                            }},
-                 col);
+      std::visit(
+          Overloaded{[&](CatStrArray const& str) { df.columns_v_.push_back(CatStrArrayView(str)); },
+                     [&](auto&& args) {
+                       df.columns_v_.push_back(dh::ToSpan(args));
+                     }},
+          col);
     }
     CHECK_EQ(df.columns_v_.size(), sizeof...(columns));
     df.h_segments_.resize(df.segments_.size());
@@ -71,7 +115,7 @@ class DfTest {
   template <typename... Strs>
   static auto MakeStrs(Strs&&... strs) {
     auto array = MakeStrArrayImpl(std::forward<Strs>(strs)...);
-    return xgboost::cuda_impl::CatStrArray{array.offsets, array.values};
+    return CatStrArray{array.offsets, array.values};
   }
 
   template <typename... Ints>
@@ -80,8 +124,8 @@ class DfTest {
   }
 
   auto View() const {
-    return enc::DeviceColumnsView{dh::ToSpan(this->columns_v_), dh::ToSpan(segments_),
-                                  h_segments_.back()};
+    return DeviceColumnsView{dh::ToSpan(this->columns_v_), dh::ToSpan(segments_),
+                             h_segments_.back()};
   }
   auto Segment() const { return Span{h_segments_}; }
 
