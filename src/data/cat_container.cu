@@ -51,9 +51,9 @@ struct CatContainerImpl {
     std::vector<std::size_t> sizes;
     std::vector<void*> dst_ptrs;
 
+    std::size_t dst_off = 0;
     for (std::size_t f_idx = 0, n = that.size(); f_idx < n; ++f_idx) {
       auto const& col_v = that[f_idx];
-      std::size_t dst_off = 0;
       Visit(enc::Overloaded{
                 [&](enc::CatStrArrayView const& str) {
                   if (str.values.empty()) {
@@ -65,13 +65,13 @@ struct CatContainerImpl {
                   src_ptrs.push_back(p_off);
                   src_ptrs.push_back(p_data);
 
-                  sizes.push_back(str.values.size_bytes());
                   sizes.push_back(str.offsets.size_bytes());
+                  sizes.push_back(str.values.size_bytes());
 
-                  dst_ptrs.push_back(d_data.subspan(dst_off, str.values.size_bytes()).data());
-                  dst_off += str.values.size_bytes();
                   dst_ptrs.push_back(d_data.subspan(dst_off, str.offsets.size_bytes()).data());
                   dst_off += str.offsets.size_bytes();
+                  dst_ptrs.push_back(d_data.subspan(dst_off, str.values.size_bytes()).data());
+                  dst_off += str.values.size_bytes();
                 },
                 [&](auto&& values) {
                   if (values.empty()) {
@@ -88,6 +88,13 @@ struct CatContainerImpl {
 
     // Copy into the container
     std::size_t fail_idx = 0;
+    CHECK_EQ(dst_ptrs.size(), src_ptrs.size());
+    CHECK_EQ(dst_ptrs.size(), sizes.size());
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+      std::cout << "size:" << sizes[i] << " src:" << (void*)src_ptrs[i]
+                << " dst:" << (void*)dst_ptrs[i] << ", ";
+    }
+    std::cout << std::endl;
     if constexpr (std::is_same_v<enc::HostColumnsView, decltype(that)>) {
       auto status = dh::MemcpyBatchAsync<cudaMemcpyHostToDevice>(
           dst_ptrs.data(), src_ptrs.data(), sizes.data(), sizes.size(), &fail_idx,
@@ -102,40 +109,42 @@ struct CatContainerImpl {
 
     // Construct the views
     std::vector<decltype(columns_v)::value_type> h_columns_v(this->columns_v.size());
+    std::size_t ptr_idx = 0;
     for (std::size_t f_idx = 0, n = that.size(); f_idx < n; ++f_idx) {
-      std::size_t ptr_idx = 0;
       Visit(enc::Overloaded{
                 [&](enc::CatStrArrayView const& str) {
+                  h_columns_v[f_idx].emplace<enc::CatStrArrayView>();
                   if (str.values.empty()) {
                     return;
                   }
-                  auto n = sizes[ptr_idx];
-                  CHECK_EQ(n, str.values.size_bytes());
-                  auto ptr = dst_ptrs[ptr_idx];
-                  ptr_idx += 1;
-                  static_assert(sizeof(enc::CatCharT) == 1);
 
                   using OffT = decltype(std::declval<enc::CatStrArrayView>().offsets)::value_type;
 
                   auto ptr_off = dst_ptrs[ptr_idx];
-                  n = sizes[ptr_idx];
+                  auto n = sizes[ptr_idx];
                   CHECK_EQ(n, str.offsets.size_bytes());
                   auto n_off = n / sizeof(OffT);
                   CHECK_EQ(n_off, str.offsets.size());
                   ptr_idx += 1;
 
-                  h_columns_v[f_idx].emplace<enc::CatStrArrayView>();
+                  n = sizes[ptr_idx];
+                  CHECK_EQ(n, str.values.size_bytes());
+                  auto ptr = dst_ptrs[ptr_idx];
+                  ptr_idx += 1;
+                  static_assert(sizeof(enc::CatCharT) == 1);
+
                   auto& col_v = cuda::std::get<enc::CatStrArrayView>(h_columns_v[f_idx]);
                   col_v = {common::Span{static_cast<OffT const*>(ptr_off), n_off},
                            common::Span{static_cast<enc::CatCharT const*>(ptr), n}};
                 },
                 [&](auto&& values) {
-                  if (values.empty()) {
-                    return;
-                  }
                   using T = std::remove_cv_t<typename std::decay_t<decltype(values)>::value_type>;
                   using V = common::Span<std::add_const_t<T>>;
                   h_columns_v[f_idx].emplace<V>();
+
+                  if (values.empty()) {
+                    return;
+                  }
 
                   auto ptr = dst_ptrs[ptr_idx];
                   CHECK_EQ(values.size_bytes(), sizes[ptr_idx]);
@@ -203,13 +212,13 @@ struct CatContainerImpl {
                             auto& out_str = std::get<cpu_impl::CatStrArray>(out_col);
                             // Offsets
                             out_str.offsets.resize(str.offsets.size());
-                            if (!out_str.offsets.empty()) {
+                            out_str.values.resize(str.values.size());
+                            if (!out_str.values.empty()) {
                               src_ptrs.push_back(str.offsets.data());
                               dst_ptrs.push_back(out_str.offsets.data());
                               sizes.push_back(common::Span{out_str.offsets}.size_bytes());
                             }
                             // Values
-                            out_str.values.resize(str.values.size());
                             if (!out_str.values.empty()) {
                               src_ptrs.push_back(str.values.data());
                               dst_ptrs.push_back(out_str.values.data());
@@ -232,6 +241,13 @@ struct CatContainerImpl {
                           }},
           col);
     }
+    CHECK_EQ(dst_ptrs.size(), src_ptrs.size());
+    CHECK_EQ(dst_ptrs.size(), sizes.size());
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+      std::cout << "size:" << sizes[i] << " src:" << (void*)src_ptrs[i]
+                << " dst:" << (void*)dst_ptrs[i] << ", ";
+    }
+    std::cout << std::endl;
     std::size_t fail_idx = 0;
     auto status =
         dh::MemcpyBatchAsync<cudaMemcpyDeviceToHost>(dst_ptrs.data(), src_ptrs.data(), sizes.data(),
