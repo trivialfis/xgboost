@@ -4,6 +4,7 @@
 #pragma once
 #include <limits>   // for numeric_limits
 #include <ostream>  // for ostream
+#include <cuda/atomic>
 
 #include "../data/batch_utils.h"   // for DftPrefetchBatches, StaticBatch
 #include "gpu_hist/quantiser.cuh"  // for GradientQuantiser
@@ -51,15 +52,15 @@ enum DefaultDirection {
 };
 
 struct DeviceSplitCandidate {
-  float loss_chg{-std::numeric_limits<float>::max()};
+  cuda::atomic<float, cuda::thread_scope_block> loss_chg{-std::numeric_limits<float>::max()};
   DefaultDirection dir{kLeftDir};
-  int findex {-1};
-  float fvalue {0};
+  int findex{-1};
+  float fvalue{0};
   // categorical split, either it's the split category for OHE or the threshold for partition-based
   // split.
   bst_cat_t thresh{-1};
 
-  bool is_cat { false };
+  bool is_cat{false};
 
   GradientPairInt64 left_sum;
   GradientPairInt64 right_sum;
@@ -70,17 +71,17 @@ struct DeviceSplitCandidate {
                              int findex_in, GradientPairInt64 left_sum_in,
                              GradientPairInt64 right_sum_in, bool cat,
                              const GPUTrainingParam& param, const GradientQuantiser& quantiser) {
-    if (loss_chg_in > loss_chg &&
+    if (loss_chg_in > loss_chg.load(cuda::std::memory_order_acquire) &&
         quantiser.ToFloatingPoint(left_sum_in).GetHess() >= param.min_child_weight &&
         quantiser.ToFloatingPoint(right_sum_in).GetHess() >= param.min_child_weight) {
-        loss_chg = loss_chg_in;
-        dir = dir_in;
-        fvalue = fvalue_in;
-        is_cat = cat;
-        left_sum = left_sum_in;
-        right_sum = right_sum_in;
-        findex = findex_in;
-      }
+      loss_chg.store(loss_chg_in, cuda::std::memory_order_release);
+      dir = dir_in;
+      fvalue = fvalue_in;
+      is_cat = cat;
+      left_sum = left_sum_in;
+      right_sum = right_sum_in;
+      findex = findex_in;
+    }
   }
 
   /**
@@ -90,18 +91,18 @@ struct DeviceSplitCandidate {
                                 bst_feature_t findex_in, GradientPairInt64 left_sum_in,
                                 GradientPairInt64 right_sum_in, GPUTrainingParam const& param,
                                 const GradientQuantiser& quantiser) {
-      if (loss_chg_in > loss_chg &&
-          quantiser.ToFloatingPoint(left_sum_in).GetHess() >= param.min_child_weight &&
-          quantiser.ToFloatingPoint(right_sum_in).GetHess() >= param.min_child_weight) {
-        loss_chg = loss_chg_in;
-        dir = dir_in;
-        fvalue = std::numeric_limits<float>::quiet_NaN();
-        thresh = thresh_in;
-        is_cat = true;
-        left_sum = left_sum_in;
-        right_sum = right_sum_in;
-        findex = findex_in;
-      }
+    if (loss_chg_in > loss_chg &&
+        quantiser.ToFloatingPoint(left_sum_in).GetHess() >= param.min_child_weight &&
+        quantiser.ToFloatingPoint(right_sum_in).GetHess() >= param.min_child_weight) {
+      loss_chg = loss_chg_in;
+      dir = dir_in;
+      fvalue = std::numeric_limits<float>::quiet_NaN();
+      thresh = thresh_in;
+      is_cat = true;
+      left_sum = left_sum_in;
+      right_sum = right_sum_in;
+      findex = findex_in;
+    }
   }
 
   [[nodiscard]] XGBOOST_DEVICE bool IsValid() const { return loss_chg > 0.0f; }
