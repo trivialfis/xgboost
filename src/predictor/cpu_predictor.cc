@@ -68,16 +68,14 @@ template <bool has_categorical>
 }
 
 template <bool has_categorical, bool any_missing, bool use_array_tree_layout>
-void PredValueByOneTree(const RegTree& tree,
-                        std::size_t const predict_offset,
-                        std::vector<RegTree::FVec> const &thread_temp,
-                        std::size_t const offset, std::size_t const block_size,
-                        linalg::MatrixView<float> out_predt,
-                        bst_node_t* p_nidx, int depth, int gid) {
+void PredValueByOneTree(const RegTree &tree, std::size_t const predict_offset,
+                        std::vector<RegTree::FVec> const &thread_temp, std::size_t const offset,
+                        std::size_t const block_size, linalg::MatrixView<float> out_predt,
+                        bst_node_t *p_nidx, int depth, int gid) {
   auto const &cats = tree.GetCategoriesMatrix();
   if constexpr (use_array_tree_layout) {
-    ProcessArrayTree<RegTree, has_categorical, any_missing>
-        (tree, cats, thread_temp, offset, block_size, p_nidx, depth);
+    ProcessArrayTree<RegTree, has_categorical, any_missing>(tree, cats, thread_temp, offset,
+                                                            block_size, p_nidx, depth);
   }
   for (std::size_t i = 0; i < block_size; ++i) {
     bst_node_t nidx = 0;
@@ -90,7 +88,7 @@ void PredValueByOneTree(const RegTree& tree,
       p_nidx[i] = 0;
     }
     out_predt(predict_offset + i, gid) +=
-      PredValueByOneTree<has_categorical>(thread_temp[offset + i], tree, cats, nidx);
+        PredValueByOneTree<has_categorical>(thread_temp[offset + i], tree, cats, nidx);
   }
 }
 
@@ -125,17 +123,15 @@ void PredValueByOneTree(RegTree::FVec const &p_feats, MultiTargetTree const &tre
 }
 
 template <bool has_categorical, bool any_missing, bool use_array_tree_layout>
-void PredValueByOneTree(const RegTree& tree,
-                        std::size_t const predict_offset,
-                        std::vector<RegTree::FVec> const &thread_temp,
-                        std::size_t const offset, std::size_t const block_size,
-                        linalg::MatrixView<float> out_predt,
-                        bst_node_t* p_nidx, int depth) {
-  const auto& mt_tree = *(tree.GetMultiTargetTree());
+void PredValueByOneTree(const RegTree &tree, std::size_t const predict_offset,
+                        std::vector<RegTree::FVec> const &thread_temp, std::size_t const offset,
+                        std::size_t const block_size, linalg::MatrixView<float> out_predt,
+                        bst_node_t *p_nidx, int depth) {
+  const auto &mt_tree = *(tree.GetMultiTargetTree());
   auto const &cats = tree.GetCategoriesMatrix();
   if constexpr (use_array_tree_layout) {
-    ProcessArrayTree<MultiTargetTree, has_categorical, any_missing>
-        (mt_tree, cats, thread_temp, offset, block_size, p_nidx, depth);
+    ProcessArrayTree<MultiTargetTree, has_categorical, any_missing>(
+        mt_tree, cats, thread_temp, offset, block_size, p_nidx, depth);
   }
   for (std::size_t i = 0; i < block_size; ++i) {
     bst_node_t nidx = 0;
@@ -144,11 +140,9 @@ void PredValueByOneTree(const RegTree& tree,
       p_nidx[i] = 0;
     }
     auto t_predts = out_predt.Slice(predict_offset + i, linalg::All());
-    PredValueByOneTree<has_categorical>(thread_temp[offset + i], mt_tree, cats,
-                                        t_predts, nidx);
+    PredValueByOneTree<has_categorical>(thread_temp[offset + i], mt_tree, cats, t_predts, nidx);
   }
 }
-
 }  // namespace multi
 
 namespace {
@@ -158,9 +152,11 @@ void PredictByAllTrees(gbm::GBTreeModel const &model, bst_tree_t const tree_begi
                        bst_tree_t const tree_end, std::size_t const predict_offset,
                        std::vector<RegTree::FVec> const &thread_temp, std::size_t const offset,
                        std::size_t const block_size, linalg::MatrixView<float> out_predt,
-                       const std::vector<int>& tree_depth) {
+                       const std::vector<int> &tree_depth) {
   std::vector<bst_node_t> nidx;
-  if constexpr (use_array_tree_layout) nidx.resize(block_size, 0);
+  if constexpr (use_array_tree_layout) {
+    nidx.resize(block_size, 0);
+  }
   for (bst_tree_t tree_id = tree_begin; tree_id < tree_end; ++tree_id) {
     auto const &tree = *model.trees.at(tree_id);
     bool has_categorical = tree.HasCategoricalSplit();
@@ -168,23 +164,23 @@ void PredictByAllTrees(gbm::GBTreeModel const &model, bst_tree_t const tree_begi
     if (tree.IsMultiTarget()) {
       int depth = use_array_tree_layout ? tree_depth[tree_id - tree_begin] : 0;
       if (has_categorical) {
-        multi::PredValueByOneTree<true, any_missing, use_array_tree_layout>
-          (tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth);
+        multi::PredValueByOneTree<true, any_missing, use_array_tree_layout>(
+            tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth);
       } else {
-        multi::PredValueByOneTree<false, any_missing, use_array_tree_layout>
-          (tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth);
+        multi::PredValueByOneTree<false, any_missing, use_array_tree_layout>(
+            tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth);
       }
     } else {
       auto const gid = model.tree_info[tree_id];
       int depth = use_array_tree_layout ? tree_depth[tree_id - tree_begin] : 0;
       if (has_categorical) {
-        scalar::PredValueByOneTree<true, any_missing, use_array_tree_layout>
-          (tree, predict_offset, thread_temp, offset, block_size,
-           out_predt, nidx.data(), depth, gid);
+        scalar::PredValueByOneTree<true, any_missing, use_array_tree_layout>(
+            tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth,
+            gid);
       } else {
-        scalar::PredValueByOneTree<false, any_missing, use_array_tree_layout>
-          (tree, predict_offset, thread_temp, offset, block_size,
-           out_predt, nidx.data(), depth, gid);
+        scalar::PredValueByOneTree<false, any_missing, use_array_tree_layout>(
+            tree, predict_offset, thread_temp, offset, block_size, out_predt, nidx.data(), depth,
+            gid);
       }
     }
   }
