@@ -169,10 +169,9 @@ class HistogramAgent {
         d_gpair_{d_gpair} {}
 
   __device__ void ProcessPartialTileShared(std::size_t offset) {
-    // read until the next thread
-    std::size_t beg = offset + threadIdx.x * kItemsPerThread;
-    std::size_t n = std::min(offset + (threadIdx.x + 1) * kItemsPerThread, n_elements_);
-    for (std::size_t idx = beg; idx < n; idx += 1) {
+    for (std::size_t idx = offset + threadIdx.x,
+                     n = std::min(offset + kBlockThreads * kItemsPerTile, n_elements_);
+         idx < n; idx += kBlockThreads) {
       Idx ridx = d_ridx_[idx / feature_stride_];
       auto fidx = FeatIdx(group_, idx, feature_stride_);
       bst_bin_t compressed_bin = matrix_.gidx_iter[IterIdx(matrix_, ridx, fidx)];
@@ -199,7 +198,7 @@ class HistogramAgent {
     GradientPairInt64 gpair[kItemsPerThread];
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
-      idx[i] = offset + i + kItemsPerThread * threadIdx.x;
+      idx[i] = offset + i * kBlockThreads + threadIdx.x;
     }
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
@@ -210,10 +209,6 @@ class HistogramAgent {
       gpair[i] = d_gpair_[ridx[i]];
       auto fidx = FeatIdx(group_, idx[i], feature_stride_);
       gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
-      // if (offset == 0 && idx[i] < 64) {
-      //   printf("idx: %d, ridx: %d, fidx: %d, iter idx:%d\n", int(idx[i]), int(ridx[i]), int(fidx),
-      //          int(IterIdx(matrix_, ridx[i], fidx)));
-      // }
       if (kDense || gidx[i] != matrix_.NullValue()) {
         if constexpr (kCompressed) {
           gidx[i] += matrix_.feature_segments[fidx];
