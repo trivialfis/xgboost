@@ -394,7 +394,7 @@ class DeviceHistogramDispatchAccessor {
                       FeatureGroupsAccessor const& feature_groups,
                       common::Span<GradientPairInt64 const> gpair,
                       common::Span<const cuda_impl::RowIndexT> d_ridx,
-                      common::Span<GradientPairInt64> histogram, GradientQuantiser rounding) const {
+                      common::Span<GradientPairInt64> histogram) const {
     CHECK(kernel_);
     // Otherwise launch blocks such that each block has a minimum amount of work to do
     // There are fixed costs to launching each block, e.g. zeroing shared memory
@@ -493,8 +493,7 @@ void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAcces
   this->monitor_.Start(__func__);
   std::visit(
       [&](auto&& matrix) {
-        this->p_impl_->BuildHistogram(ctx, matrix, feature_groups, gpair, ridx, histogram,
-                                      rounding);
+        this->p_impl_->BuildHistogram(ctx, matrix, feature_groups, gpair, ridx, histogram);
       },
       matrix);
   this->monitor_.Stop(__func__);
