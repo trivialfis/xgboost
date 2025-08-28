@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
+#include <cuda/pipeline>
 
 #include "../../collective/aggregator.h"
 #include "../../common/deterministic.cuh"
@@ -141,6 +142,7 @@ template <typename Accessor, bool kCompressed, bool kDense, int kBlockThreads, i
 class HistogramAgent {
   int constexpr static kItemsPerTile = kBlockThreads * kItemsPerThread;
 
+  char* stage_arr_;
   GradientPairInt64* smem_arr_;
   GradientPairInt64* d_node_hist_;
   using Idx = cuda_impl::RowIndexT;
@@ -155,11 +157,12 @@ class HistogramAgent {
   static_assert(kCompressed >= kDense);
 
  public:
-  __device__ HistogramAgent(GradientPairInt64* smem_arr,
+  __device__ HistogramAgent(char* stage_arr, GradientPairInt64* smem_arr,
                             GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
                             Accessor const& matrix, common::Span<const Idx> d_ridx,
                             const GradientPairInt64* d_gpair)
-      : smem_arr_{smem_arr},
+      : stage_arr_{stage_arr},
+        smem_arr_{smem_arr},
         d_node_hist_{d_node_hist},
         d_ridx_(d_ridx.data()),
         group_{group},
@@ -194,8 +197,9 @@ class HistogramAgent {
   __device__ void ProcessFullTileShared(std::size_t offset) {
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
-    bst_bin_t gidx[kItemsPerThread];
-    GradientPairInt64 gpair[kItemsPerThread];
+    GradientPairInt64 gpair_0[kItemsPerThread / 2];
+    GradientPairInt64 gpair_1[kItemsPerThread / 2];
+
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       idx[i] = offset + i * kBlockThreads + threadIdx.x;
@@ -204,29 +208,49 @@ class HistogramAgent {
     for (int i = 0; i < kItemsPerThread; i++) {
       ridx[i] = d_ridx_[idx[i] / feature_stride_];
     }
+
+    cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+    // https://developer.nvidia.com/blog/controlling-data-movement-to-boost-performance-on-ampere-architecture/
+
+    bst_bin_t gidx_0[kItemsPerThread / 2];
+    bst_bin_t gidx_1[kItemsPerThread / 2];
+
+    auto load_gidx = [&ridx, this, &idx](bst_bin_t(&gidx)[kItemsPerThread / 2],
+                                         GradientPairInt64(&gpair)[kItemsPerThread / 2], int beg) {
 #pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      gpair[i] = d_gpair_[ridx[i]];
-      auto fidx = FeatIdx(group_, idx[i], feature_stride_);
-      gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
-      if (kDense || gidx[i] != matrix_.NullValue()) {
-        if constexpr (kCompressed) {
-          gidx[i] += matrix_.feature_segments[fidx];
+      for (int k = 0; k < kItemsPerThread / 2; k++) {
+        auto i = k + beg;
+        gpair[k] = d_gpair_[ridx[i]];
+        auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+        gidx[k] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
+        if (kDense || gidx[k] != matrix_.NullValue()) {
+          if constexpr (kCompressed) {
+            gidx[k] += matrix_.feature_segments[fidx];
+          }
+        } else {
+          // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+          // result might equal to the `NullValue`.
+          gidx[k] = -1;
         }
-      } else {
-        // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
-        // result might equal to the `NullValue`.
-        gidx[i] = -1;
       }
-    }
+    };
+    auto write_shared = [this](bst_bin_t(&gidx)[kItemsPerThread / 2],
+                               GradientPairInt64(&gpair)[kItemsPerThread / 2], int beg) {
 #pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      // Avoid atomic add if it's a null value.
-      if (kDense || gidx[i] != -1) {
-        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, gpair[i]);
-      }
-    }
+      for (int i = 0; i < kItemsPerThread; i++) {
+        // Avoid atomic add if it's a null value.
+        if (kDense || gidx[i] != -1) {
+          AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, gpair[i]);
+        }
+      };
+    };
+
+    load_gidx(gidx_0, gpair_0, 0);
+    load_gidx(gidx_1, gpair_1, kItemsPerThread / 2);
+    write_shared(gidx_0, gpair_0, 0);
+    write_shared(gidx_1, gpair_1, kItemsPerThread / 2);
   }
+
   __device__ void BuildHistogramWithShared() {
     dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
     __syncthreads();
@@ -269,9 +293,13 @@ __global__ void __launch_bounds__(kBlockThreads)
                         const GradientPairInt64* __restrict__ d_gpair) {
   extern __shared__ char smem[];
   const FeatureGroup group = feature_groups[blockIdx.y];
-  auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
+
+  auto stage_arr = reinterpret_cast<char*>(smem);
+  auto smem_arr =
+      reinterpret_cast<GradientPairInt64*>(reinterpret_cast<char*>(smem) + HistShmemReserve());
+
   auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
-      smem_arr, d_node_hist, group, matrix, d_ridx, d_gpair);
+      stage_arr, smem_arr, d_node_hist, group, matrix, d_ridx, d_gpair);
   if (use_shared_memory_histograms) {
     agent.BuildHistogramWithShared();
   } else {
@@ -281,7 +309,7 @@ __global__ void __launch_bounds__(kBlockThreads)
 
 namespace {
 constexpr std::int32_t kBlockThreads = 1024;
-constexpr std::int32_t kItemsPerThread = 8;
+constexpr std::int32_t kItemsPerThread = 4;
 constexpr std::int32_t ItemsPerTile() { return kBlockThreads * kItemsPerThread; }
 template <auto Ker>
 using DeduceKernelT = std::decay_t<decltype(Ker)>;
@@ -341,7 +369,7 @@ struct HistogramKernel {
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
-    this->smem_size = feature_groups.ShmemSize();
+    this->smem_size = feature_groups.ShmemSize() + HistShmemReserve();
     this->shared = !force_global_memory && this->smem_size <= this->max_shared_memory;
     this->smem_size = this->shared ? this->smem_size : 0;
 

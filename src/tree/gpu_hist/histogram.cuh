@@ -221,5 +221,8 @@ class DeviceHistogramBuilder {
     this->hist_.AllocateHistograms(ctx, new_nidxs);
   }
 };
+
+// compress iter buffer size * kBlockThreads * kItemsPerThread
+constexpr std::size_t HistShmemReserve() { return 5 * 1024 * 4; }
 }  // namespace xgboost::tree
 #endif  // HISTOGRAM_CUH_
