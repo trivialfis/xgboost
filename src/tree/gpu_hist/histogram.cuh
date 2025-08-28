@@ -161,7 +161,7 @@ class DeviceHistogramBuilder {
 
   void BuildHistogram(CUDAContext const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      common::Span<GradientPair const> gpair,
+                      common::Span<GradientPairInt64 const> gpair,
                       common::Span<const std::uint32_t> ridx,
                       common::Span<GradientPairInt64> histogram, GradientQuantiser rounding);
 

@@ -146,12 +146,11 @@ class HistogramAgent {
   using Idx = cuda_impl::RowIndexT;
 
   dh::LDGIterator<const Idx> d_ridx_;
-  const GradientPair* d_gpair_;
+  const GradientPairInt64* d_gpair_;
   const FeatureGroup group_;
   Accessor const& matrix_;
   const int feature_stride_;
   const bst_idx_t n_elements_;
-  const GradientQuantiser& rounding_;
 
   static_assert(kCompressed >= kDense);
 
@@ -159,7 +158,7 @@ class HistogramAgent {
   __device__ HistogramAgent(GradientPairInt64* smem_arr,
                             GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
                             Accessor const& matrix, common::Span<const Idx> d_ridx,
-                            const GradientQuantiser& rounding, const GradientPair* d_gpair)
+                            const GradientPairInt64* d_gpair)
       : smem_arr_{smem_arr},
         d_node_hist_{d_node_hist},
         d_ridx_(d_ridx.data()),
@@ -167,7 +166,6 @@ class HistogramAgent {
         matrix_(matrix),
         feature_stride_(kCompressed ? group.num_features : matrix.row_stride),
         n_elements_{feature_stride_ * d_ridx.size()},
-        rounding_{rounding},
         d_gpair_{d_gpair} {}
 
   __device__ void ProcessPartialTileShared(std::size_t offset) {
@@ -183,10 +181,9 @@ class HistogramAgent {
           compressed_bin += this->matrix_.feature_segments[fidx];
         }
         // Avoid atomic add if it's a null value.
-        auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
         // Subtract start_bin to write to group-local histogram. If this is not a dense
         // matrix, then start_bin is 0 since featuregrouping doesn't support sparse data.
-        AtomicAddGpairShared(smem_arr_ + compressed_bin - group_.start_bin, adjusted);
+        AtomicAddGpairShared(smem_arr_ + compressed_bin - group_.start_bin, d_gpair_[ridx]);
       }
     }
   }
@@ -198,7 +195,7 @@ class HistogramAgent {
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
-    GradientPair gpair[kItemsPerThread];
+    GradientPairInt64 gpair[kItemsPerThread];
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       idx[i] = offset + i * kBlockThreads + threadIdx.x;
@@ -226,8 +223,7 @@ class HistogramAgent {
     for (int i = 0; i < kItemsPerThread; i++) {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
-        auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, adjusted);
+        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, gpair[i]);
       }
     }
   }
@@ -258,8 +254,7 @@ class HistogramAgent {
         if (kCompressed) {
           compressed_bin += this->matrix_.feature_segments[fidx];
         }
-        auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
-        AtomicAddGpairGlobal(d_node_hist_ + compressed_bin, adjusted);
+        AtomicAddGpairGlobal(d_node_hist_ + compressed_bin, d_gpair_[ridx]);
       }
     }
   }
@@ -271,13 +266,12 @@ __global__ void __launch_bounds__(kBlockThreads)
     SharedMemHistKernel(Accessor const matrix, const FeatureGroupsAccessor feature_groups,
                         common::Span<const RowPartitioner::RowIndexT> d_ridx,
                         GradientPairInt64* __restrict__ d_node_hist,
-                        const GradientPair* __restrict__ d_gpair,
-                        GradientQuantiser const rounding) {
+                        const GradientPairInt64* __restrict__ d_gpair) {
   extern __shared__ char smem[];
   const FeatureGroup group = feature_groups[blockIdx.y];
   auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
   auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
-      smem_arr, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
+      smem_arr, d_node_hist, group, matrix, d_ridx, d_gpair);
   if (use_shared_memory_histograms) {
     agent.BuildHistogramWithShared();
   } else {
@@ -398,7 +392,7 @@ class DeviceHistogramDispatchAccessor {
 
   void BuildHistogram(CUDAContext const* ctx, Accessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      common::Span<GradientPair const> gpair,
+                      common::Span<GradientPairInt64 const> gpair,
                       common::Span<const cuda_impl::RowIndexT> d_ridx,
                       common::Span<GradientPairInt64> histogram, GradientQuantiser rounding) const {
     CHECK(kernel_);
@@ -419,7 +413,7 @@ class DeviceHistogramDispatchAccessor {
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
       dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
                        static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-          kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+          kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data());
     };
 
     using K = HistogramKernel<EllpackDeviceAccessor>::KernelType;
@@ -492,7 +486,7 @@ void DeviceHistogramBuilder::Reset(Context const* ctx, std::size_t max_cached_hi
 
 void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAccessor const& matrix,
                                             FeatureGroupsAccessor const& feature_groups,
-                                            common::Span<GradientPair const> gpair,
+                                            common::Span<GradientPairInt64 const> gpair,
                                             common::Span<const cuda_impl::RowIndexT> ridx,
                                             common::Span<GradientPairInt64> histogram,
                                             GradientQuantiser rounding) {

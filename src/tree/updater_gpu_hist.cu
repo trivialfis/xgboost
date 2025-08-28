@@ -144,7 +144,10 @@ struct GPUHistMakerDevice {
 
  public:
   dh::device_vector<GradientPair> d_gpair;  // storage for gpair;
+  dh::DeviceUVector<GradientPairInt64> d_gpair_i64;
+
   common::Span<GradientPair const> gpair;
+  common::Span<GradientPairInt64 const> gpair_i64;
 
   dh::device_vector<int> monotone_constraints;
 
@@ -248,6 +251,15 @@ struct GPUHistMakerDevice {
      */
     this->quantiser = std::make_unique<GradientQuantiser>(ctx_, this->gpair, p_fmat->Info());
 
+    auto s_gpair_f = this->gpair;
+    this->d_gpair_i64.resize(s_gpair_f.size());
+    this->gpair_i64 = dh::ToSpan(this->d_gpair_i64);
+    auto s_gpair_i = dh::ToSpan(this->d_gpair_i64);
+    auto d_quantizer = *this->quantiser;
+    thrust::for_each_n(this->ctx_->CUDACtx()->CTP(), thrust::make_counting_iterator(0ul),
+                       s_gpair_f.size(), [=] XGBOOST_DEVICE(std::size_t i) mutable {
+                         s_gpair_i[i] = d_quantizer.ToFixedPoint(s_gpair_f[i]);
+                       });
     this->histogram_.Reset(ctx_, this->hist_param_->MaxCachedHistNodes(ctx_->Device()),
                            feature_groups_->DeviceAccessor(ctx_->Device()), cuts_->TotalBins(),
                            false);
@@ -338,8 +350,8 @@ struct GPUHistMakerDevice {
     auto d_ridx = partitioners_.at(k)->GetRows(nidx);
     page.Impl()->Visit(this->ctx_, {}, [&](auto&& acc) {
       this->histogram_.BuildHistogram(ctx_->CUDACtx(), acc,
-                                      feature_groups_->DeviceAccessor(ctx_->Device()), this->gpair,
-                                      d_ridx, d_node_hist, *quantiser);
+                                      feature_groups_->DeviceAccessor(ctx_->Device()),
+                                      this->gpair_i64, d_ridx, d_node_hist, *quantiser);
     });
     monitor.Stop(__func__);
   }
