@@ -150,8 +150,8 @@ class HistogramAgent {
     GradientPair gpair_s[kStages][kStageSize];
     bst_bin_t gidx_s[kStages][kStageSize];
 
-    auto load = [offset, this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
-                               GradientPair(&gpair)[kStageSize], int stage) {
+    auto load = [this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
+                       GradientPair(&gpair)[kStageSize], int stage, std::size_t offset) {
 #pragma unroll
       for (int i = 0; i < kStageSize; i++) {
         auto k = stage * kStageSize + i;
@@ -185,34 +185,57 @@ class HistogramAgent {
       }
     };
 
+    auto write_gidx = [this, fn](bst_bin_t(&gidx)[kStageSize], GradientPair(&gpair)[kStageSize]) {
+#pragma unroll
+      for (int i = 0; i < kItemsPerThread; i++) {
+        // Avoid atomic add if it's a null value.
+        if (kDense || gidx[i] != -1) {
+          auto adjusted = rounding_.ToFixedPoint(gpair[i]);
+          // AtomicAddGpairShared
+          fn(gidx[i] - group_.start_bin, adjusted);
+        }
+      }
+    };
+
     auto stage = 0;
 
     auto flip_stage = [&] {stage = (stage + 1) % kStages; };
 
     pipe.producer_acquire();
     if (offset + kItemsPerTile <= n_elements_) {
-      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage);
+      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
       load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage]);
     }
     pipe.producer_commit();
 
-    flip_stage();
+    flip_stage();  // s -> 1
 
     pipe.producer_acquire();
     if (offset + kItemsPerTile <= n_elements_) {
-      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage);
+      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
       load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage]);
     }
     pipe.producer_commit();
 
-    flip_stage();
+    flip_stage();  // s -> 0
 
     while (offset + kItemsPerTile <= n_elements_) {
+      // Consume
       cuda::pipeline_consumer_wait_prior<1>(pipe);
+      write_gidx(gidx_s[stage], gpair_s[stage]);
+      pipe.consumer_release();
 
-      ProcessFullTileShared(offset, fn);
-      offset += kItemsPerTile * gridDim.x;
+      // Re-fill
+      pipe.producer_acquire();
+      offset += (kItemsPerTile * gridDim.x) * ((stage + 1) % 2);
+      if (offset + kItemsPerTile <= n_elements_) {
+        load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
+        load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage]);
+      }
+      flip_stage();
+      pipe.producer_commit();
     }
+
     ProcessPartialTileShared(offset, fn);
 
     // Write shared memory back to global memory
