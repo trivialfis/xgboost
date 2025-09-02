@@ -14,6 +14,7 @@
 
 #ifdef __CUDACC__
 #include "device_helpers.cuh"
+#include <cuda/pipeline>
 #endif  // __CUDACC__
 
 namespace xgboost::common {
@@ -208,6 +209,28 @@ class CompressedIterator {
     uint64_t mask = (static_cast<uint64_t>(1) << symbol_bits_) - 1;
     return static_cast<T>(tmp & mask);
   }
+#if defined(__CUDACC__) || defined(__clang__)
+  XGBOOST_DEVICE void LoadBuf(std::size_t idx, CompressedByteT *buf,
+                              cuda::pipeline<cuda::thread_scope_thread> &pipe) const {
+    const int bits_per_byte = 8;
+    size_t start_bit_idx = ((idx + 1) * symbol_bits_ - 1);
+    size_t start_byte_idx = start_bit_idx / bits_per_byte;
+    start_byte_idx += detail::kPadding;
+    cuda::memcpy_async(buf, &buffer_[start_byte_idx - 4], 5, pipe);
+  }
+
+  XGBOOST_DEVICE reference ReadBuf(std::size_t idx, CompressedByteT const *buf) const {
+    const int bits_per_byte = 8;
+    uint64_t tmp = static_cast<uint64_t>(buf[0]) << 32 | static_cast<uint64_t>(buf[1]) << 24 |
+                   static_cast<uint64_t>(buf[2]) << 16 | static_cast<uint64_t>(buf[3]) << 8 |
+                   buf[4];
+    int bit_shift = (bits_per_byte - ((idx + 1) * symbol_bits_)) % bits_per_byte;
+    tmp >>= bit_shift;
+    // Mask off unneeded bits
+    uint64_t mask = (static_cast<uint64_t>(1) << symbol_bits_) - 1;
+    return static_cast<T>(tmp & mask);
+  }
+#endif  // defined(__CUDACC__)
 
   XGBOOST_DEVICE reference operator[](size_t idx) const {
     self_type offset = (*this);
@@ -321,5 +344,13 @@ class DoubleCompressedIter {
     offset.offset_ += idx;
     return *offset;
   }
+
+#if defined(__CUDACC__) || defined(__clang__)
+  XGBOOST_DEVICE void LoadBuf(std::size_t, CompressedByteT *,
+                              cuda::pipeline<cuda::thread_scope_thread> &) const {}
+  XGBOOST_DEVICE reference ReadBuf(std::size_t, CompressedByteT *) const {
+    return 0;
+  }
+#endif
 };
 }  // namespace xgboost::common
