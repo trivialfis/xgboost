@@ -127,6 +127,8 @@ class HistogramAgent {
       }
     };
     auto stage_buf = reinterpret_cast<unsigned char*>(smem_arr_);  // fixme: type
+
+    constexpr int kBufSize = 5;
     auto load_gidx = [&, this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
                                bst_bin_t(&gidx)[kStageSize], int stage) {
 #pragma unroll
@@ -134,7 +136,6 @@ class HistogramAgent {
         auto fidx = FeatIdx(group_, idx[i], feature_stride_);
         auto itidx = IterIdx(matrix_, ridx[i], fidx);
 
-        constexpr int kBufSize = 5;
         auto shmem_beg_idx = kBlockThreads * i + (threadIdx.x * kBufSize);
         shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
 
@@ -152,22 +153,47 @@ class HistogramAgent {
       }
     };
 
-    auto write_gidx = [this, fn](bst_bin_t(&gidx)[kStageSize], GradientPair(&gpair)[kStageSize],
-                                 int stage) {
+    auto write_gidx = [this, fn, stage_buf](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
+                                            bst_bin_t(&gidx)[kStageSize],
+                                            GradientPair(&gpair)[kStageSize], int stage) {
 #pragma unroll
-      for (int i = 0; i < kItemsPerThread; i++) {
+      for (int i = 0; i < kStageSize; i++) {
         // Avoid atomic add if it's a null value.
         if (kDense || gidx[i] != -1) {
           auto adjusted = rounding_.ToFixedPoint(gpair[i]);
+
+          auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+          auto itidx = IterIdx(matrix_, ridx[i], fidx);
+
+          auto shmem_beg_idx = kBlockThreads * i + (threadIdx.x * kBufSize);
+          shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
+
+          bst_bin_t ngidx = matrix_.gidx_iter.ReadBuf(itidx, stage_buf + shmem_beg_idx);
+          if (kDense || ngidx != matrix_.NullValue()) {
+            if constexpr (kCompressed) {
+              ngidx += matrix_.feature_segments[fidx];
+            }
+          } else {
+            // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+            // result might equal to the `NullValue`.
+            ngidx = -1;
+          }
+          if (ngidx != gidx[i]) {
+            printf("i:%d, ngidx: %d, gidx: %d\n", i, ngidx, gidx[i]);
+          }
+          SPAN_CHECK(ngidx == gidx[i]);
+
           // AtomicAddGpairShared
-          fn(gidx[i] - group_.start_bin, adjusted);
+          fn(ngidx - group_.start_bin, adjusted);
         }
       }
     };
 
     auto stage = 0;
 
-    auto flip_stage = [&] {stage = (stage + 1) % kStages; };
+    auto flip_stage = [&] {
+      stage = (stage + 1) % kStages;
+    };
 
     pipe.producer_acquire();
     if (offset + kItemsPerTile <= n_elements_) {
@@ -190,7 +216,7 @@ class HistogramAgent {
     while (offset + kItemsPerTile <= n_elements_) {
       // Consume
       cuda::pipeline_consumer_wait_prior<1>(pipe);
-      write_gidx(gidx_s[stage], gpair_s[stage], stage);
+      write_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], gpair_s[stage], stage);
       pipe.consumer_release();
 
       // Re-fill
