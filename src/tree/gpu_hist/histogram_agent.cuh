@@ -136,10 +136,10 @@ class HistogramAgent {
         auto fidx = FeatIdx(group_, idx[i], feature_stride_);
         auto itidx = IterIdx(matrix_, ridx[i], fidx);
 
-        auto shmem_beg_idx = kBlockThreads * i + (threadIdx.x * kBufSize);
+        auto shmem_beg_idx = kBlockThreads * i * kBufSize + (threadIdx.x * kBufSize);
         shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
-
         matrix_.gidx_iter.LoadBuf(itidx, stage_buf + shmem_beg_idx, pipe);
+
         gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
         if (kDense || gidx[i] != matrix_.NullValue()) {
           if constexpr (kCompressed) {
@@ -159,32 +159,31 @@ class HistogramAgent {
 #pragma unroll
       for (int i = 0; i < kStageSize; i++) {
         // Avoid atomic add if it's a null value.
-        if (kDense || gidx[i] != -1) {
+        auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+        auto itidx = IterIdx(matrix_, ridx[i], fidx);
+        auto shmem_beg_idx = kBlockThreads * i * kBufSize + (threadIdx.x * kBufSize);
+        shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
+
+        bst_bin_t ngidx = matrix_.gidx_iter.ReadBuf(itidx, stage_buf + shmem_beg_idx);
+        bst_bin_t kidx = matrix_.gidx_iter[itidx];
+        SPAN_CHECK(kidx == ngidx);
+        if (kDense || ngidx != matrix_.NullValue()) {
+          if constexpr (kCompressed) {
+            ngidx += matrix_.feature_segments[fidx];
+          }
+        } else {
+          // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+          // result might equal to the `NullValue`.
+          ngidx = -1;
+          SPAN_CHECK(false);
+        }
+        SPAN_CHECK(ngidx == gidx[i]);
+        // kDense || gidx[i] != -1
+        if (kDense || ngidx != -1) {
           auto adjusted = rounding_.ToFixedPoint(gpair[i]);
 
-          auto fidx = FeatIdx(group_, idx[i], feature_stride_);
-          auto itidx = IterIdx(matrix_, ridx[i], fidx);
-
-          auto shmem_beg_idx = kBlockThreads * i + (threadIdx.x * kBufSize);
-          shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
-
-          bst_bin_t ngidx = matrix_.gidx_iter.ReadBuf(itidx, stage_buf + shmem_beg_idx);
-          if (kDense || ngidx != matrix_.NullValue()) {
-            if constexpr (kCompressed) {
-              ngidx += matrix_.feature_segments[fidx];
-            }
-          } else {
-            // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
-            // result might equal to the `NullValue`.
-            ngidx = -1;
-          }
-          if (ngidx != gidx[i]) {
-            printf("i:%d, ngidx: %d, gidx: %d\n", i, ngidx, gidx[i]);
-          }
-          SPAN_CHECK(ngidx == gidx[i]);
-
           // AtomicAddGpairShared
-          fn(ngidx - group_.start_bin, adjusted);
+          fn(gidx[i] - group_.start_bin, adjusted);
         }
       }
     };

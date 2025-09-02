@@ -18,10 +18,16 @@ __global__ void TestWriteBack(Accessor acc, FeatureGroupsAccessor groups,
   const FeatureGroup group = groups[blockIdx.y];
   HistogramAgent<common::GetValueT<decltype(acc)>, true, true, 1024, 8> agent{
       reinterpret_cast<GradientPairInt64*>(smem), nullptr, group, acc, d_ridx, rounding, d_gpair};
-  agent.BuildHistogramWithShared([&](bst_bin_t dst, auto adjusted) { atomicAdd(&d_out[dst], 1); },
-                                 [](auto, auto) {
+  agent.BuildHistogramWithShared(
+      [&](bst_bin_t dst, auto adjusted) {
+        if (threadIdx.x == 0) {
+          printf("dst: %d\n", int(dst));
+        }
+        atomicAdd(&d_out[dst], 1);
+      },
+      [](auto, auto) {
 
-                                 });
+      });
 }
 
 void TestHistAgentLoad() {
