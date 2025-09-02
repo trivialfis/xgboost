@@ -11,6 +11,7 @@
 #include "../../common/device_helpers.cuh"
 #include "../../data/ellpack_page.cuh"
 #include "histogram.cuh"
+#include "histogram_agent.cuh"
 #include "row_partitioner.cuh"
 #include "xgboost/base.h"
 
