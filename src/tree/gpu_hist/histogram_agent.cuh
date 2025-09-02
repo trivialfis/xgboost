@@ -94,46 +94,6 @@ class HistogramAgent {
   // Instruction level parallelism by loop unrolling
   // Allows the kernel to pipeline many operations while waiting for global memory
   // Increases the throughput of this kernel significantly
-  template <typename Fn>
-  __device__ void ProcessFullTileShared(std::size_t offset, Fn&& fn) {
-    std::size_t idx[kItemsPerThread];
-    Idx ridx[kItemsPerThread];
-    bst_bin_t gidx[kItemsPerThread];
-    GradientPair gpair[kItemsPerThread];
-#pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      idx[i] = offset + i * kBlockThreads + threadIdx.x;
-    }
-#pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      ridx[i] = d_ridx_[idx[i] / feature_stride_];
-    }
-#pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      gpair[i] = d_gpair_[ridx[i]];
-      auto fidx = FeatIdx(group_, idx[i], feature_stride_);
-      gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
-      if (kDense || gidx[i] != matrix_.NullValue()) {
-        if constexpr (kCompressed) {
-          gidx[i] += matrix_.feature_segments[fidx];
-        }
-      } else {
-        // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
-        // result might equal to the `NullValue`.
-        gidx[i] = -1;
-      }
-    }
-#pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
-      // Avoid atomic add if it's a null value.
-      if (kDense || gidx[i] != -1) {
-        auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        // AtomicAddGpairShared
-        fn(gidx[i] - group_.start_bin, adjusted);
-      }
-    }
-  }
-
   template <typename Fn, typename Gfn>
   __device__ void BuildHistogramWithShared(Fn&& fn, Gfn&& gfn) {
     dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
