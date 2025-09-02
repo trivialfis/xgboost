@@ -213,6 +213,9 @@ class HistogramAgent {
     flip_stage();  // s -> 0
 
     while (offset + kItemsPerTile <= n_elements_) {
+      if (threadIdx.x == 0) {
+        printf("off: %d\n", int(offset));
+      }
       // Consume
       cuda::pipeline_consumer_wait_prior<1>(pipe);
       write_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], gpair_s[stage], stage);
