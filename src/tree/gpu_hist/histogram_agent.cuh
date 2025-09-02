@@ -1,6 +1,8 @@
 /**
  * Copyright 2020-2025, XGBoost Contributors
  */
+#include <cuda/pipeline>
+
 #include "feature_groups.cuh"
 #include "quantiser.cuh"
 #include "row_partitioner.cuh"
@@ -138,7 +140,76 @@ class HistogramAgent {
     __syncthreads();
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
+
+    cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+
+    constexpr int kStages = 2;
+    int constexpr kStageSize = kItemsPerThread / kStages;
+    std::size_t idx_s[kStages][kStageSize];
+    Idx ridx_s[kStages][kStageSize];
+    GradientPair gpair_s[kStages][kStageSize];
+    bst_bin_t gidx_s[kStages][kStageSize];
+
+    auto load = [offset, this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
+                               GradientPair(&gpair)[kStageSize], int stage) {
+#pragma unroll
+      for (int i = 0; i < kStageSize; i++) {
+        auto k = stage * kStageSize + i;
+        idx[i] = offset + k * kBlockThreads + threadIdx.x;
+      }
+#pragma unroll
+      for (int i = 0; i < kStageSize; i++) {
+        ridx[i] = d_ridx_[idx[i] / feature_stride_];
+      }
+#pragma unroll
+      for (int i = 0; i < kStageSize; i++) {
+        gpair[i] = d_gpair_[ridx[i]];
+      }
+    };
+
+    auto load_gidx = [this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
+                            bst_bin_t(&gidx)[kStageSize]) {
+#pragma unroll
+      for (int i = 0; i < kStageSize; i++) {
+        auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+        gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
+        if (kDense || gidx[i] != matrix_.NullValue()) {
+          if constexpr (kCompressed) {
+            gidx[i] += matrix_.feature_segments[fidx];
+          }
+        } else {
+          // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+          // result might equal to the `NullValue`.
+          gidx[i] = -1;
+        }
+      }
+    };
+
+    auto stage = 0;
+
+    auto flip_stage = [&] {stage = (stage + 1) % kStages; };
+
+    pipe.producer_acquire();
+    if (offset + kItemsPerTile <= n_elements_) {
+      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage);
+      load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage]);
+    }
+    pipe.producer_commit();
+
+    flip_stage();
+
+    pipe.producer_acquire();
+    if (offset + kItemsPerTile <= n_elements_) {
+      load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage);
+      load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage]);
+    }
+    pipe.producer_commit();
+
+    flip_stage();
+
     while (offset + kItemsPerTile <= n_elements_) {
+      cuda::pipeline_consumer_wait_prior<1>(pipe);
+
       ProcessFullTileShared(offset, fn);
       offset += kItemsPerTile * gridDim.x;
     }
