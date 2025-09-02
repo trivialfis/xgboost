@@ -211,6 +211,7 @@ class HistogramAgent {
     pipe.producer_commit();
 
     flip_stage();  // s -> 0
+    SPAN_CHECK(stage == 0);
 
     while (offset + kItemsPerTile <= n_elements_) {
       if (threadIdx.x == 0) {
@@ -223,7 +224,12 @@ class HistogramAgent {
 
       // Re-fill
       pipe.producer_acquire();
+      // fixme: offset increased here, which prevents the next iteration for the other
+      // half of the stage.
       offset += (kItemsPerTile * gridDim.x) * ((stage + 1) % 2);
+      if (threadIdx.x == 0) {
+        printf("offset:%d, n:%d\n", int(offset), int(n_elements_));
+      }
       if (offset + kItemsPerTile <= n_elements_) {
         load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
         load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], stage);
