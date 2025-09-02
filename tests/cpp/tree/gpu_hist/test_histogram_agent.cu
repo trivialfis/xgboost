@@ -55,7 +55,7 @@ void TestHistAgentLoad() {
     constexpr int kBlockThreads = 1024;
     using Accessor = common::GetValueT<decltype(acc)>;
     auto d_groups = groups.DeviceAccessor(ctx.Device());
-    auto smem_size = d_groups.ShmemSize();
+    auto smem_size = max_shmem;  // fixme: actual size
     auto kernel = TestWriteBack<Accessor>;
     dh::safe_cuda(
         cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, max_shmem));

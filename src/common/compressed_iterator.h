@@ -216,6 +216,7 @@ class CompressedIterator {
     size_t start_bit_idx = ((idx + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
     start_byte_idx += detail::kPadding;
+    // fixme: bank conflict
     cuda::memcpy_async(buf, &buffer_[start_byte_idx - 4], 5, pipe);
   }
 
