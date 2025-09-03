@@ -46,7 +46,7 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
       auto k = stage * kStageSize + i;
       auto idx = offset + k * kBlockThreads + threadIdx.x;
 
-      cuda::memcpy_async(out + idx, stage_mem + shmem_beg_idx, kItemSize, pipe);
+      cuda::std::memcpy(out + idx, stage_mem + shmem_beg_idx, kItemSize);
     }
   };
   auto partial_comp = [] {
@@ -99,7 +99,7 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
 }
 
 void TestPrefetch() {
-  std::uint32_t n = 4096 * 4096;
+  std::size_t n = 1024 * 1024 * 1024;
   float *ptr = nullptr, *out = nullptr;
   dh::safe_cuda(cudaMalloc(&ptr, sizeof(float) * n));
   dh::safe_cuda(cudaMalloc(&out, sizeof(float) * n));
@@ -108,7 +108,7 @@ void TestPrefetch() {
                      [=] __device__(std::size_t i) { ptr[i] = i; });
   dim3 const block_dim{kBlockThreads};
   std::size_t shmem = kItemsPerThread * kBlockThreads * sizeof(float);
-  dim3 const grid_dim{xgboost::common::DivRoundUp(n, kBlockThreads)};
+  dim3 const grid_dim{512};
   // ASSERT_EQ(grid_dim.x, 16384);
   TestPrefetchKernel<<<grid_dim, block_dim, shmem>>>(ptr, n, out);
 
