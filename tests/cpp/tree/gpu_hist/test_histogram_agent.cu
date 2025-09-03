@@ -19,6 +19,7 @@ __global__ void TestWriteBack(Accessor acc, FeatureGroupsAccessor groups,
   auto smem_arr = reinterpret_cast<std::int32_t*>(smem + 5 * 1024 * 8);
 
   const FeatureGroup group = groups[blockIdx.y];
+  dh::BlockFill(smem_arr, d_out.size(), 0);
   HistogramAgent<common::GetValueT<decltype(acc)>, true, true, 1024, 8> agent{
       stage_arr, nullptr, group, acc, d_ridx, rounding, d_gpair};
   agent.BuildHistogramWithShared(

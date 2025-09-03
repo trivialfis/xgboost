@@ -291,6 +291,7 @@ __global__ void __launch_bounds__(kBlockThreads)
   auto gfn = [&](bst_bin_t bin_idx, GradientPairInt64 const& adjusted) {
     AtomicAddGpairGlobal(d_node_hist + bin_idx, adjusted);
   };
+  dh::BlockFill(smem_arr, group.num_bins, GradientPairInt64{});
   if (use_shared_memory_histograms) {
     agent.BuildHistogramWithShared(sfn, gfns);
   } else {
