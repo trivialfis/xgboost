@@ -14,10 +14,10 @@ template <typename Accessor>
 __global__ void TestWriteBack(Accessor acc, FeatureGroupsAccessor groups,
                               common::Span<Idx const> d_ridx, GradientQuantiser const& rounding,
                               const GradientPair* d_gpair, common::Span<std::uint32_t> d_out) {
-  extern __shared__ char smem[];
+  extern __shared__ unsigned char smem[];
   const FeatureGroup group = groups[blockIdx.y];
   HistogramAgent<common::GetValueT<decltype(acc)>, true, true, 1024, 8> agent{
-      reinterpret_cast<GradientPairInt64*>(smem), nullptr, group, acc, d_ridx, rounding, d_gpair};
+      smem, nullptr, group, acc, d_ridx, rounding, d_gpair};
   agent.BuildHistogramWithShared([&](bst_bin_t dst, auto adjusted) { atomicAdd(&d_out[dst], 1); },
                                  [](auto, auto) {
 

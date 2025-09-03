@@ -39,6 +39,7 @@ XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
 namespace cuda_impl {
 // Start with about 16mb
 std::size_t constexpr DftReserveSize() { return 1 << 22; }
+std::size_t constexpr ShmemStage() { return 1024 * 8 * 5; }
 }  // namespace cuda_impl
 
 /**

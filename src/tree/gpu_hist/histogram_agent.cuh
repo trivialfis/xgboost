@@ -38,7 +38,7 @@ class HistogramAgent {
 
   int constexpr static kItemsPerTile = kBlockThreads * kItemsPerThread;
 
-  GradientPairInt64* smem_arr_;
+  unsigned char* smem_arr_;
   GradientPairInt64* d_node_hist_;
   using Idx = cuda_impl::RowIndexT;
 
@@ -53,7 +53,7 @@ class HistogramAgent {
   static_assert(kCompressed >= kDense);
 
  public:
-  __device__ HistogramAgent(GradientPairInt64* smem_arr,
+  __device__ HistogramAgent(unsigned char* smem_arr,
                             GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
                             Accessor const& matrix, common::Span<const Idx> d_ridx,
                             const GradientQuantiser& rounding, const GradientPair* d_gpair)
@@ -109,7 +109,7 @@ class HistogramAgent {
   // Increases the throughput of this kernel significantly
   template <typename Fn, typename Gfn>
   __device__ void BuildHistogramWithShared(Fn&& fn, Gfn&& gfn) {
-    dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
+    dh::BlockFill(smem_arr_, 5 * kBlockThreads * kItemsPerThread, 0);
     __syncthreads();
 
     std::size_t offset = blockIdx.x * kItemsPerTile;
@@ -257,7 +257,7 @@ class HistogramAgent {
     // Write shared memory back to global memory
     __syncthreads();
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
-      gfn(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
+      gfn(group_.start_bin + i, i);
     }
   }
 
@@ -272,7 +272,7 @@ class HistogramAgent {
           compressed_bin += this->matrix_.feature_segments[fidx];
         }
         auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
-        gfn(d_node_hist_ + compressed_bin, adjusted);
+        gfn(compressed_bin, adjusted);
       }
     }
   }

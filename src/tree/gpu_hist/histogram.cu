@@ -276,13 +276,25 @@ __global__ void __launch_bounds__(kBlockThreads)
                         GradientQuantiser const rounding) {
   extern __shared__ char smem[];
   const FeatureGroup group = feature_groups[blockIdx.y];
-  auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
-  auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
-      smem_arr, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
+  auto stage_arr = reinterpret_cast<unsigned char*>(smem);
+  auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem + 5 * kBlockThreads * kItemsPerThread);
+  auto agent =
+      cuda_impl::HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
+          stage_arr, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
+  auto sfn = [&](bst_bin_t bin_idx, GradientPairInt64 const& adjusted) {
+    AtomicAddGpairShared(smem_arr + bin_idx, adjusted);
+  };
+  auto gfns = [&](bst_bin_t bin_idx, std::size_t i) {
+    AtomicAddGpairGlobal(d_node_hist + bin_idx, smem_arr[i]);
+  };
+
+  auto gfn = [&](bst_bin_t bin_idx, GradientPairInt64 const& adjusted) {
+    AtomicAddGpairGlobal(d_node_hist + bin_idx, adjusted);
+  };
   if (use_shared_memory_histograms) {
-    agent.BuildHistogramWithShared();
+    agent.BuildHistogramWithShared(sfn, gfns);
   } else {
-    agent.BuildHistogramWithGlobal();
+    agent.BuildHistogramWithGlobal(gfn);
   }
 }
 
@@ -348,9 +360,10 @@ struct HistogramKernel {
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
-    this->smem_size = feature_groups.ShmemSize();
+    this->smem_size = feature_groups.ShmemSize() + cuda_impl::ShmemStage();
     this->shared = !force_global_memory && this->smem_size <= this->max_shared_memory;
     this->smem_size = this->shared ? this->smem_size : 0;
+    CHECK(this->shared) << "this->smem_size:" << this->smem_size << " cuda_impl::DftReserveSize():" << cuda_impl::DftReserveSize();
 
     auto init = [&](auto& kernel, KernelType k) {
       if (this->shared) {
