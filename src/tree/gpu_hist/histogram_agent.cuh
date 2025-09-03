@@ -67,6 +67,19 @@ class HistogramAgent {
         rounding_{rounding},
         d_gpair_{d_gpair} {}
 
+  __device__ void WarpLoad(Idx ridx) {
+    auto land_id = threadIdx.x % 32;
+    using WarpScanT = cub::WarpScan<Idx>;
+    Idx scan_out;
+    static_assert(sizeof(typename WarpScanT::TempStorage) == 1);
+    __shared__ typename WarpScanT::TempStorage temp[kBlockThreads / 32];
+    // static_assert(sizeof(temp) == 0, sizeof(temp));
+    auto warp_id = threadIdx.x / 32;
+    WarpScanT{temp[warp_id]}.InclusiveScan(ridx, scan_out, cuda::maximum<>{});
+    int left_value = __shfl_up_sync(0xFFFFFFFF, scan_out, 1, 32);
+    int head_flag = land_id == 0 || ridx != left_value;
+  }
+
   template <typename Fn>
   __device__ void ProcessPartialTileShared(std::size_t offset, Fn&& fn) {
     for (std::size_t idx = offset + threadIdx.x,
