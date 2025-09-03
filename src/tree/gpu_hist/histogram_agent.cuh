@@ -164,6 +164,12 @@ class HistogramAgent {
         auto shmem_beg_idx = kBlockThreads * i * kBufSize + (threadIdx.x * kBufSize);
         shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
 
+        // Fixme: collect the reads into warp instructions to reduce the shared memory
+        // usage.
+        //
+        // Each warp can read at most `m = ceil(32 / feature_stride) + 1` number of rows,
+        // which results in `(feature_stride + 4) * m` bytes of shared memory usage. This
+        // is a significant improvement over the current `feature_stride * 5 * m`.
         bst_bin_t ngidx = matrix_.gidx_iter.ReadBuf(itidx, stage_buf + shmem_beg_idx);
         bst_bin_t kidx = matrix_.gidx_iter[itidx];
         SPAN_CHECK(kidx == ngidx);
