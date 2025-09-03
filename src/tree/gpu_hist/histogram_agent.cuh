@@ -53,10 +53,10 @@ class HistogramAgent {
   static_assert(kCompressed >= kDense);
 
  public:
-  __device__ HistogramAgent(unsigned char* smem_arr,
-                            GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
-                            Accessor const& matrix, common::Span<const Idx> d_ridx,
-                            const GradientQuantiser& rounding, const GradientPair* d_gpair)
+  __device__ HistogramAgent(unsigned char* smem_arr, GradientPairInt64* __restrict__ d_node_hist,
+                            const FeatureGroup& group, Accessor const& matrix,
+                            common::Span<const Idx> d_ridx, const GradientQuantiser& rounding,
+                            const GradientPair* d_gpair)
       : smem_arr_{smem_arr},
         d_node_hist_{d_node_hist},
         d_ridx_(d_ridx.data()),
@@ -121,7 +121,6 @@ class HistogramAgent {
     std::size_t idx_s[kStages][kStageSize];
     Idx ridx_s[kStages][kStageSize];
     GradientPair gpair_s[kStages][kStageSize];
-    bst_bin_t gidx_s[kStages][kStageSize];
 
     auto load = [this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
                        GradientPair(&gpair)[kStageSize], int stage, std::size_t offset) {
@@ -142,8 +141,7 @@ class HistogramAgent {
     auto stage_buf = reinterpret_cast<unsigned char*>(smem_arr_);  // fixme: type
 
     constexpr int kBufSize = 5;
-    auto load_gidx = [&, this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
-                               bst_bin_t(&gidx)[kStageSize], int stage) {
+    auto load_gidx = [&, this](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize], int stage) {
 #pragma unroll
       for (int i = 0; i < kStageSize; i++) {
         auto fidx = FeatIdx(group_, idx[i], feature_stride_);
@@ -152,22 +150,10 @@ class HistogramAgent {
         auto shmem_beg_idx = kBlockThreads * i * kBufSize + (threadIdx.x * kBufSize);
         shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize * kBufSize;
         matrix_.gidx_iter.LoadBuf(itidx, stage_buf + shmem_beg_idx, pipe);
-
-        gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
-        if (kDense || gidx[i] != matrix_.NullValue()) {
-          if constexpr (kCompressed) {
-            gidx[i] += matrix_.feature_segments[fidx];
-          }
-        } else {
-          // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
-          // result might equal to the `NullValue`.
-          gidx[i] = -1;
-        }
       }
     };
 
     auto write_gidx = [this, fn, stage_buf](std::size_t(&idx)[kStageSize], Idx(&ridx)[kStageSize],
-                                            bst_bin_t(&gidx)[kStageSize],
                                             GradientPair(&gpair)[kStageSize], int stage) {
 #pragma unroll
       for (int i = 0; i < kStageSize; i++) {
@@ -184,8 +170,8 @@ class HistogramAgent {
         // which results in `(feature_stride + 4) * m` bytes of shared memory usage. This
         // is a significant improvement over the current `feature_stride * 5 * m`.
         bst_bin_t ngidx = matrix_.gidx_iter.ReadBuf(itidx, stage_buf + shmem_beg_idx);
-        bst_bin_t kidx = matrix_.gidx_iter[itidx];
-        SPAN_CHECK(kidx == ngidx);
+        // bst_bin_t kidx = matrix_.gidx_iter[itidx];
+        // SPAN_CHECK(kidx == ngidx);
         if (kDense || ngidx != matrix_.NullValue()) {
           if constexpr (kCompressed) {
             ngidx += matrix_.feature_segments[fidx];
@@ -194,15 +180,15 @@ class HistogramAgent {
           // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
           // result might equal to the `NullValue`.
           ngidx = -1;
-          SPAN_CHECK(false);
+          // SPAN_CHECK(false);
         }
-        SPAN_CHECK(ngidx == gidx[i]);
+        // SPAN_CHECK(ngidx == gidx[i]);
         // kDense || gidx[i] != -1
         if (kDense || ngidx != -1) {
           auto adjusted = rounding_.ToFixedPoint(gpair[i]);
 
           // AtomicAddGpairShared
-          fn(gidx[i] - group_.start_bin, adjusted);
+          fn(ngidx - group_.start_bin, adjusted);
         }
       }
     };
@@ -216,7 +202,7 @@ class HistogramAgent {
     pipe.producer_acquire();
     if (offset + kItemsPerTile <= n_elements_) {
       load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
-      load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], stage);
+      load_gidx(idx_s[stage], ridx_s[stage], stage);
     }
     pipe.producer_commit();
 
@@ -225,7 +211,7 @@ class HistogramAgent {
     pipe.producer_acquire();
     if (offset + kItemsPerTile <= n_elements_) {
       load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
-      load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], stage);
+      load_gidx(idx_s[stage], ridx_s[stage], stage);
     }
     pipe.producer_commit();
 
@@ -237,7 +223,7 @@ class HistogramAgent {
     while (c_offset + kItemsPerTile <= n_elements_) {
       // Consume
       cuda::pipeline_consumer_wait_prior<1>(pipe);
-      write_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], gpair_s[stage], stage);
+      write_gidx(idx_s[stage], ridx_s[stage], gpair_s[stage], stage);
       pipe.consumer_release();
 
       // Re-fill
@@ -246,7 +232,7 @@ class HistogramAgent {
       offset += (kItemsPerTile * gridDim.x) * ((stage + 1) % 2);
       if (offset + kItemsPerTile <= n_elements_) {
         load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
-        load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], stage);
+        load_gidx(idx_s[stage], ridx_s[stage], stage);
       }
       flip_stage();
       pipe.producer_commit();
