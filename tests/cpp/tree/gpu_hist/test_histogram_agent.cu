@@ -33,7 +33,8 @@ __global__ void TestWriteBack(Accessor acc, FeatureGroupsAccessor groups,
 
 void TestHistAgentLoad() {
   // Build data
-  bst_idx_t n_samples = 2048, n_features = 4;
+  // bst_idx_t n_samples = 2048, n_features = 4;
+  bst_idx_t n_samples = 4096, n_features = 8;
   bst_bin_t n_bins = 4;
   auto ctx = MakeCUDACtx(0);
   auto p_fmat = RandomDataGenerator{n_samples, n_features, 0.0}
@@ -85,13 +86,13 @@ void TestHistAgentLoad() {
   ctx.CUDACtx()->Stream().Sync();
   // Check the gidx.
   auto const& h_out = out.ConstHostVector();
-  std::vector<std::uint32_t> exp{512, 512, 511, 513, 512, 512, 511, 513,
-                                 512, 512, 511, 513, 512, 512, 511, 513};
-  // std::vector<std::uint32_t> exp{1024, 1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024, 1024,
-  // 1023,
-  //                                1025, 1024, 1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024,
-  //                                1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024, 1024, 1023,
-  //                                1025};
+  // std::vector<std::uint32_t> exp{512, 512, 511, 513, 512, 512, 511, 513,
+  //                                512, 512, 511, 513, 512, 512, 511, 513};
+  std::vector<std::uint32_t> exp{1024, 1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024, 1024,
+  1023,
+                                 1025, 1024, 1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024,
+                                 1024, 1023, 1025, 1024, 1024, 1023, 1025, 1024, 1024, 1023,
+                                 1025};
   ASSERT_EQ(exp, h_out);
 }
 
