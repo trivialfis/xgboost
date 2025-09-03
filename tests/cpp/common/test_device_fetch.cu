@@ -46,7 +46,7 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
       auto k = stage * kStageSize + i;
       auto idx = offset + k * kBlockThreads + threadIdx.x;
 
-      cuda::std::memcpy(out + idx, stage_mem + shmem_beg_idx, kItemSize);
+      out[idx] = stage_mem[shmem_beg_idx];
     }
   };
   auto partial_comp = [] {
