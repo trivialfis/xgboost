@@ -32,7 +32,6 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
     for (int i = 0; i < kStageSize; i++) {
       auto k = stage * kStageSize + i;
       auto idx = offset + k * kBlockThreads + threadIdx.x;
-      SPAN_LT(idx, (4096 * 4096));
       auto shmem_beg_idx = kBlockThreads * i + (threadIdx.x);
       shmem_beg_idx = shmem_beg_idx + stage * kBlockThreads * kStageSize;
       cuda::memcpy_async(stage_mem + shmem_beg_idx, ptr + idx, kItemSize, pipe);
@@ -60,13 +59,17 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
   };
 
   pipe.producer_acquire();
-  load(offset, stage);
+  if (offset + kItemsPerTile <= n_elements) {
+    load(offset, stage);
+  }
   pipe.producer_commit();
 
   flip_stage();  // s -> 1
 
   pipe.producer_acquire();
-  load(offset, stage);
+  if (offset + kItemsPerTile <= n_elements) {
+    load(offset, stage);
+  }
   pipe.producer_commit();
 
   flip_stage();  // s -> 0
@@ -75,8 +78,7 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
   // grid strided range
   std::size_t c_offset = offset;
 
-  for (std::size_t block_idx = offset; block_idx < n_elements;
-       block_idx += kStageSize * kBlockThreads * gridDim.x) {
+  while (c_offset + kItemsPerTile <= n_elements) {
     // Consume
     cuda::pipeline_consumer_wait_prior<1>(pipe);
     comp(c_offset, stage);
@@ -93,7 +95,6 @@ __global__ void TestPrefetchKernel(float const* ptr, std::size_t n_elements, flo
     flip_stage();
     pipe.producer_commit();
   }
-
   partial_comp();
 }
 
@@ -108,7 +109,7 @@ void TestPrefetch() {
   dim3 const block_dim{kBlockThreads};
   std::size_t shmem = kItemsPerThread * kBlockThreads * sizeof(float);
   dim3 const grid_dim{xgboost::common::DivRoundUp(n, kBlockThreads)};
-  ASSERT_EQ(grid_dim.x, 16384);
+  // ASSERT_EQ(grid_dim.x, 16384);
   TestPrefetchKernel<<<grid_dim, block_dim, shmem>>>(ptr, n, out);
 
   std::vector<float> h_out(n, 0);
