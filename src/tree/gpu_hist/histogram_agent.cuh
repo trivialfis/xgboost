@@ -219,10 +219,9 @@ class HistogramAgent {
     flip_stage();  // s -> 0
     SPAN_CHECK(stage == 0);
 
-    while (offset + kItemsPerTile <= n_elements_) {
-      if (threadIdx.x == 0) {
-        printf("off: %d\n", int(offset));
-      }
+    std::size_t c_offset = offset;
+
+    while (c_offset + kItemsPerTile <= n_elements_) {
       // Consume
       cuda::pipeline_consumer_wait_prior<1>(pipe);
       write_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], gpair_s[stage], stage);
@@ -230,12 +229,8 @@ class HistogramAgent {
 
       // Re-fill
       pipe.producer_acquire();
-      // fixme: offset increased here, which prevents the next iteration for the other
-      // half of the stage.
+      c_offset = offset;
       offset += (kItemsPerTile * gridDim.x) * ((stage + 1) % 2);
-      if (threadIdx.x == 0) {
-        printf("offset:%d, n:%d\n", int(offset), int(n_elements_));
-      }
       if (offset + kItemsPerTile <= n_elements_) {
         load(idx_s[stage], ridx_s[stage], gpair_s[stage], stage, offset);
         load_gidx(idx_s[stage], ridx_s[stage], gidx_s[stage], stage);
