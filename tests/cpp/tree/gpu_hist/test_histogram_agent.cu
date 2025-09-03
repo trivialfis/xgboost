@@ -15,13 +15,20 @@ __global__ void TestWriteBack(Accessor acc, FeatureGroupsAccessor groups,
                               common::Span<Idx const> d_ridx, GradientQuantiser const& rounding,
                               const GradientPair* d_gpair, common::Span<std::uint32_t> d_out) {
   extern __shared__ unsigned char smem[];
+  auto stage_arr = reinterpret_cast<unsigned char*>(smem);
+  auto smem_arr = reinterpret_cast<std::int32_t*>(smem + 5 * 1024 * 8);
+
   const FeatureGroup group = groups[blockIdx.y];
   HistogramAgent<common::GetValueT<decltype(acc)>, true, true, 1024, 8> agent{
-      smem, nullptr, group, acc, d_ridx, rounding, d_gpair};
-  agent.BuildHistogramWithShared([&](bst_bin_t dst, auto adjusted) { atomicAdd(&d_out[dst], 1); },
-                                 [](auto, auto) {
-
-                                 });
+      stage_arr, nullptr, group, acc, d_ridx, rounding, d_gpair};
+  agent.BuildHistogramWithShared(
+      [&](bst_bin_t dst, auto adjusted) {
+        // auto bin_idx = dst - group.start_bin;
+        atomicAdd(&smem_arr[dst], 1);
+      },
+      [&](auto gi, auto i) {
+        atomicAdd(&d_out[gi], smem_arr[i]);
+      });
 }
 
 void TestHistAgentLoad() {
