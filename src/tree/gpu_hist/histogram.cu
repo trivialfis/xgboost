@@ -172,17 +172,17 @@ class HistogramAgent {
 
   // swizzle segment
   static constexpr int kBanks = 32;
-  // bin_idx is bin_idx inside the group
-  __device__ std::uint32_t* ShmemFstAddr(bst_bin_t bin_idx) const {
+
+  __device__ std::uint32_t* ShmemFstAddr(bst_bin_t bin_idx_in_feat_grp) const {
     // The number of words taken by a single bin.
     constexpr std::int32_t kWordsOfGrad = sizeof(GradientPairInt64) / sizeof(std::int32_t);
     static_assert(kWordsOfGrad == 4);
     // The size of each segument in words.
     constexpr std::int32_t kSegSize = kBanks * kWordsOfGrad;
     // The segment index of the current bin.
-    std::int32_t seg_idx = bin_idx / kBanks;
+    std::int32_t seg_idx = bin_idx_in_feat_grp / kBanks;
     // Bin index within a segment.
-    std::int32_t bin_in_seg = bin_idx % kBanks;
+    std::int32_t bin_in_seg = bin_idx_in_feat_grp % kBanks;
     // The starting word address of the current segment.
     std::int32_t seg_st_addr = seg_idx * kSegSize;
 
@@ -298,18 +298,18 @@ class HistogramAgent {
     __syncthreads();
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
       auto src_ptr = this->ShmemFstAddr(i);
-      auto gl = src_ptr[0];
-      auto gh = src_ptr[kBanks];
-      auto hl = src_ptr[kBanks * 2];
-      auto hh = src_ptr[kBanks * 3];
 
       std::int64_t g;
       auto g_ptr = reinterpret_cast<std::uint32_t*>(&g);
+      auto gl = src_ptr[0];
+      auto gh = src_ptr[kBanks];
       g_ptr[0] = gl;
       g_ptr[1] = gh;
 
       std::int64_t h;
       auto h_ptr = reinterpret_cast<std::uint32_t*>(&h);
+      auto hl = src_ptr[kBanks * 2];
+      auto hh = src_ptr[kBanks * 3];
       h_ptr[0] = hl;
       h_ptr[1] = hh;
 
