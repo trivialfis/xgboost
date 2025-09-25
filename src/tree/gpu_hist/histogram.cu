@@ -170,6 +170,38 @@ class HistogramAgent {
         rounding_{rounding},
         d_gpair_{d_gpair} {}
 
+  // swizzle segment
+  static constexpr int kBanks = 32;
+  // bin_idx is bin_idx inside the group
+  __device__ std::uint32_t* ShmemFstAddr(bst_bin_t bin_idx) const {
+    // 4
+    constexpr std::int32_t kWordsOfGrad = sizeof(GradientPairInt64) / sizeof(std::int32_t);
+    // The size of each segument
+    constexpr std::int32_t kSegSize = kBanks * kWordsOfGrad;
+    // The segment index of the current bin
+    std::int32_t seg_idx = bin_idx / kBanks;
+    // The starting word address of the current segment.
+    std::int32_t seg_st_addr = seg_idx * kSegSize;
+
+    auto dst_ptr = reinterpret_cast<std::uint32_t*>(smem_arr_) + seg_st_addr + bin_idx;
+    return dst_ptr;
+  }
+
+  __device__ void Add64as32(std::uint32_t* dst, std::int64_t src) {
+    std::uint32_t* y_low = dst;
+    std::uint32_t* y_high = y_low + kBanks;
+
+    auto cast_src = reinterpret_cast<uint64_t*>(&src);
+
+    std::uint32_t const x_low = static_cast<uint32_t>(src);
+    std::uint32_t const x_high = (*cast_src) >> 32;
+
+    auto const old = atomicAdd(y_low, x_low);
+    std::uint32_t const carry = old > (std::numeric_limits<uint32_t>::max() - x_low) ? 1 : 0;
+    std::uint32_t const sig = x_high + carry;
+    atomicAdd(y_high, sig);
+  };
+
   __device__ void ProcessPartialTileShared(std::size_t offset) {
     for (std::size_t idx = offset + threadIdx.x,
                      n = std::min(offset + kBlockThreads * kItemsPerTile, n_elements_);
@@ -184,9 +216,17 @@ class HistogramAgent {
         }
         // Avoid atomic add if it's a null value.
         auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
+
         // Subtract start_bin to write to group-local histogram. If this is not a dense
         // matrix, then start_bin is 0 since featuregrouping doesn't support sparse data.
-        AtomicAddGpairShared(smem_arr_ + compressed_bin - group_.start_bin, adjusted);
+        auto bin_idx = compressed_bin - group_.start_bin;
+
+        auto dst_ptr = this->ShmemFstAddr(bin_idx);
+
+        auto g = adjusted.GetQuantisedGrad();
+        Add64as32(dst_ptr, g);
+        auto h = adjusted.GetQuantisedHess();
+        Add64as32(dst_ptr + 2 * kBanks, h);
       }
     }
   }
@@ -227,7 +267,16 @@ class HistogramAgent {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, adjusted);
+
+        auto bin_idx = gidx[i] - group_.start_bin;
+        auto dst_ptr = this->ShmemFstAddr(bin_idx);
+
+        auto g = adjusted.GetQuantisedGrad();
+        Add64as32(dst_ptr, g);
+        auto h = adjusted.GetQuantisedHess();
+        Add64as32(dst_ptr + 2 * kBanks, h);
+
+        // AtomicAddGpairShared(smem_arr_ + bin_idx, adjusted);
       }
     }
   }
@@ -245,7 +294,23 @@ class HistogramAgent {
     // Write shared memory back to global memory
     __syncthreads();
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
-      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
+      auto src_ptr = this->ShmemFstAddr(i);
+      auto gl = src_ptr[0];
+      auto gh = src_ptr[kBanks];
+      auto hl = src_ptr[kBanks * 2];
+      auto hh = src_ptr[kBanks * 3];
+
+      std::int64_t g;
+      auto g_ptr = reinterpret_cast<std::uint32_t*>(&g);
+      g_ptr[0] = gl;
+      g_ptr[1] = gh;
+
+      std::int64_t h;
+      auto h_ptr = reinterpret_cast<std::uint32_t*>(&h);
+      h_ptr[0] = hl;
+      h_ptr[1] = hh;
+
+      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, GradientPairInt64{g, h});
     }
   }
 
@@ -423,6 +488,7 @@ class DeviceHistogramDispatchAccessor {
     };
 
     using K = HistogramKernel<EllpackDeviceAccessor>::KernelType;
+    CHECK(this->kernel_->shared);
     if (!this->kernel_->shared) {  // Use global memory
       CHECK_EQ(this->kernel_->smem_size, 0);
       if (matrix.IsDense()) {
