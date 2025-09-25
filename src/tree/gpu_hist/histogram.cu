@@ -174,16 +174,19 @@ class HistogramAgent {
   static constexpr int kBanks = 32;
   // bin_idx is bin_idx inside the group
   __device__ std::uint32_t* ShmemFstAddr(bst_bin_t bin_idx) const {
-    // 4
+    // The number of words taken by a single bin.
     constexpr std::int32_t kWordsOfGrad = sizeof(GradientPairInt64) / sizeof(std::int32_t);
-    // The size of each segument
+    static_assert(kWordsOfGrad == 4);
+    // The size of each segument in words.
     constexpr std::int32_t kSegSize = kBanks * kWordsOfGrad;
-    // The segment index of the current bin
+    // The segment index of the current bin.
     std::int32_t seg_idx = bin_idx / kBanks;
+    // Bin index within a segment.
+    std::int32_t bin_in_seg = bin_idx % kBanks;
     // The starting word address of the current segment.
     std::int32_t seg_st_addr = seg_idx * kSegSize;
 
-    auto dst_ptr = reinterpret_cast<std::uint32_t*>(smem_arr_) + seg_st_addr + bin_idx;
+    auto dst_ptr = reinterpret_cast<std::uint32_t*>(smem_arr_) + seg_st_addr + bin_in_seg;
     return dst_ptr;
   }
 
