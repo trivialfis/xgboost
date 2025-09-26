@@ -278,8 +278,6 @@ class HistogramAgent {
         Add64as32(dst_ptr, g);
         auto h = adjusted.GetQuantisedHess();
         Add64as32(dst_ptr + 2 * kBanks, h);
-
-        // AtomicAddGpairShared(smem_arr_ + bin_idx, adjusted);
       }
     }
   }
@@ -298,22 +296,18 @@ class HistogramAgent {
     __syncthreads();
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
       auto src_ptr = this->ShmemFstAddr(i);
+      auto dst_ptr = reinterpret_cast<std::uint64_t*>(d_node_hist_ + group_.start_bin + i);
 
-      std::int64_t g;
+      std::int64_t g[2];
       auto g_ptr = reinterpret_cast<std::uint32_t*>(&g);
-      auto gl = src_ptr[0];
-      auto gh = src_ptr[kBanks];
-      g_ptr[0] = gl;
-      g_ptr[1] = gh;
-
-      std::int64_t h;
-      auto h_ptr = reinterpret_cast<std::uint32_t*>(&h);
-      auto hl = src_ptr[kBanks * 2];
-      auto hh = src_ptr[kBanks * 3];
-      h_ptr[0] = hl;
-      h_ptr[1] = hh;
-
-      AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, GradientPairInt64{g, h});
+#pragma unroll
+      for (int k = 0; k < 4; ++k) {
+        g_ptr[k] = src_ptr[k * kBanks];
+      }
+#pragma unroll
+      for (int k = 0; k < 2; ++k) {
+        atomicAdd(dst_ptr + k, *reinterpret_cast<uint64_t*>(&g[k]));
+      }
     }
   }
 
