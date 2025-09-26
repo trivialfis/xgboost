@@ -153,10 +153,10 @@ inline size_t MaxSharedMemory(int device_idx) {
 
 inline size_t MaxSharedMemoryOptin(int device_idx) {
   int max_shared_memory = 0;
-  dh::safe_cuda(cudaDeviceGetAttribute
-                (&max_shared_memory, cudaDevAttrMaxSharedMemoryPerBlockOptin,
-                 device_idx));
-  return static_cast<std::size_t>(max_shared_memory);
+  dh::safe_cuda(cudaDeviceGetAttribute(&max_shared_memory, cudaDevAttrMaxSharedMemoryPerBlockOptin,
+                                       device_idx));
+  return std::min(max_shared_memory, 128 * 1024);
+  // return static_cast<std::size_t>(max_shared_memory);
 }
 
 XGBOOST_DEV_INLINE void AtomicOrByte(unsigned int *__restrict__ buffer,
