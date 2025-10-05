@@ -338,10 +338,17 @@ MmapResource::~MmapResource() noexcept(false) = default;
 AlignedResourceReadStream::~AlignedResourceReadStream() noexcept(false) {}  // NOLINT
 PrivateMmapConstStream::~PrivateMmapConstStream() noexcept(false) {}        // NOLINT
 
+AlignedFileReadStream::AlignedFileReadStream(StringView path)
+    : PrivateMmapConstStream{path, 0, [path]() {
+                               auto stdpath = std::filesystem::path{path.c_str()};
+                               CHECK(std::filesystem::exists(stdpath)) << error::FileNotFound(path);
+                               return std::filesystem::file_size(stdpath);
+                             }()} {}
+
 std::shared_ptr<MallocResource> MemBufFileReadStream::ReadFileIntoBuffer(StringView path,
                                                                          std::size_t offset,
                                                                          std::size_t length) {
-  CHECK(std::filesystem::exists(path.c_str())) << "`" << path << "` doesn't exist";
+  CHECK(std::filesystem::exists(path.c_str())) << error::FileNotFound(path);
   auto res = std::make_shared<MallocResource>(length);
   auto ptr = res->DataAs<char>();
   std::unique_ptr<FILE, std::function<int(FILE*)>> fp{fopen(path.c_str(), "rb"), fclose};

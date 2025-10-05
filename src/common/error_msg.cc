@@ -94,4 +94,10 @@ void InvalidIntercept(std::int32_t n_classes, bst_target_t n_targets, std::size_
      << dst << ".";
   return ss.str();
 }
+
+[[nodiscard]] std::string FileNotFound(StringView path) {
+  std::stringstream ss;
+  ss << "File not found: `" << path << "`.";
+  return ss.str();
+}
 }  // namespace xgboost::error

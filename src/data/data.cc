@@ -140,13 +140,13 @@ void LoadScalarField(AlignedResourceReadStream* strm, const std::string& expecte
 }
 
 template <typename T>
-void LoadVectorField(dmlc::Stream* strm, const std::string& expected_name,
+void LoadVectorField(AlignedResourceReadStream* strm, const std::string& expected_name,
                      xgboost::DataType expected_type, std::vector<T>* field) {
   const std::string invalid{"MetaInfo: Invalid format for " + expected_name};
   std::string name;
   xgboost::DataType type;
   bool is_scalar;
-  CHECK(strm->Read(&name)) << invalid;
+  CHECK(ReadVec(strm, &name)) << invalid;
   CHECK_EQ(name, expected_name)
     << invalid << " Expected field: " << expected_name << ", got: " << name;
   uint8_t type_val;
@@ -165,24 +165,24 @@ void LoadVectorField(dmlc::Stream* strm, const std::string& expected_name,
   // TODO(hcho3): this restriction may be lifted, once we add a field with more than 1 column.
   CHECK_EQ(shape.second, 1) << invalid << "Number of columns is expected to be 1.";
 
-  CHECK(strm->Read(field)) << invalid;
+  CHECK(ReadVec(strm, field)) << invalid;
 }
 
 template <typename T>
-void LoadVectorField(dmlc::Stream* strm, const std::string& expected_name,
+void LoadVectorField(AlignedResourceReadStream* strm, const std::string& expected_name,
                      xgboost::DataType expected_type,
                      xgboost::HostDeviceVector<T>* field) {
   LoadVectorField(strm, expected_name, expected_type, &field->HostVector());
 }
 
 template <typename T, int32_t D>
-void LoadTensorField(dmlc::Stream* strm, std::string const& expected_name,
+void LoadTensorField(AlignedResourceReadStream* strm, std::string const& expected_name,
                      xgboost::DataType expected_type, xgboost::linalg::Tensor<T, D>* p_out) {
   const std::string invalid{"MetaInfo: Invalid format for " + expected_name};
   std::string name;
   xgboost::DataType type;
   bool is_scalar;
-  CHECK(strm->Read(&name)) << invalid;
+  CHECK(ReadVec(strm, &name)) << invalid;
   CHECK_EQ(name, expected_name) << invalid << " Expected field: " << expected_name
                                 << ", got: " << name;
   uint8_t type_val;
@@ -201,7 +201,7 @@ void LoadTensorField(dmlc::Stream* strm, std::string const& expected_name,
   }
   p_out->Reshape(shape);
   auto& field = p_out->Data()->HostVector();
-  CHECK(strm->Read(&field)) << invalid;
+  CHECK(ReadVec(strm, &field)) << invalid;
 }
 }  // anonymous namespace
 

@@ -145,5 +145,7 @@ constexpr StringView CacheHostRatioInvalid() {
 void InvalidIntercept(std::int32_t n_classes, bst_target_t n_targets, std::size_t intercept_len);
 
 [[nodiscard]] std::string ExtmemQdmMismatch(StringView src, StringView dst);
+
+[[nodiscard]] std::string FileNotFound(StringView path);
 }  // namespace xgboost::error
 #endif  // XGBOOST_COMMON_ERROR_MSG_H_

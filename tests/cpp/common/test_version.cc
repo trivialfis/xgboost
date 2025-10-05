@@ -23,13 +23,13 @@ TEST(Version, Basic) {
   const std::string fname = tempdir.Str() + "/version";
 
   {
-    std::unique_ptr<dmlc::Stream> fo(dmlc::Stream::Create(fname.c_str(), "w"));
+    auto fo = std::make_unique<common::AlignedFileWriteStream>(fname, "w");
     Version::Save(fo.get());
   }
 
   {
-    std::unique_ptr<dmlc::Stream> fi(dmlc::Stream::Create(fname.c_str(), "r"));
-    auto triplet { Version::Load(fi.get())};;
+    auto fi = std::make_unique<common::AlignedFileReadStream>(fname);
+    auto triplet{Version::Load(fi.get())};
     ASSERT_TRUE(Version::Same(triplet));
   }
 

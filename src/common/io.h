@@ -520,6 +520,16 @@ class PrivateMmapConstStream : public AlignedResourceReadStream {
 };
 
 /**
+ * @brief A wrapper around the mmap stream for reading the full file.
+ */
+class AlignedFileReadStream : public PrivateMmapConstStream {
+  std::unique_ptr<dmlc::Stream> pimpl_;
+
+ public:
+  explicit AlignedFileReadStream(StringView path);
+};
+
+/**
  * @brief Read a portion of a file into a memory buffer. This class helps integration with
  *        external memory file format.
  */
