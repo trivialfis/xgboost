@@ -87,4 +87,11 @@ void InvalidIntercept(std::int32_t n_classes, bst_target_t n_targets, std::size_
   }
   LOG(FATAL) << ss.str();
 }
+
+[[nodiscard]] std::string ExtmemQdmMismatch(StringView src, StringView dst) {
+  std::stringstream ss;
+  ss << "The `ExtMemQuantileDMatrix` is initialized using " << src << " data, cannot be used for "
+     << dst << ".";
+  return ss.str();
+}
 }  // namespace xgboost::error

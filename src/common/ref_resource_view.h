@@ -141,7 +141,7 @@ template <typename Vec>
  * @brief Write a vector to stream. Accepts both `std::vector` and `RefResourceView`.
  */
 template <typename Vec>
-[[nodiscard]] std::size_t WriteVec(AlignedFileWriteStream* fo, Vec const& vec) {
+[[nodiscard]] std::size_t WriteVec(AlignedWriteStream* fo, Vec const& vec) {
   std::size_t bytes{0};
   auto n = static_cast<std::uint64_t>(vec.size());
   bytes += fo->Write(n);

@@ -7,9 +7,6 @@
 #ifndef XGBOOST_DATA_H_
 #define XGBOOST_DATA_H_
 
-#include <dmlc/base.h>
-#include <dmlc/io.h>          // for Stream
-#include <dmlc/serializer.h>  // for Handler
 #include <xgboost/base.h>
 #include <xgboost/host_device_vector.h>
 #include <xgboost/linalg.h>
@@ -28,6 +25,11 @@ namespace xgboost {
 // forward declare dmatrix.
 class DMatrix;
 struct Context;
+
+namespace common {
+class AlignedResourceReadStream;
+class AlignedWriteStream;
+}  // namespace common
 
 /*! \brief data type accepted by xgboost interface */
 enum class DataType : uint8_t {
@@ -128,28 +130,28 @@ class MetaInfo {
    * @brief Whether the matrix is dense.
    */
   bool IsDense() const { return num_col_ * num_row_ == num_nonzero_; }
-  /*!
-   * \brief Get weight of each instances.
-   * \param i Instance index.
-   * \return The weight.
+  /**
+   * @brief Get weight of each instances.
+   * @param i Instance index.
+   * @return The weight.
    */
-  inline bst_float GetWeight(size_t i) const {
+  float GetWeight(size_t i) const {
     return weights_.Size() != 0 ?  weights_.HostVector()[i] : 1.0f;
   }
   /*! \brief get sorted indexes (argsort) of labels by absolute value (used by cox loss) */
   const std::vector<size_t>& LabelAbsSort(Context const* ctx) const;
   /*! \brief clear all the information */
   void Clear();
-  /*!
-   * \brief Load the Meta info from binary stream.
-   * \param fi The input stream
+  /**
+   * @brief Load the Meta info from binary stream.
+   * @param fi The input stream
    */
-  void LoadBinary(dmlc::Stream* fi);
-  /*!
-   * \brief Save the Meta info to binary stream
-   * \param fo The output stream.
+  void LoadBinary(common::AlignedResourceReadStream* fi);
+  /**
+   * @brief Save the Meta info to binary stream
+   * @param fo The output stream.
    */
-  void SaveBinary(dmlc::Stream* fo) const;
+  void SaveBinary(common::AlignedWriteStream* fo) const;
   /*!
    * \brief Set information in the meta info with array interface.
    * \param key The key of the information.
@@ -790,24 +792,4 @@ inline BatchSet<ExtSparsePage> DMatrix::GetBatches(Context const* ctx, BatchPara
 }  // namespace xgboost
 
 DECLARE_FIELD_ENUM_CLASS(xgboost::DataSplitMode);
-
-namespace dmlc {
-DMLC_DECLARE_TRAITS(is_pod, xgboost::Entry, true);
-
-namespace serializer {
-
-template <>
-struct Handler<xgboost::Entry> {
-  inline static void Write(Stream* strm, const xgboost::Entry& data) {
-    strm->Write(data.index);
-    strm->Write(data.fvalue);
-  }
-
-  inline static bool Read(Stream* strm, xgboost::Entry* data) {
-    return strm->Read(&data->index) && strm->Read(&data->fvalue);
-  }
-};
-
-}  // namespace serializer
-}  // namespace dmlc
 #endif  // XGBOOST_DATA_H_

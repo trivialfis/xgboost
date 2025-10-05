@@ -67,67 +67,76 @@ DMLC_REGISTRY_ENABLE(::xgboost::data::SparsePageFormatReg<::xgboost::GHistIndexM
 }  // namespace dmlc
 
 namespace {
+using xgboost::common::AlignedWriteStream;
+using xgboost::common::ReadVec;
+using xgboost::common::AlignedResourceReadStream;
 
 template <typename T>
-void SaveScalarField(dmlc::Stream *strm, const std::string &name,
-                     xgboost::DataType type, const T &field) {
-  strm->Write(name);
-  strm->Write(static_cast<uint8_t>(type));
-  strm->Write(true);  // is_scalar=True
-  strm->Write(field);
+std::size_t SaveScalarField(AlignedWriteStream* strm, const std::string& name,
+                            xgboost::DataType type, const T& field) {
+  std::size_t n_bytes = 0;
+  n_bytes += xgboost::common::WriteVec(strm, name);
+  n_bytes += strm->Write(static_cast<uint8_t>(type));
+  n_bytes += strm->Write(true);  // is_scalar=True
+  n_bytes += strm->Write(field);
+  return n_bytes;
 }
 
 template <typename T>
-void SaveVectorField(dmlc::Stream *strm, const std::string &name,
-                     xgboost::DataType type, std::pair<uint64_t, uint64_t> shape,
-                     const std::vector<T>& field) {
-  strm->Write(name);
-  strm->Write(static_cast<uint8_t>(type));
-  strm->Write(false);  // is_scalar=False
-  strm->Write(shape.first);
-  strm->Write(shape.second);
-  strm->Write(field);
+std::size_t SaveVectorField(AlignedWriteStream* strm, const std::string& name,
+                            xgboost::DataType type, std::pair<uint64_t, uint64_t> shape,
+                            const std::vector<T>& field) {
+  std::size_t n_bytes = 0;
+  n_bytes += xgboost::common::WriteVec(strm, name);
+  n_bytes += strm->Write(static_cast<uint8_t>(type));
+  n_bytes += strm->Write(false);  // is_scalar=False
+  n_bytes += strm->Write(shape.first);
+  n_bytes += strm->Write(shape.second);
+  n_bytes += xgboost::common::WriteVec(strm, field);
+  return n_bytes;
 }
 
 template <typename T>
-void SaveVectorField(dmlc::Stream* strm, const std::string& name,
-                     xgboost::DataType type, std::pair<uint64_t, uint64_t> shape,
+void SaveVectorField(AlignedWriteStream* strm, const std::string& name, xgboost::DataType type,
+                     std::pair<uint64_t, uint64_t> shape,
                      const xgboost::HostDeviceVector<T>& field) {
   SaveVectorField(strm, name, type, shape, field.ConstHostVector());
 }
 
 template <typename T, int32_t D>
-void SaveTensorField(dmlc::Stream* strm, const std::string& name, xgboost::DataType type,
-                     const xgboost::linalg::Tensor<T, D>& field) {
-  strm->Write(name);
-  strm->Write(static_cast<uint8_t>(type));
-  strm->Write(false);  // is_scalar=False
+std::size_t SaveTensorField(AlignedWriteStream* strm, const std::string& name,
+                            xgboost::DataType type, xgboost::linalg::Tensor<T, D> const& field) {
+  std::size_t n_bytes;
+  n_bytes += xgboost::common::WriteVec(strm, name);
+  n_bytes += strm->Write(static_cast<uint8_t>(type));
+  n_bytes += strm->Write(false);  // is_scalar=False
   for (size_t i = 0; i < D; ++i) {
-    strm->Write(field.Shape(i));
+    n_bytes += strm->Write(field.Shape(i));
   }
-  strm->Write(field.Data()->HostVector());
+  n_bytes += xgboost::common::WriteVec(strm, field.Data()->HostVector());
+  return n_bytes;
 }
 
 template <typename T>
-void LoadScalarField(dmlc::Stream* strm, const std::string& expected_name,
+void LoadScalarField(AlignedResourceReadStream* strm, const std::string& expected_name,
                      xgboost::DataType expected_type, T* field) {
   const std::string invalid{"MetaInfo: Invalid format for " + expected_name};
   std::string name;
   xgboost::DataType type;
   bool is_scalar;
-  CHECK(strm->Read(&name)) << invalid;
+  CHECK(ReadVec(strm, &name)) << invalid;
   CHECK_EQ(name, expected_name)
       << invalid << " Expected field: " << expected_name << ", got: " << name;
   uint8_t type_val;
-  CHECK(strm->Read(&type_val)) << invalid;
+  CHECK(ReadVec(strm, &type_val)) << invalid;
   type = static_cast<xgboost::DataType>(type_val);
   CHECK(type == expected_type)
       << invalid << "Expected field of type: " << static_cast<int>(expected_type) << ", "
       << "got field type: " << static_cast<int>(type);
-  CHECK(strm->Read(&is_scalar)) << invalid;
+  CHECK(ReadVec(strm, &is_scalar)) << invalid;
   CHECK(is_scalar)
     << invalid << "Expected field " << expected_name << " to be a scalar; got a vector";
-  CHECK(strm->Read(field)) << invalid;
+  CHECK(ReadVec(strm, field)) << invalid;
 }
 
 template <typename T>
@@ -235,9 +244,9 @@ void MetaInfo::Clear() {
  * the former uses the plural form.
  */
 
-void MetaInfo::SaveBinary(dmlc::Stream *fo) const {
-  Version::Save(fo);
-  fo->Write(kNumField);
+void MetaInfo::SaveBinary(common::AlignedWriteStream *fo) const {
+  auto n_bytes = Version::Save(fo);
+  n_bytes += fo->Write(kNumField);
   int field_cnt = 0;  // make sure we are actually writing kNumField fields
 
   SaveScalarField(fo, u8"num_row", DataType::kUInt64, num_row_); ++field_cnt;
@@ -312,7 +321,7 @@ const std::vector<size_t>& MetaInfo::LabelAbsSort(Context const* ctx) const {
   return label_order_cache_;
 }
 
-void MetaInfo::LoadBinary(dmlc::Stream *fi) {
+void MetaInfo::LoadBinary(common::AlignedResourceReadStream *fi) {
   auto version = Version::Load(fi);
   auto major = std::get<0>(version);
   auto minor = std::get<1>(version);

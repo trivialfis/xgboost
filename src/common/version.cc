@@ -34,7 +34,7 @@ Version::TripletT Version::Load(Json const& in) {
   return std::make_tuple(major, minor, patch);
 }
 
-Version::TripletT Version::Load(dmlc::Stream* fi) {
+Version::TripletT Version::Load(common::AlignedResourceReadStream* fi) {
   XGBoostVersionT major{0}, minor{0}, patch{0};
   // This is only used in DMatrix serialization, so doesn't break model compatibility.
   std::string msg { "Incorrect version format found in binary file.  "
@@ -64,14 +64,16 @@ void Version::Save(Json* out) {
                                         Json(Integer{patch})};
 }
 
-void Version::Save(dmlc::Stream* fo) {
+std::size_t Version::Save(common::AlignedWriteStream* fo) {
   XGBoostVersionT major, minor, patch;
   std::tie(major, minor, patch) = Self();
-  std::string verstr { u8"version:" };
-  fo->Write(&verstr[0], verstr.size());
-  fo->Write(major);
-  fo->Write(minor);
-  fo->Write(patch);
+  std::string verstr{u8"version:"};
+  std::size_t n_bytes = 0;
+  n_bytes += fo->Write(verstr.c_str(), verstr.size());
+  n_bytes += fo->Write(major);
+  n_bytes += fo->Write(minor);
+  n_bytes += fo->Write(patch);
+  return n_bytes;
 }
 
 std::string Version::String(TripletT const& version) {
