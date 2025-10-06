@@ -431,15 +431,15 @@ class AlignedResourceReadStream {
  */
 class PeekableInStream {
  public:
-  explicit PeekableInStream(std::unique_ptr<AlignedResourceReadStream> strm)
-      : strm_(std::move(strm)) {}
+  explicit PeekableInStream(AlignedResourceReadStream* strm) : strm_(std::move(strm)) {}
 
-  std::size_t Read(void* dptr, size_t size);
+  virtual std::size_t Read(void* dptr, size_t size);
   virtual size_t PeekRead(void* dptr, size_t size);
+  virtual ~PeekableInStream() = default;
 
  private:
   /*! \brief input stream */
-  std::unique_ptr<AlignedResourceReadStream> strm_;
+  AlignedResourceReadStream* strm_;
   /*! \brief current buffer pointer */
   size_t buffer_ptr_{0};
   /*! \brief internal buffer */
@@ -461,11 +461,6 @@ class FixedSizeStream : public PeekableInStream {
   [[nodiscard]] std::size_t Size() const { return buffer_.size(); }
   [[nodiscard]] std::size_t Tell() const { return pointer_; }
   void Seek(size_t pos);
-
-  std::size_t Write(const void*, size_t) override {
-    LOG(FATAL) << "Not implemented";
-    return 0;
-  }
 
   /*!
    *  \brief Take the buffer from `FixedSizeStream'.  The one in `FixedSizeStream' will be
