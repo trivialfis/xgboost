@@ -1,7 +1,6 @@
 /**
  * Copyright 2019-2025, XGBoost contributors
  */
-#include <dmlc/io.h>
 #include <gtest/gtest.h>
 #include <xgboost/base.h>
 #include <xgboost/json.h>
@@ -9,8 +8,9 @@
 
 #include <string>
 
+#include "../../../src/common/io.h"
 #include "../../../src/common/version.h"
-#include "../filesystem.h"  // dmlc::TemporaryDirectory
+#include "../filesystem.h"  // TemporaryDirectory
 
 namespace xgboost {
 TEST(Version, Basic) {

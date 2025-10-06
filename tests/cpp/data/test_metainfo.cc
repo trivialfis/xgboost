@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "../../../src/common/io.h"
 #include "../collective/test_worker.h"  // for TestDistributedGlobal
 #include "../filesystem.h"              // TemporaryDirectory
 #include "../helpers.h"                 // for GMockTHrow
@@ -159,16 +160,15 @@ TEST(MetaInfo, SaveLoadBinary) {
     std::unique_ptr<dmlc::Stream> fs {
       dmlc::Stream::Create(tmp_file.c_str(), "w")
     };
-    info.SaveBinary(fs.get());
+    auto fo = std::make_unique<common::AlignedFileWriteStream>(tmp_file, "w");
+    info.SaveBinary(fo.get());
   }
 
   {
     // Round-trip test
-    std::unique_ptr<dmlc::Stream> fs {
-      dmlc::Stream::Create(tmp_file.c_str(), "r")
-    };
+    auto fi = std::make_unique<common::AlignedFileReadStream>(tmp_file);
     xgboost::MetaInfo inforead;
-    inforead.LoadBinary(fs.get());
+    inforead.LoadBinary(fi.get());
     ASSERT_EQ(inforead.num_row_, kRows);
     EXPECT_EQ(inforead.num_row_, info.num_row_);
     EXPECT_EQ(inforead.num_col_, info.num_col_);

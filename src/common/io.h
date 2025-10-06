@@ -118,61 +118,6 @@ struct MemoryBufferStream : public dmlc::SeekStream {
   size_t curr_ptr_;
 };  // class MemoryBufferStream
 
-/*!
- * \brief Input stream that support additional PeekRead operation,
- *  besides read.
- */
-class PeekableInStream : public dmlc::Stream {
- public:
-  explicit PeekableInStream(dmlc::Stream* strm) : strm_(strm) {}
-
-  size_t Read(void* dptr, size_t size) override;
-  virtual size_t PeekRead(void* dptr, size_t size);
-
-  std::size_t Write(const void*, size_t) override {
-    LOG(FATAL) << "Not implemented";
-    return 0;
-  }
-
- private:
-  /*! \brief input stream */
-  dmlc::Stream *strm_;
-  /*! \brief current buffer pointer */
-  size_t buffer_ptr_{0};
-  /*! \brief internal buffer */
-  std::string buffer_;
-};
-/*!
- * \brief A simple class used to consume `dmlc::Stream' all at once.
- *
- * With it one can load the rabit checkpoint into a known size string buffer.
- */
-class FixedSizeStream : public PeekableInStream {
- public:
-  explicit FixedSizeStream(PeekableInStream* stream);
-  ~FixedSizeStream() override = default;
-
-  size_t Read(void* dptr, size_t size) override;
-  size_t PeekRead(void* dptr, size_t size) override;
-  [[nodiscard]] std::size_t Size() const { return buffer_.size(); }
-  [[nodiscard]] std::size_t Tell() const { return pointer_; }
-  void Seek(size_t pos);
-
-  std::size_t Write(const void*, size_t) override {
-    LOG(FATAL) << "Not implemented";
-    return 0;
-  }
-
-  /*!
-   *  \brief Take the buffer from `FixedSizeStream'.  The one in `FixedSizeStream' will be
-   *  cleared out.
-   */
-  void Take(std::string* out);
-
- private:
-  size_t pointer_{0};
-  std::string buffer_;
-};
 
 /**
  * @brief Helper function for loading consecutive file.
@@ -192,22 +137,6 @@ std::vector<char> LoadSequentialFile(std::string uri);
  */
 std::string FileExtension(std::string fname, bool lower = true);
 
-/**
- * \brief Read the whole buffer from dmlc stream.
- */
-inline std::string ReadAll(dmlc::Stream* fi, PeekableInStream* fp) {
-  std::string buffer;
-  if (auto fixed_size = dynamic_cast<common::MemoryFixSizeBuffer*>(fi)) {
-    fixed_size->Seek(common::MemoryFixSizeBuffer::kSeekEnd);
-    size_t size = fixed_size->Tell();
-    buffer.resize(size);
-    fixed_size->Seek(0);
-    CHECK_EQ(fixed_size->Read(&buffer[0], size), size);
-  } else {
-    FixedSizeStream{fp}.Take(&buffer);
-  }
-  return buffer;
-}
 
 /**
  * \brief Read the whole file content into a string.
@@ -495,6 +424,76 @@ class AlignedResourceReadStream {
 
   virtual ~AlignedResourceReadStream() noexcept(false);
 };
+
+/*!
+ * \brief Input stream that support additional PeekRead operation,
+ *  besides read.
+ */
+class PeekableInStream {
+ public:
+  explicit PeekableInStream(std::unique_ptr<AlignedResourceReadStream> strm)
+      : strm_(std::move(strm)) {}
+
+  std::size_t Read(void* dptr, size_t size);
+  virtual size_t PeekRead(void* dptr, size_t size);
+
+ private:
+  /*! \brief input stream */
+  std::unique_ptr<AlignedResourceReadStream> strm_;
+  /*! \brief current buffer pointer */
+  size_t buffer_ptr_{0};
+  /*! \brief internal buffer */
+  std::string buffer_;
+};
+
+/*!
+ * \brief A simple class used to consume `dmlc::Stream' all at once.
+ *
+ * With it one can load the rabit checkpoint into a known size string buffer.
+ */
+class FixedSizeStream : public PeekableInStream {
+ public:
+  explicit FixedSizeStream(PeekableInStream* stream);
+  ~FixedSizeStream() override = default;
+
+  size_t Read(void* dptr, size_t size) override;
+  size_t PeekRead(void* dptr, size_t size) override;
+  [[nodiscard]] std::size_t Size() const { return buffer_.size(); }
+  [[nodiscard]] std::size_t Tell() const { return pointer_; }
+  void Seek(size_t pos);
+
+  std::size_t Write(const void*, size_t) override {
+    LOG(FATAL) << "Not implemented";
+    return 0;
+  }
+
+  /*!
+   *  \brief Take the buffer from `FixedSizeStream'.  The one in `FixedSizeStream' will be
+   *  cleared out.
+   */
+  void Take(std::string* out);
+
+ private:
+  size_t pointer_{0};
+  std::string buffer_;
+};
+
+/**
+ * @brief Read the whole buffer from dmlc stream.
+ */
+inline std::string ReadAll(dmlc::Stream* fi, PeekableInStream* fp) {
+  std::string buffer;
+  if (auto fixed_size = dynamic_cast<common::MemoryFixSizeBuffer*>(fi)) {
+    fixed_size->Seek(common::MemoryFixSizeBuffer::kSeekEnd);
+    size_t size = fixed_size->Tell();
+    buffer.resize(size);
+    fixed_size->Seek(0);
+    CHECK_EQ(fixed_size->Read(&buffer[0], size), size);
+  } else {
+    FixedSizeStream{fp}.Take(&buffer);
+  }
+  return buffer;
+}
 
 /**
  * @brief Private mmap file as a read-only stream.

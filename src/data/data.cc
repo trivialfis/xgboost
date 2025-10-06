@@ -128,15 +128,15 @@ void LoadScalarField(AlignedResourceReadStream* strm, const std::string& expecte
   CHECK_EQ(name, expected_name)
       << invalid << " Expected field: " << expected_name << ", got: " << name;
   uint8_t type_val;
-  CHECK(ReadVec(strm, &type_val)) << invalid;
+  CHECK(strm->Read(&type_val)) << invalid;
   type = static_cast<xgboost::DataType>(type_val);
   CHECK(type == expected_type)
       << invalid << "Expected field of type: " << static_cast<int>(expected_type) << ", "
       << "got field type: " << static_cast<int>(type);
-  CHECK(ReadVec(strm, &is_scalar)) << invalid;
+  CHECK(strm->Read(&is_scalar)) << invalid;
   CHECK(is_scalar)
     << invalid << "Expected field " << expected_name << " to be a scalar; got a vector";
-  CHECK(ReadVec(strm, field)) << invalid;
+  CHECK(strm->Read(field)) << invalid;
 }
 
 template <typename T>
