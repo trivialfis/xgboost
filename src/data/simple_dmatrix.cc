@@ -351,22 +351,24 @@ SimpleDMatrix::SimpleDMatrix(AdapterT* adapter, float missing, int nthread,
   this->fmat_ctx_ = ctx;
 }
 
-SimpleDMatrix::SimpleDMatrix(dmlc::Stream* in_stream) {
+SimpleDMatrix::SimpleDMatrix(common::AlignedResourceReadStream* in_stream) {
   int tmagic;
   CHECK(in_stream->Read(&tmagic)) << "invalid input file format";
   CHECK_EQ(tmagic, kMagic) << "invalid format, magic number mismatch";
   info_.LoadBinary(in_stream);
-  in_stream->Read(&sparse_page_->offset.HostVector());
-  in_stream->Read(&sparse_page_->data.HostVector());
+  CHECK(in_stream->Read(&sparse_page_->offset.HostVector()));
+  CHECK(in_stream->Read(&sparse_page_->data.HostVector()));
 }
 
 void SimpleDMatrix::SaveToLocalFile(const std::string& fname) {
-  std::unique_ptr<dmlc::Stream> fo(dmlc::Stream::Create(fname.c_str(), "w"));
+  auto fo = std::make_unique<common::AlignedFileWriteStream>(fname, "w");
   int tmagic = kMagic;
-  fo->Write(tmagic);
+  CHECK_EQ(fo->Write(tmagic), sizeof(kMagic));
   info_.SaveBinary(fo.get());
-  fo->Write(sparse_page_->offset.HostVector());
-  fo->Write(sparse_page_->data.HostVector());
+  CHECK_EQ(common::WriteVec(fo.get(), sparse_page_->offset.HostVector()),
+           sparse_page_->offset.SizeBytes());
+  CHECK_EQ(common::WriteVec(fo.get(), sparse_page_->data.HostVector()),
+           sparse_page_->data.SizeBytes());
 }
 
 #define INSTANTIATE_SDCTOR(__ADAPTER_T)                                                            \

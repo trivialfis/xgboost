@@ -24,7 +24,7 @@ class SimpleDMatrix : public DMatrix {
   explicit SimpleDMatrix(AdapterT* adapter, float missing, std::int32_t nthread,
                          DataSplitMode data_split_mode = DataSplitMode::kRow);
 
-  explicit SimpleDMatrix(dmlc::Stream* in_stream);
+  explicit SimpleDMatrix(common::AlignedResourceReadStream* in_stream);
   ~SimpleDMatrix() override = default;
 
   void SaveToLocalFile(const std::string& fname);
