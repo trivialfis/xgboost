@@ -333,9 +333,6 @@ struct DeviceAdapterLoader {
   bool use_shared;
   data::IsValidFunctor is_valid;
 
-
-  using BatchT = Batch;
-
   XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch&& batch, bool use_shared, bst_feature_t n_features,
                                          bst_idx_t n_samples, float missing, EncAccessor&& acc)
       : batch_{std::move(batch)},
@@ -603,11 +600,13 @@ void ExtractPaths(Context const* ctx,
       }));
   auto end = thrust::copy_if(ctx->CUDACtx()->CTP(), nodes_transform,
                              nodes_transform + d_nodes.size(), info.begin(),
-                             [=] __device__(const PathInfo& e) { return e.leaf_position != -1; });
+                             cuda::proclaim_return_type<bool>([=] __device__(const PathInfo& e) {
+                               return e.leaf_position != -1;
+                             }));
   info.resize(end - info.begin());
   auto length_iterator = dh::MakeTransformIterator<size_t>(
-      info.begin(),
-      [=] __device__(const PathInfo& info) { return info.length; });
+      info.begin(), cuda::proclaim_return_type<decltype(std::declval<PathInfo>().length)>(
+                        [=] __device__(const PathInfo& info) { return info.length; }));
   dh::caching_device_vector<size_t> path_segments(info.size() + 1);
   thrust::exclusive_scan(ctx->CUDACtx()->CTP(), length_iterator, length_iterator + info.size() + 1,
                          path_segments.begin());
@@ -1021,6 +1020,7 @@ class LaunchConfig {
       using EncAccessor = std::remove_reference_t<decltype(acc)>;
       auto kernel = PredictKernel<Loader<EncAccessor>, Data, kHasMissing, EncAccessor>;
       // fixme; batch offset
+      CHECK_GE(predictions->Size(), n_samples);
       auto predt = linalg::MakeTensorView(ctx, predictions, n_samples,
                                           model.learner_model_param->OutputLength());
 
