@@ -7,6 +7,7 @@
 #include <cstdint>  // uint32_t, int32_t
 
 #include "../../collective/aggregator.h"
+#include "../../common/compressed_iterator.h"
 #include "../../common/deterministic.cuh"
 #include "../../common/device_helpers.cuh"
 #include "../../data/ellpack_page.cuh"
@@ -195,10 +196,13 @@ class HistogramAgent {
   // Allows the kernel to pipeline many operations while waiting for global memory
   // Increases the throughput of this kernel significantly
   __device__ void ProcessFullTileShared(std::size_t offset) {
+    constexpr auto kBatchSize = kItemsPerThread / 2;
+
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
     GradientPair gpair[kItemsPerThread];
+
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       idx[i] = offset + i * kBlockThreads + threadIdx.x;
@@ -207,8 +211,14 @@ class HistogramAgent {
     for (int i = 0; i < kItemsPerThread; i++) {
       ridx[i] = d_ridx_[idx[i] / feature_stride_];
     }
+
+    // Prefetch second batch, load the first one
 #pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
+    for (int i = 0; i < kBatchSize; i++) {
+
+      auto k = i + kBatchSize;
+      matrix_.gidx_iter.Prefetch(IterIdx(matrix_, ridx[k], FeatIdx(group_, idx[k], feature_stride_)));
+
       gpair[i] = d_gpair_[ridx[i]];
       auto fidx = FeatIdx(group_, idx[i], feature_stride_);
       gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
@@ -222,8 +232,36 @@ class HistogramAgent {
         gidx[i] = -1;
       }
     }
+
 #pragma unroll
-    for (int i = 0; i < kItemsPerThread; i++) {
+    for (int i = 0; i < kBatchSize; i++) {
+      // Avoid atomic add if it's a null value.
+      if (kDense || gidx[i] != -1) {
+        auto adjusted = rounding_.ToFixedPoint(gpair[i]);
+        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, adjusted);
+      }
+    }
+
+#pragma unroll
+    for (int k = 0; k < kBatchSize; k++) {
+      auto i = k + kBatchSize;
+      gpair[i] = d_gpair_[ridx[i]];
+      auto fidx = FeatIdx(group_, idx[i], feature_stride_);
+      gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
+      if (kDense || gidx[i] != matrix_.NullValue()) {
+        if constexpr (kCompressed) {
+          gidx[i] += matrix_.feature_segments[fidx];
+        }
+      } else {
+        // Use -1 to denote missing. Since we need to add the beginning bin to gidx, the
+        // result might equal to the `NullValue`.
+        gidx[i] = -1;
+      }
+    }
+
+#pragma unroll
+    for (int k = 0; k < kItemsPerThread; k++) {
+      auto i = k + kBatchSize;
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
@@ -231,6 +269,7 @@ class HistogramAgent {
       }
     }
   }
+
   __device__ void BuildHistogramWithShared() {
     dh::BlockFill(smem_arr_, group_.num_bins, GradientPairInt64{});
     __syncthreads();

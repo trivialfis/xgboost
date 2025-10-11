@@ -161,6 +161,10 @@ class CompressedBufferWriter {
   }
 };
 
+__device__ inline void PrefetchGlobalL2(const void *addr) {
+  asm volatile("prefetch.global.L2 [%0];" : : "l"(addr));
+}
+
 /**
  * \brief Read symbols from a bit compressed memory buffer. Usable on device and host.
  *
@@ -189,6 +193,15 @@ class CompressedIterator {
   CompressedIterator(CompressedByteT const *buffer, bst_idx_t num_symbols)
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
 
+  XGBOOST_DEVICE void Prefetch(std::size_t idx) const {
+#if defined(__CUDA_ARCH__)
+    const int bits_per_byte = 8;
+    size_t start_bit_idx = ((idx + 1) * symbol_bits_ - 1);
+    size_t start_byte_idx = start_bit_idx / bits_per_byte;
+    start_byte_idx += detail::kPadding;
+    PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
+#endif
+  }
   XGBOOST_DEVICE reference operator*() const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset_ + 1) * symbol_bits_ - 1);
@@ -201,8 +214,7 @@ class CompressedIterator {
                    static_cast<uint64_t>(buffer_[start_byte_idx - 2]) << 16 |
                    static_cast<uint64_t>(buffer_[start_byte_idx - 1]) << 8 |
                    buffer_[start_byte_idx];
-    int bit_shift =
-        (bits_per_byte - ((offset_ + 1) * symbol_bits_)) % bits_per_byte;
+    int bit_shift = (bits_per_byte - ((offset_ + 1) * symbol_bits_)) % bits_per_byte;
     tmp >>= bit_shift;
     // Mask off unneeded bits
     uint64_t mask = (static_cast<uint64_t>(1) << symbol_bits_) - 1;
@@ -315,6 +327,8 @@ class DoubleCompressedIter {
     std::uint64_t mask = (static_cast<std::uint64_t>(1) << symbol_bits_) - 1;
     return static_cast<OutT>(tmp & mask);
   }
+
+  XGBOOST_DEVICE void Prefetch(std::size_t) const {}
 
   XGBOOST_DEVICE reference operator[](std::size_t idx) const {
     self_type offset = (*this);
