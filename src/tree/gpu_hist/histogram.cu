@@ -214,10 +214,9 @@ class HistogramAgent {
 
     // Prefetch second batch, load the first one
 #pragma unroll
-    for (int i = 0; i < kBatchSize; i++) {
-
-      auto k = i + kBatchSize;
-      matrix_.gidx_iter.Prefetch(IterIdx(matrix_, ridx[k], FeatIdx(group_, idx[k], feature_stride_)));
+    for (int i = 0; i < kItemsPerThread; i += 2) {
+      matrix_.gidx_iter.Prefetch(
+          IterIdx(matrix_, ridx[i + 1], FeatIdx(group_, idx[i + 1], feature_stride_)));
 
       gpair[i] = d_gpair_[ridx[i]];
       auto fidx = FeatIdx(group_, idx[i], feature_stride_);
@@ -234,7 +233,7 @@ class HistogramAgent {
     }
 
 #pragma unroll
-    for (int i = 0; i < kBatchSize; i++) {
+    for (int i = 0; i < kItemsPerThread; i += 1) {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
@@ -243,8 +242,7 @@ class HistogramAgent {
     }
 
 #pragma unroll
-    for (int k = 0; k < kBatchSize; k++) {
-      auto i = k + kBatchSize;
+    for (int i = 1; i < kItemsPerThread; i += 2) {
       gpair[i] = d_gpair_[ridx[i]];
       auto fidx = FeatIdx(group_, idx[i], feature_stride_);
       gidx[i] = matrix_.gidx_iter[IterIdx(matrix_, ridx[i], fidx)];
@@ -260,7 +258,7 @@ class HistogramAgent {
     }
 
 #pragma unroll
-    for (int k = 0; k < kItemsPerThread; k++) {
+    for (int k = 0; k < kBatchSize; k++) {
       auto i = k + kBatchSize;
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
