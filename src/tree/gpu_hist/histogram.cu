@@ -196,8 +196,6 @@ class HistogramAgent {
   // Allows the kernel to pipeline many operations while waiting for global memory
   // Increases the throughput of this kernel significantly
   __device__ void ProcessFullTileShared(std::size_t offset) {
-    constexpr auto kBatchSize = kItemsPerThread / 2;
-
     std::size_t idx[kItemsPerThread];
     Idx ridx[kItemsPerThread];
     bst_bin_t gidx[kItemsPerThread];
@@ -233,7 +231,7 @@ class HistogramAgent {
     }
 
 #pragma unroll
-    for (int i = 0; i < kItemsPerThread; i += 1) {
+    for (int i = 0; i < kItemsPerThread; i += 2) {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
@@ -258,8 +256,7 @@ class HistogramAgent {
     }
 
 #pragma unroll
-    for (int k = 0; k < kBatchSize; k++) {
-      auto i = k + kBatchSize;
+    for (int i = 1; i < kItemsPerThread; i += 2) {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
