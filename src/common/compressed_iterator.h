@@ -162,7 +162,7 @@ class CompressedBufferWriter {
 };
 
 __device__ inline void PrefetchGlobalL2(const void *addr) {
-  asm volatile("prefetch.global.L2 [%0];" : : "l"(addr));
+  asm("prefetch.global.L2 [%0];" : : "l"(addr));
 }
 
 /**

@@ -7,7 +7,6 @@
 #include <cstdint>  // uint32_t, int32_t
 
 #include "../../collective/aggregator.h"
-#include "../../common/compressed_iterator.h"
 #include "../../common/deterministic.cuh"
 #include "../../common/device_helpers.cuh"
 #include "../../data/ellpack_page.cuh"
@@ -17,6 +16,12 @@
 
 namespace xgboost::tree {
 namespace {
+__device__ std::uint32_t Laneid() {
+  unsigned int laneid;
+  asm("mov.u32 %0, %%laneid;" : "=r"(laneid));
+  return laneid;
+}
+
 struct Pair {
   GradientPair first;
   GradientPair second;
@@ -213,8 +218,12 @@ class HistogramAgent {
     // Prefetch second batch, load the first one
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i += 2) {
-      matrix_.gidx_iter.Prefetch(
-          IterIdx(matrix_, ridx[i + 1], FeatIdx(group_, idx[i + 1], feature_stride_)));
+      auto mask = 0xffffffff;
+      auto v = __shfl_up_sync(mask, ridx[i + 1], 1);
+      if (Laneid() == 0 || v != ridx[i + 1]) {
+        matrix_.gidx_iter.Prefetch(
+            IterIdx(matrix_, ridx[i + 1], FeatIdx(group_, idx[i + 1], feature_stride_)));
+      }
 
       gpair[i] = d_gpair_[ridx[i]];
       auto fidx = FeatIdx(group_, idx[i], feature_stride_);
