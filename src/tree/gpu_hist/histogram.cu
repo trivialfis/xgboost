@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
+#include <cuda/annotated_ptr>
 
 #include "../../collective/aggregator.h"
 #include "../../common/deterministic.cuh"
@@ -141,7 +142,7 @@ template <typename Accessor, bool kCompressed, bool kDense, int kBlockThreads, i
 class HistogramAgent {
   int constexpr static kItemsPerTile = kBlockThreads * kItemsPerThread;
 
-  GradientPairInt64* smem_arr_;
+  cuda::annotated_ptr<GradientPairInt64, cuda::access_property::persisting> smem_arr_;
   GradientPairInt64* d_node_hist_;
   using Idx = cuda_impl::RowIndexT;
 
@@ -156,11 +157,11 @@ class HistogramAgent {
   static_assert(kCompressed >= kDense);
 
  public:
-  __device__ HistogramAgent(GradientPairInt64* smem_arr,
+  __device__ HistogramAgent(common::Span<GradientPairInt64> smem_arr,
                             GradientPairInt64* __restrict__ d_node_hist, const FeatureGroup& group,
                             Accessor const& matrix, common::Span<const Idx> d_ridx,
                             const GradientQuantiser& rounding, const GradientPair* d_gpair)
-      : smem_arr_{smem_arr},
+      : smem_arr_{smem_arr.data()},
         d_node_hist_{d_node_hist},
         d_ridx_(d_ridx.data()),
         group_{group},
@@ -186,7 +187,7 @@ class HistogramAgent {
         auto adjusted = rounding_.ToFixedPoint(d_gpair_[ridx]);
         // Subtract start_bin to write to group-local histogram. If this is not a dense
         // matrix, then start_bin is 0 since featuregrouping doesn't support sparse data.
-        AtomicAddGpairShared(smem_arr_ + compressed_bin - group_.start_bin, adjusted);
+        AtomicAddGpairShared(&smem_arr_[compressed_bin - group_.start_bin], adjusted);
       }
     }
   }
@@ -227,7 +228,7 @@ class HistogramAgent {
       // Avoid atomic add if it's a null value.
       if (kDense || gidx[i] != -1) {
         auto adjusted = rounding_.ToFixedPoint(gpair[i]);
-        AtomicAddGpairShared(smem_arr_ + gidx[i] - group_.start_bin, adjusted);
+        AtomicAddGpairShared(&smem_arr_[gidx[i] - group_.start_bin], adjusted);
       }
     }
   }
@@ -247,6 +248,7 @@ class HistogramAgent {
     for (auto i : dh::BlockStrideRange(0, group_.num_bins)) {
       AtomicAddGpairGlobal(d_node_hist_ + group_.start_bin + i, smem_arr_[i]);
     }
+    cuda::discard_memory(smem_arr_.get(), group_.num_bins * sizeof(GradientPairInt64{}));
   }
 
   __device__ void BuildHistogramWithGlobal() {
@@ -271,14 +273,16 @@ __global__ void __launch_bounds__(kBlockThreads)
     SharedMemHistKernel(Accessor const matrix, const FeatureGroupsAccessor feature_groups,
                         common::Span<const RowPartitioner::RowIndexT> d_ridx,
                         GradientPairInt64* __restrict__ d_node_hist,
-                        const GradientPair* __restrict__ d_gpair,
-                        GradientQuantiser const rounding) {
-  extern __shared__ char smem[];
+                        const GradientPair* __restrict__ d_gpair, GradientQuantiser const rounding,
+                        common::Span<GradientPairInt64> scratch) {
+  // extern __shared__ char smem[];
   const FeatureGroup group = feature_groups[blockIdx.y];
-  auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
+  // auto smem_arr = reinterpret_cast<GradientPairInt64*>(smem);
+  auto block_scratch = scratch.subspan(blockIdx.x * group.num_bins, group.num_bins);
   auto agent = HistogramAgent<Accessor, kCompressed, kDense, kBlockThreads, kItemsPerThread>(
-      smem_arr, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
-  if (use_shared_memory_histograms) {
+      block_scratch, d_node_hist, group, matrix, d_ridx, rounding, d_gpair);
+  // use_shared_memory_histograms
+  if (true) {
     agent.BuildHistogramWithShared();
   } else {
     agent.BuildHistogramWithGlobal();
@@ -341,15 +345,22 @@ struct HistogramKernel {
   std::size_t const max_shared_memory;
   bool const force_global;
 
+  dh::DeviceUVector<GradientPairInt64> scratch;
+
   HistogramKernel(Context const* ctx, FeatureGroupsAccessor const& feature_groups,
-                  bool force_global_memory)
+                  bst_bin_t n_total_bins, bool force_global_memory)
       : max_shared_memory{dh::MaxSharedMemoryOptin(ctx->Ordinal())},
         force_global{force_global_memory} {
     // Decide whether to use shared memory
     // Opt into maximum shared memory for the kernel if necessary
     this->smem_size = feature_groups.ShmemSize();
     this->shared = !force_global_memory && this->smem_size <= this->max_shared_memory;
+    // fixme:
+    this->shared = false;
+
     this->smem_size = this->shared ? this->smem_size : 0;
+
+    CHECK_EQ(feature_groups.NumGroups(), 1);
 
     auto init = [&](auto& kernel, KernelType k) {
       if (this->shared) {
@@ -379,6 +390,9 @@ struct HistogramKernel {
       init(kernel, kernel_types[k]);
       ++k;
     }
+
+    auto max_n_blocks = *std::max_element(this->grid_sizes.begin(), this->grid_sizes.end());
+    this->scratch.resize(max_n_blocks * n_total_bins);
   }
 };
 
@@ -388,9 +402,9 @@ class DeviceHistogramDispatchAccessor {
 
  public:
   void Reset(Context const* ctx, FeatureGroupsAccessor const& feature_groups,
-             bool force_global_memory) {
-    this->kernel_ =
-        std::make_unique<HistogramKernel<Accessor>>(ctx, feature_groups, force_global_memory);
+             bst_bin_t n_total_bins, bool force_global_memory) {
+    this->kernel_ = std::make_unique<HistogramKernel<Accessor>>(ctx, feature_groups, n_total_bins,
+                                                                force_global_memory);
     if (force_global_memory) {
       CHECK(!this->kernel_->shared);
     }
@@ -415,11 +429,15 @@ class DeviceHistogramDispatchAccessor {
 
     auto launcher = [&](auto const& kernel, std::uint32_t grid_size) {
       CHECK_NE(grid_size, 0);
+      auto scratch = dh::ToSpan(this->kernel_->scratch);
       grid_size = std::min(grid_size, static_cast<std::uint32_t>(
                                           common::DivRoundUp(items_per_group, kMinItemsPerBlock)));
+      CHECK_EQ(feature_groups.NumGroups(), 1);
+      CHECK_EQ(kernel_->smem_size, 0);
       dh::LaunchKernel{dim3(grid_size, feature_groups.NumGroups()),  // NOLINT
-                       static_cast<uint32_t>(kBlockThreads), kernel_->smem_size, ctx->Stream()}(
-          kernel, matrix, feature_groups, d_ridx, histogram.data(), gpair.data(), rounding);
+                       static_cast<uint32_t>(kBlockThreads), kernel_->smem_size,
+                       ctx->Stream()}(kernel, matrix, feature_groups, d_ridx, histogram.data(),
+                                      gpair.data(), rounding, scratch);
     };
 
     using K = HistogramKernel<EllpackDeviceAccessor>::KernelType;
@@ -485,7 +503,7 @@ void DeviceHistogramBuilder::Reset(Context const* ctx, std::size_t max_cached_hi
                                    FeatureGroupsAccessor const& feature_groups,
                                    bst_bin_t n_total_bins, bool force_global_memory) {
   this->monitor_.Start(__func__);
-  this->p_impl_->Reset(ctx, feature_groups, force_global_memory);
+  this->p_impl_->Reset(ctx, feature_groups, n_total_bins, force_global_memory);
   this->hist_.Reset(ctx, n_total_bins, max_cached_hist_nodes);
   this->monitor_.Stop(__func__);
 }

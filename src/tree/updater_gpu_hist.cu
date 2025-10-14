@@ -889,6 +889,7 @@ class GPUHistMaker : public TreeUpdater {
     std::vector<bst_idx_t> batch_ptr;
     auto batch = HistBatch(*param);
     auto [cuts, dense_compressed] = InitBatchCuts(ctx_, p_fmat, batch, &batch_ptr);
+    CHECK(!dense_compressed);
 
     this->maker = std::make_unique<GPUHistMakerDevice>(ctx_, *param, &hist_maker_param_,
                                                        column_sampler_, batch, p_fmat->Info(),

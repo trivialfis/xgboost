@@ -30,10 +30,10 @@ XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
   uint32_t const x_low = static_cast<uint32_t>(src);
   uint32_t const x_high = (*cast_src) >> 32;
 
-  auto const old = atomicAdd(y_low, x_low);
+  auto const old = atomicAdd_block(y_low, x_low);
   uint32_t const carry = old > (std::numeric_limits<uint32_t>::max() - x_low) ? 1 : 0;
   uint32_t const sig = x_high + carry;
-  atomicAdd(y_high, sig);
+  atomicAdd_block(y_high, sig);
 }
 
 namespace cuda_impl {
