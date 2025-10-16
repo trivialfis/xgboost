@@ -6,21 +6,20 @@
 #ifndef XGBOOST_GBM_GBTREE_MODEL_H_
 #define XGBOOST_GBM_GBTREE_MODEL_H_
 
-#include <dmlc/io.h>
 #include <dmlc/parameter.h>
-#include <xgboost/context.h>
-#include <xgboost/learner.h>
-#include <xgboost/model.h>
-#include <xgboost/parameter.h>
-#include <xgboost/tree_model.h>
 
 #include <memory>
+#include <mutex>  // for mutex
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "../common/threading_utils.h"
 #include "../data/cat_container.h"  // for CatContainer
+#include "xgboost/context.h"
+#include "xgboost/learner.h"
+#include "xgboost/model.h"
+#include "xgboost/tree_model.h"
 
 namespace xgboost {
 
@@ -28,11 +27,11 @@ class Json;
 
 namespace gbm {
 /**
- * \brief Container for all trees built (not update) for one group.
+ * @brief Container for all trees built (not update) for one group.
  */
 using TreesOneGroup = std::vector<std::unique_ptr<RegTree>>;
 /**
- * \brief Container for all trees built (not update) for one iteration.
+ * @brief Container for all trees built (not update) for one iteration.
  */
 using TreesOneIter = std::vector<TreesOneGroup>;
 
@@ -138,6 +137,10 @@ struct GBTreeModel : public Model {
   void Cats(std::shared_ptr<CatContainer> cats) { this->cats_ = cats; }
 
   auto const* Ctx() const { return this->ctx_; }
+  /**
+   * @brief Getter for the tree group index.
+   */
+  common::Span<bst_target_t const> TreeGroups(DeviceOrd device) const;
 
  private:
   /**
@@ -145,6 +148,7 @@ struct GBTreeModel : public Model {
    */
   std::shared_ptr<CatContainer> cats_{std::make_shared<CatContainer>()};
   Context const* ctx_;
+  mutable std::mutex mu_;
 };
 }  // namespace gbm
 }  // namespace xgboost

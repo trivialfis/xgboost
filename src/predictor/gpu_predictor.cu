@@ -356,7 +356,7 @@ struct DeviceModel {
     this->d_trees = trees;
     auto n_trees = this->tree_end - this->tree_begin;
     model.tree_info.SetDevice(ctx->Device());
-    this->d_tree_groups = model.tree_info.ConstDeviceSpan().subspan(this->tree_begin, n_trees);
+    this->d_tree_groups = model.TreeGroups(ctx->Device()).subspan(this->tree_begin, n_trees);
 
     CHECK_GT(this->tree_end, this->tree_begin);
     CHECK_EQ(n_trees, d_trees.size());

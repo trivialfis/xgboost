@@ -5,6 +5,7 @@
 
 #include <algorithm>  // for transform, max_element
 #include <cstddef>    // for size_t
+#include <mutex>      // for lock_guard
 #include <numeric>    // for partial_sum
 #include <utility>    // for move, pair
 
@@ -152,5 +153,11 @@ void GBTreeModel::CommitModelGroup(TreesOneGroup&& new_trees, bst_target_t group
     h_tree_info.push_back(group_idx);
   }
   param.num_trees += static_cast<int>(new_trees.size());
+}
+
+common::Span<bst_target_t const> GBTreeModel::TreeGroups(DeviceOrd device) const {
+  std::lock_guard guard{this->mu_};
+  return device.IsCPU() ? this->tree_info.ConstHostSpan()
+                        : (this->tree_info.SetDevice(device), this->tree_info.ConstDeviceSpan());
 }
 }  // namespace xgboost::gbm
