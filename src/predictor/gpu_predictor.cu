@@ -327,8 +327,8 @@ namespace {
 struct CopyViews {
   static void Copy(Context const* ctx, dh::device_vector<TreeViewVar>* p_dst,
                    std::vector<TreeViewVar> const& src) {
-    p_dst->resize(src.size());
     if (curt::SupportsPageableMem()) {
+      p_dst->resize(src.size(), tree::ScalarTreeView::MakePlaceHolder());
       auto d_dst = dh::ToSpan(*p_dst);
       auto h_src = common::Span{src};
       dh::LaunchN(src.size(), ctx->CUDACtx()->Stream(),
