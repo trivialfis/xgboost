@@ -326,7 +326,7 @@ struct DeviceModel {
   bst_tree_t tree_begin;
   bst_tree_t tree_end;
   dh::device_vector<TreeViewVar> d_trees;
-  dh::device_vector<bst_target_t> d_tree_groups;
+  common::Span<bst_target_t const> d_tree_groups;
   bst_target_t n_groups;
   bst_feature_t n_features;
   bst_node_t n_nodes{0};
@@ -354,8 +354,12 @@ struct DeviceModel {
     }
 
     this->d_trees = trees;
-    this->d_tree_groups = model.tree_info;
+    auto n_trees = this->tree_end - this->tree_begin;
+    model.tree_info.SetDevice(ctx->Device());
+    this->d_tree_groups = model.tree_info.ConstDeviceSpan().subspan(this->tree_begin, n_trees);
+
     CHECK_GT(this->tree_end, this->tree_begin);
+    CHECK_EQ(n_trees, d_trees.size());
   }
 };
 
@@ -459,7 +463,7 @@ void ExtractPaths(Context const* ctx,
 
   // Path length and tree index for all leaf nodes
   dh::caching_device_vector<PathInfo> info(d_model.n_nodes);
-  auto d_trees = dh::ToSpan(d_model.d_trees);
+  auto d_trees = dh::ToSpan(d_model.d_trees);  // subset of trees
   auto tree_segments = MakeTreeSegments(ctx, d_model.tree_begin, d_model.tree_end, h_model);
   CHECK_EQ(tree_segments.ConstHostVector().back(), d_model.n_nodes);
   auto d_tree_segments = tree_segments.ConstDeviceSpan();
@@ -499,7 +503,7 @@ void ExtractPaths(Context const* ctx,
 
   auto d_paths = dh::ToSpan(*paths);
   auto d_info = info.data().get();
-  auto d_tree_groups = dh::ToSpan(d_model.d_tree_groups);
+  auto d_tree_groups = d_model.d_tree_groups;
   auto d_path_segments = path_segments.data().get();
 
   std::size_t max_cat = 0;
@@ -742,8 +746,6 @@ class ColumnSplitHelper {
 
       SparsePageView data{ctx_, batch, num_features};
       auto const grid = static_cast<uint32_t>(common::DivRoundUp(num_rows, kBlockThreads));
-      auto d_tree_groups = dh::ToSpan(d_model.d_tree_groups)
-                               .subspan(d_model.tree_begin, d_model.tree_end - d_model.tree_begin);
       dh::LaunchKernel {grid, kBlockThreads, shared_memory_bytes, ctx_->CUDACtx()->Stream()}(
           MaskBitVectorKernel, data, dh::ToSpan(d_model.d_trees), decision_bits, missing_bits,
           d_model.tree_begin, d_model.tree_end, num_features, num_nodes, use_shared,
@@ -753,7 +755,7 @@ class ColumnSplitHelper {
 
       dh::LaunchKernel {grid, kBlockThreads, 0, ctx_->CUDACtx()->Stream()}(
           PredictByBitVectorKernel<predict_leaf>, dh::ToSpan(d_model.d_trees),
-          out_preds->DeviceSpan().subspan(batch_offset), d_tree_groups,
+          out_preds->DeviceSpan().subspan(batch_offset), d_model.d_tree_groups,
           decision_bits, missing_bits, d_model.tree_begin, d_model.tree_end, num_rows, num_nodes,
           num_group);
 
@@ -854,11 +856,9 @@ class LaunchConfig {
                            HostDeviceVector<float>* predictions) {
     auto kernel = PredictKernel<typename Loader::Type, common::GetValueT<decltype(batch)>,
                                 HasMissing(), EncAccessorT>;
-    auto d_tree_groups = dh::ToSpan(d_model.d_tree_groups)
-                             .subspan(d_model.tree_begin, d_model.tree_end - d_model.tree_begin);
     this->Launch<Loader>(kernel, std::move(batch), dh::ToSpan(d_model.d_trees),
-                         predictions->DeviceSpan().subspan(batch_offset), d_tree_groups, n_features,
-                         this->UseShared(), d_model.n_groups, missing, acc);
+                         predictions->DeviceSpan().subspan(batch_offset), d_model.d_tree_groups,
+                         n_features, this->UseShared(), d_model.n_groups, missing, acc);
   }
 
   [[nodiscard]] bool UseShared() const { return shared_memory_bytes_ != 0; }

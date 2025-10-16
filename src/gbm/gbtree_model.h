@@ -79,9 +79,10 @@ struct GBTreeModel : public Model {
       for (auto& tree : trees) {
         trees_to_update.push_back(std::move(tree));
       }
+
       trees.clear();
       param.num_trees = 0;
-      tree_info.clear();
+      tree_info.HostVector().clear();
 
       iteration_indptr.clear();
       iteration_indptr.push_back(0);
@@ -125,7 +126,7 @@ struct GBTreeModel : public Model {
   /**
    * @brief Group index for trees.
    */
-  std::vector<int> tree_info;
+  HostDeviceVector<bst_target_t> tree_info;
   /**
    * @brief Number of trees accumulated for each iteration.
    */

@@ -444,7 +444,9 @@ void GBTree::Slice(bst_layer_t begin, bst_layer_t end, bst_layer_t step, Gradien
 
   auto& out_indptr = out_model.iteration_indptr;
   TreesOneGroup& out_trees = out_model.trees;
-  std::vector<int32_t>& out_trees_info = out_model.tree_info;
+  auto& out_tree_info = out_model.tree_info.HostVector();
+
+  auto const& in_tree_info = this->model_.tree_info.ConstHostVector();
 
   bst_layer_t n_layers = (end - begin) / step;
   out_indptr.resize(n_layers + 1, 0);
@@ -462,8 +464,8 @@ void GBTree::Slice(bst_layer_t begin, bst_layer_t end, bst_layer_t step, Gradien
         std::unique_ptr<RegTree> new_tree{this->model_.trees.at(in_tree_idx)->Copy()};
         out_trees.emplace_back(std::move(new_tree));
 
-        bst_group_t group = this->model_.tree_info[in_tree_idx];
-        out_trees_info.push_back(group);
+        bst_group_t group = in_tree_info[in_tree_idx];
+        out_tree_info.push_back(group);
 
         out_model.iteration_indptr[out_l + 1]++;
       });
@@ -735,7 +737,7 @@ class Dart : public GBTree {
     auto layer_trees = [&]() {
       return model_.param.num_parallel_tree * model_.learner_model_param->OutputLength();
     };
-
+    auto const& h_tree_info = this->model_.tree_info.ConstHostVector();
     for (bst_tree_t i = tree_begin; i < tree_end; i += 1) {
       if (training && std::binary_search(idx_drop_.cbegin(), idx_drop_.cend(), i)) {
         continue;
@@ -749,7 +751,7 @@ class Dart : public GBTree {
 
       // Multiple the weight to output prediction.
       auto w = this->weight_drop_.at(i);
-      auto group = model_.tree_info.at(i);
+      auto group = h_tree_info.at(i);
       CHECK_EQ(p_out_preds->predictions.Size(), predts.predictions.Size());
 
       size_t n_rows = p_fmat->Info().num_row_;
@@ -815,6 +817,7 @@ class Dart : public GBTree {
       CHECK(success) << msg;
     };
 
+    auto const& h_tree_info = this->model_.tree_info.ConstHostVector();
     // Inplace predict is not used for training, so no need to drop tree.
     for (bst_tree_t i = tree_begin; i < tree_end; ++i) {
       predict_impl(i);
@@ -837,7 +840,7 @@ class Dart : public GBTree {
       }
       // Multiple the tree weight
       auto w = this->weight_drop_.at(i);
-      auto group = model_.tree_info.at(i);
+      auto group = h_tree_info.at(i);
       CHECK_EQ(predts.predictions.Size(), p_out_preds->predictions.Size());
 
       size_t n_rows = p_fmat->Info().num_row_;
