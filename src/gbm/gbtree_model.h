@@ -35,15 +35,15 @@ using TreesOneGroup = std::vector<std::unique_ptr<RegTree>>;
  */
 using TreesOneIter = std::vector<TreesOneGroup>;
 
-/*! \brief model parameters */
+/** @brief GBTree model parameters. */
 struct GBTreeModelParam : public dmlc::Parameter<GBTreeModelParam> {
  public:
   /**
-   * \brief number of trees
+   * @brief The number of trees.
    */
   std::int32_t num_trees{0};
   /**
-   * \brief Number of trees for a forest.
+   * @brief Number of trees for a single forest.
    */
   std::int32_t num_parallel_tree{1};
 
@@ -114,9 +114,9 @@ struct GBTreeModel : public Model {
     return static_cast<std::int32_t>(iteration_indptr.size() - 1);
   }
 
-  // base margin
+  /** @brief Global model properties. */
   LearnerModelParam const* learner_model_param;
-  // model parameter
+  /** @brief GBTree model parameters. **/
   GBTreeModelParam param;
   /*! \brief vector of trees stored in the model */
   std::vector<std::unique_ptr<RegTree>> trees;

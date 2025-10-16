@@ -108,13 +108,12 @@ void PredValueByOneTree(RegTree::FVec const &p_feats, tree::MultiTargetTreeView 
 }
 
 template <bool has_categorical, bool any_missing, bool use_array_tree_layout>
-void PredValueByOneTree(const RegTree &tree, std::size_t const predict_offset,
+void PredValueByOneTree(tree::MultiTargetTreeView const &tree, std::size_t const predict_offset,
                         common::Span<RegTree::FVec> fvec_tloc, std::size_t const block_size,
                         linalg::MatrixView<float> out_predt, bst_node_t *p_nidx, bst_node_t depth) {
-  const auto mt_tree = tree.HostMtView();
-  auto const &cats = mt_tree.GetCategoriesMatrix();
+  auto const &cats = tree.GetCategoriesMatrix();
   if constexpr (use_array_tree_layout) {
-    ProcessArrayTree<has_categorical, any_missing>(mt_tree, fvec_tloc, block_size, p_nidx, depth);
+    ProcessArrayTree<has_categorical, any_missing>(tree, fvec_tloc, block_size, p_nidx, depth);
   }
   for (std::size_t i = 0; i < block_size; ++i) {
     bst_node_t nidx = 0;
@@ -123,7 +122,7 @@ void PredValueByOneTree(const RegTree &tree, std::size_t const predict_offset,
       p_nidx[i] = 0;
     }
     auto t_predts = out_predt.Slice(predict_offset + i, linalg::All());
-    PredValueByOneTree<has_categorical>(fvec_tloc[i], mt_tree, cats, t_predts, nidx);
+    PredValueByOneTree<has_categorical>(fvec_tloc[i], tree, cats, t_predts, nidx);
   }
 }
 }  // namespace multi
@@ -148,10 +147,12 @@ void PredictBlockByAllTrees(gbm::GBTreeModel const &model,
     if (tree.IsMultiTarget()) {
       if (has_categorical) {
         multi::PredValueByOneTree<true, any_missing, use_array_tree_layout>(
-            tree, predict_offset, fvec_tloc, block_size, out_predt, nidx.data(), depth);
+            tree.HostMtView(), predict_offset, fvec_tloc, block_size, out_predt, nidx.data(),
+            depth);
       } else {
         multi::PredValueByOneTree<false, any_missing, use_array_tree_layout>(
-            tree, predict_offset, fvec_tloc, block_size, out_predt, nidx.data(), depth);
+            tree.HostMtView(), predict_offset, fvec_tloc, block_size, out_predt, nidx.data(),
+            depth);
       }
     } else {
       auto const gid = h_tree_groups[tree_id];
