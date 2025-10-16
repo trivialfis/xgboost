@@ -145,6 +145,22 @@ void GBTree::Configure(Args const& cfg) {
   }
 }
 
+void GBTreeModel::InitTreesToUpdate() {
+  if (trees_to_update.empty()) {
+    for (auto& tree : trees) {
+      trees_to_update.push_back(std::move(tree));
+    }
+
+    trees.clear();
+    param.num_trees = 0;
+    tree_info.HostVector().clear();
+
+    iteration_indptr.clear();
+    iteration_indptr.push_back(0);
+  }
+  this->cache_ = std::make_unique<TreeCache>();
+}
+
 void GPUCopyGradient(Context const*, linalg::Matrix<GradientPair> const*, bst_group_t,
                      linalg::Matrix<GradientPair>*)
 #if defined(XGBOOST_USE_CUDA)
