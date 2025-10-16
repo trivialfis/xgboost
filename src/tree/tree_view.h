@@ -161,11 +161,6 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
         n{tree->NumNodes()} {
     CHECK(!tree->IsMultiTarget());
   }
-
-  static ScalarTreeView MakePlaceHolder() { return ScalarTreeView{}; }
-
- private:
-  ScalarTreeView() = default;
 };
 
 /**
