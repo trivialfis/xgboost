@@ -11,12 +11,10 @@
 #include <memory>
 #include <mutex>  // for mutex
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "../common/threading_utils.h"
 #include "../data/cat_container.h"  // for CatContainer
-#include "tree_cache.h"             // for TreeCache
 #include "xgboost/context.h"
 #include "xgboost/learner.h"
 #include "xgboost/model.h"
@@ -136,8 +134,6 @@ struct GBTreeModel : public Model {
    */
   std::shared_ptr<CatContainer> cats_{std::make_shared<CatContainer>()};
   Context const* ctx_;
-  /** @brief Cache to avoid repeated copy of tree views from host to device. */
-  std::unique_ptr<TreeCache> cache_{std::make_unique<TreeCache>()};
   mutable std::mutex mu_;
 };
 }  // namespace gbm

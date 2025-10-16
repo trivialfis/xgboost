@@ -158,7 +158,6 @@ void GBTreeModel::InitTreesToUpdate() {
     iteration_indptr.clear();
     iteration_indptr.push_back(0);
   }
-  this->cache_ = std::make_unique<TreeCache>();
 }
 
 void GPUCopyGradient(Context const*, linalg::Matrix<GradientPair> const*, bst_group_t,
