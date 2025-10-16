@@ -41,9 +41,9 @@ namespace xgboost::predictor {
 
 DMLC_REGISTRY_FILE_TAG(cpu_predictor);
 
-namespace scalar {
-template <bool has_missing, bool has_categorical>
-bst_node_t GetLeafIndex(tree::ScalarTreeView const &tree, const RegTree::FVec &feat,
+namespace {
+template <bool has_missing, bool has_categorical, typename TreeView>
+bst_node_t GetLeafIndex(TreeView const &tree, const RegTree::FVec &feat,
                         RegTree::CategoricalSplitMatrix const &cats, bst_node_t nidx) {
   while (!tree.IsLeaf(nidx)) {
     bst_feature_t split_index = tree.SplitIndex(nidx);
@@ -53,7 +53,9 @@ bst_node_t GetLeafIndex(tree::ScalarTreeView const &tree, const RegTree::FVec &f
   }
   return nidx;
 }
+}  // namespace
 
+namespace scalar {
 template <bool has_categorical>
 [[nodiscard]] float PredValueByOneTree(const RegTree::FVec &p_feats,
                                        tree::ScalarTreeView const &tree,
@@ -91,19 +93,6 @@ void PredValueByOneTree(tree::ScalarTreeView const &tree, std::size_t const pred
 }  // namespace scalar
 
 namespace multi {
-template <bool has_missing, bool has_categorical>
-bst_node_t GetLeafIndex(tree::MultiTargetTreeView const &tree, const RegTree::FVec &feat,
-                        RegTree::CategoricalSplitMatrix const &cats,
-                        bst_node_t nidx) {
-  while (!tree.IsLeaf(nidx)) {
-    bst_feature_t split_index = tree.SplitIndex(nidx);
-    auto fvalue = feat.GetFvalue(split_index);
-    nidx = GetNextNode<has_missing, has_categorical>(
-        tree, nidx, fvalue, has_missing && feat.IsMissing(split_index), cats);
-  }
-  return nidx;
-}
-
 template <bool has_categorical>
 void PredValueByOneTree(RegTree::FVec const &p_feats, tree::MultiTargetTreeView const &tree,
                         RegTree::CategoricalSplitMatrix const &cats,
@@ -1062,12 +1051,12 @@ class CPUPredictor : public Predictor {
             bst_node_t nidx = 0;
             if (tree.IsMultiTarget()) {
               auto mt_tree = tree.HostMtView();
-              nidx = multi::GetLeafIndex<true, true>(mt_tree, fvec_tloc.front(),
-                                                     mt_tree.GetCategoriesMatrix(), nidx);
+              nidx = GetLeafIndex<true, true>(mt_tree, fvec_tloc.front(),
+                                              mt_tree.GetCategoriesMatrix(), nidx);
             } else {
               auto sc_tree = tree.HostScView();
-              nidx = scalar::GetLeafIndex<true, true>(tree.HostScView(), fvec_tloc.front(),
-                                                      sc_tree.GetCategoriesMatrix(), nidx);
+              nidx = GetLeafIndex<true, true>(tree.HostScView(), fvec_tloc.front(),
+                                              sc_tree.GetCategoriesMatrix(), nidx);
             }
             preds[ridx * ntree_limit + j] = static_cast<float>(nidx);
           }
