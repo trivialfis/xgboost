@@ -1039,6 +1039,7 @@ class GPUPredictor : public xgboost::Predictor {
     auto n_features = model.learner_model_param->num_feature;
 
     DeviceModel d_model{ctx_, model, tree_begin, tree_end, &this->model_mu_};
+    std::uint32_t constexpr kBlockThreads = 128;
 
     if constexpr (std::is_same_v<Adapter, data::CudfAdapter>) {
       if (m->HasCategorical()) {
@@ -1047,7 +1048,8 @@ class GPUPredictor : public xgboost::Predictor {
           using EncAccessor = std::remove_reference_t<decltype(acc)>;
           using LoaderImpl = DeviceAdapterLoader<BatchT, EncAccessor>;
           using Loader =
-              typename common::GetValueT<decltype(cfg)>::template LoaderType<LoaderImpl, 128>;
+              typename common::GetValueT<decltype(cfg)>::template LoaderType<LoaderImpl,
+                                                                             kBlockThreads>;
           cfg.template AllocShmem<Loader>();
           cfg.template LaunchPredictKernel<Loader>(m->Value(), missing, n_features, d_model, acc, 0,
                                                    &out_preds->predictions);
@@ -1061,9 +1063,8 @@ class GPUPredictor : public xgboost::Predictor {
                     using EncAccessor = std::remove_reference_t<decltype(acc)>;
                     CHECK((std::is_same_v<EncAccessor, NoOpAccessor>));
                     using LoaderImpl = DeviceAdapterLoader<BatchT, EncAccessor>;
-                    using Loader =
-                        typename common::GetValueT<decltype(cfg)>::template LoaderType<LoaderImpl,
-                                                                                       128>;
+                    using Loader = typename common::GetValueT<decltype(cfg)>::template LoaderType<
+                        LoaderImpl, kBlockThreads>;
                     cfg.template AllocShmem<Loader>();
                     cfg.template LaunchPredictKernel<Loader>(
                         m->Value(), missing, n_features, d_model, acc, 0, &out_preds->predictions);
