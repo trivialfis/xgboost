@@ -330,15 +330,8 @@ struct CopyViews {
     xgboost_NVTX_FN_RANGE();
     p_dst->resize(src.size());
     auto d_dst = dh::ToSpan(*p_dst);
-    // fixme: profile the difference
-    if (curt::SupportsPageableMem()) {
-      auto h_src = common::Span{src};
-      dh::LaunchN(src.size(), ctx->CUDACtx()->Stream(),
-                  [=] __device__(std::size_t i) { d_dst[i] = h_src[i]; });
-    } else {
-      dh::safe_cuda(cudaMemcpyAsync(d_dst.data(), src.data(), d_dst.size_bytes(), cudaMemcpyDefault,
-                                    ctx->CUDACtx()->Stream()));
-    }
+    dh::safe_cuda(cudaMemcpyAsync(d_dst.data(), src.data(), d_dst.size_bytes(), cudaMemcpyDefault,
+                                  ctx->CUDACtx()->Stream()));
   }
 };
 }  // namespace
@@ -858,6 +851,7 @@ class LaunchConfig {
   template <typename Loader>
   void AllocShmem() {
     this->shared_memory_bytes_ = Loader::AllocShmem(this->ctx_, this->n_features_);
+    std::cout << "this->shared_memory_bytes_:" << this->shared_memory_bytes_ << std::endl;
   }
 
  public:
