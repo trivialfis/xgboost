@@ -27,6 +27,7 @@
 #include "../data/proxy_dmatrix.h"
 #include "../gbm/gbtree_model.h"
 #include "../tree/tree_view.h"
+#include "gbtree_view.h"  // for GBTreeModelView
 #include "predict_fn.h"
 #include "utils.h"  // for CheckProxyDMatrix
 #include "xgboost/data.h"
@@ -322,46 +323,24 @@ __global__ void PredictKernel(Data data, common::Span<TreeViewVar const> d_trees
   }
 }
 
-struct DeviceModel {
-  bst_tree_t tree_begin;
-  bst_tree_t tree_end;
-  dh::device_vector<TreeViewVar> d_trees;
-  common::Span<bst_target_t const> d_tree_groups;
-  bst_target_t n_groups;
-  bst_feature_t n_features;
-  bst_node_t n_nodes{0};
-
- public:
-  explicit DeviceModel(Context const* ctx, gbm::GBTreeModel const& model, bst_tree_t tree_begin,
-                       bst_tree_t tree_end, std::mutex* p_mu)
-      : tree_begin{tree_begin},
-        tree_end{tree_end},
-        n_groups{model.learner_model_param->OutputLength()},
-        n_features{model.learner_model_param->num_feature} {
-    std::lock_guard guard{*p_mu};
-    std::vector<TreeViewVar> trees;
-    for (bst_tree_t tree_idx = this->tree_begin; tree_idx < this->tree_end; ++tree_idx) {
-      auto const& p_tree = model.trees[tree_idx];
-      if (p_tree->IsMultiTarget()) {
-        auto d_tree = tree::MultiTargetTreeView{ctx, p_tree.get()};
-        this->n_nodes += d_tree.Size();
-        trees.emplace_back(d_tree);
-      } else {
-        auto d_tree = tree::ScalarTreeView{ctx, p_tree.get()};
-        this->n_nodes += d_tree.Size();
-        trees.emplace_back(d_tree);
-      }
+namespace {
+struct CopyViews {
+  static void Copy(Context const* ctx, dh::device_vector<TreeViewVar>* p_dst,
+                   std::vector<TreeViewVar> const& src) {
+    p_dst->resize(src.size());
+    if (curt::SupportsPageableMem()) {
+      auto d_dst = dh::ToSpan(*p_dst);
+      auto h_src = common::Span{src};
+      dh::LaunchN(src.size(), ctx->CUDACtx()->Stream(),
+                  [=] __device__(std::size_t i) { d_dst[i] = h_src[i]; });
+    } else {
+      *p_dst = src;
     }
-
-    this->d_trees = trees;
-    auto n_trees = this->tree_end - this->tree_begin;
-    model.tree_info.SetDevice(ctx->Device());
-    this->d_tree_groups = model.TreeGroups(ctx->Device()).subspan(this->tree_begin, n_trees);
-
-    CHECK_GT(this->tree_end, this->tree_begin);
-    CHECK_EQ(n_trees, d_trees.size());
   }
 };
+}  // namespace
+
+using DeviceModel = GBTreeModelView<dh::device_vector, TreeViewVar, CopyViews>;
 
 struct ShapSplitCondition {
   ShapSplitCondition() = default;
@@ -503,7 +482,7 @@ void ExtractPaths(Context const* ctx,
 
   auto d_paths = dh::ToSpan(*paths);
   auto d_info = info.data().get();
-  auto d_tree_groups = d_model.d_tree_groups;
+  auto d_tree_groups = d_model.tree_groups;
   auto d_path_segments = path_segments.data().get();
 
   std::size_t max_cat = 0;
@@ -755,7 +734,7 @@ class ColumnSplitHelper {
 
       dh::LaunchKernel {grid, kBlockThreads, 0, ctx_->CUDACtx()->Stream()}(
           PredictByBitVectorKernel<predict_leaf>, dh::ToSpan(d_model.d_trees),
-          out_preds->DeviceSpan().subspan(batch_offset), d_model.d_tree_groups,
+          out_preds->DeviceSpan().subspan(batch_offset), d_model.tree_groups,
           decision_bits, missing_bits, d_model.tree_begin, d_model.tree_end, num_rows, num_nodes,
           num_group);
 
@@ -857,7 +836,7 @@ class LaunchConfig {
     auto kernel = PredictKernel<typename Loader::Type, common::GetValueT<decltype(batch)>,
                                 HasMissing(), EncAccessorT>;
     this->Launch<Loader>(kernel, std::move(batch), dh::ToSpan(d_model.d_trees),
-                         predictions->DeviceSpan().subspan(batch_offset), d_model.d_tree_groups,
+                         predictions->DeviceSpan().subspan(batch_offset), d_model.tree_groups,
                          n_features, this->UseShared(), d_model.n_groups, missing, acc);
   }
 

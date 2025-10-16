@@ -9,7 +9,6 @@
 #include <dmlc/parameter.h>
 
 #include <memory>
-#include <mutex>  // for mutex
 #include <string>
 #include <vector>
 
@@ -134,7 +133,6 @@ struct GBTreeModel : public Model {
    */
   std::shared_ptr<CatContainer> cats_{std::make_shared<CatContainer>()};
   Context const* ctx_;
-  mutable std::mutex mu_;
 };
 }  // namespace gbm
 }  // namespace xgboost
