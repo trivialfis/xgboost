@@ -106,7 +106,7 @@ struct SparsePageLoader {
   float* smem;
 
   __device__ SparsePageLoader(SparsePageView data, bool use_shared, bst_feature_t num_features,
-                              bst_idx_t ridx, float, EncAccessor&& acc)
+                              bst_idx_t ridx, float, EncAccessor acc)
       : use_shared(use_shared), data(data), acc_{std::forward<EncAccessor>(acc)} {
     extern __shared__ float _smem[];
     smem = _smem;
@@ -144,7 +144,7 @@ struct EllpackLoader {
   EncAccessor acc;
 
   XGBOOST_DEVICE EllpackLoader(Accessor m, bool /*use_shared*/, bst_feature_t /*n_features*/,
-                               bst_idx_t /*ridx*/, float /*missing*/, EncAccessor&& acc)
+                               bst_idx_t /*ridx*/, float /*missing*/, EncAccessor acc)
       : matrix{std::move(m)}, acc{std::forward<EncAccessor>(acc)} {}
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
     auto gidx = matrix.template GetBinIndex<false>(ridx, fidx);
@@ -183,8 +183,8 @@ struct DeviceAdapterLoader {
   bool use_shared;
   data::IsValidFunctor is_valid;
 
-  XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch&& batch, bool use_shared, bst_feature_t n_features,
-                                         bst_idx_t ridx, float missing, EncAccessor&& acc)
+  XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch batch, bool use_shared, bst_feature_t n_features,
+                                         bst_idx_t ridx, float missing, EncAccessor acc)
       : batch_{std::move(batch)},
         acc_{std::forward<EncAccessor>(acc)},
         n_features{n_features},
@@ -208,11 +208,13 @@ struct DeviceAdapterLoader {
       }
       __syncthreads();
     } else {
-      // Prefetch, not using the PTX prefetch as we might have stride
-      auto beg = ridx * n_features;
-      auto end = std::min((ridx + 1) * n_features, beg + 64);
-      for (size_t i = beg; i < end; ++i) {
-        [[maybe_unused]] auto _ = this->batch_.GetElement(i);
+      if (ridx < batch_.NumRows()) {
+        // Prefetch, not using the PTX prefetch as we might have stride
+        auto beg = ridx * n_features;
+        auto end = std::min((ridx + 1) * n_features, beg + 64);
+        for (size_t i = beg; i < end; ++i) {
+          [[maybe_unused]] auto _ = this->batch_.GetElement(i);
+        }
       }
     }
   }
@@ -296,6 +298,13 @@ using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTr
 
 template <std::uint32_t kBlockThreads, typename Fn>
 __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
+  if (d_trees.size() <= 2) {
+    for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
+      auto tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]);
+      fn(tree, tree_idx);
+    }
+    return;
+  }
   // auto group = cooperative_groups::this_thread_block();
   // group.sync();
   // __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
@@ -313,8 +322,9 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
     auto stage = tree_idx % 2 == 0;
     auto dst = smem + stage * kNodesMax + threadIdx.x;
     if (threadIdx.x < tree.n) {
-      // SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (kBlockThreads * 2 * kNodeSize));
-      cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], sizeof(RegTree::Node), pipe);
+      // SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (kBlockThreads * 2 *
+      // kNodeSize));
+      cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], kNodeSize, pipe);
     }
   };
   auto create_tree_view = [&](bst_tree_t tree_idx) {
@@ -361,7 +371,11 @@ __global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     bst_tree_t tree_begin, bst_tree_t tree_end, bst_feature_t num_features, bool use_shared,
     float missing, EncAccessor acc) {
-  for (bst_idx_t ridx : dh::GridStrideRange(static_cast<bst_idx_t>(0), data.NumRows())) {
+  bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+  bst_idx_t grid_stride = gridDim.x * blockDim.x;
+
+  // Grid strided loop
+  for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
     Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
     for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
       auto const& d_tree = d_trees[tree_idx - tree_begin];
@@ -386,18 +400,30 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, bool use_shared,
     bst_target_t n_groups, float missing, EncAccessor acc) {
-  for (bst_idx_t ridx : dh::GridStrideRange(static_cast<bst_idx_t>(0), data.NumRows())) {
-    Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
+  bst_idx_t grid_stride = gridDim.x * blockDim.x;
+
+  // Grid strided loop
+  std::size_t offset = blockIdx.x * blockDim.x;
+  bst_idx_t n_samples = data.NumRows();
+  while (offset < n_samples) {
+    bst_idx_t ridx = offset + threadIdx.x;
+    Loader loader{data, use_shared, num_features, ridx, missing, acc};
 
     if (n_groups == 1u) {
       float sum = 0;
-      ForEachTree<kBlockThreads>(d_trees, [&](tree::ScalarTreeView const& shmem_tree, bst_tree_t tree_idx) {
-        auto const& d_tree = d_trees[tree_idx];
-        auto const& sc_tree = cuda::std::get<tree::ScalarTreeView>(d_tree);
-        float leaf = GetLeafWeight<has_missing>(ridx, sc_tree, shmem_tree, &loader);
-        sum += leaf;
-      });
-      d_out_predictions[ridx] += sum;
+      ForEachTree<kBlockThreads>(
+          d_trees, [&](tree::ScalarTreeView const& shmem_tree, bst_tree_t tree_idx) {
+            if (ridx >= n_samples) {
+              return;
+            }
+            auto const& d_tree = d_trees[tree_idx];
+            auto const& sc_tree = cuda::std::get<tree::ScalarTreeView>(d_tree);
+            float leaf = GetLeafWeight<has_missing>(ridx, sc_tree, shmem_tree, &loader);
+            sum += leaf;
+          });
+      if (ridx < n_samples) {
+        d_out_predictions[ridx] += sum;
+      }
     } else {
       for (bst_tree_t tree_idx = 0, k = d_trees.size(); tree_idx < k; tree_idx++) {
         // Both d_tree_group and d_tress are subset of trees.
@@ -420,6 +446,8 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
             d_tree);
       }
     }
+
+    offset += grid_stride;
   }
 }
 
