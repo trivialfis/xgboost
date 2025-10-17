@@ -297,11 +297,11 @@ using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTr
 
 template <std::uint32_t kBlockThreads, typename Fn>
 __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
-  auto group = cooperative_groups::this_thread_block();
+  // auto group = cooperative_groups::this_thread_block();
   // __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
+  // __shared__ cuda::pipeline_shared_state<cuda::thread_scope_thread, 2> pss;
 
-  __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> pss;
-  cuda::pipeline<cuda::thread_scope_block> pipe = cuda::make_pipeline(group, &pss);
+  cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
   extern __shared__ char _smem[];
   auto smem = reinterpret_cast<RegTree::Node *>(_smem);
@@ -339,9 +339,11 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
 
   for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
     cuda::pipeline_consumer_wait_prior<1>(pipe);
+    __syncthreads();
     auto tree = create_tree_view(tree_idx);
     fn(tree, tree_idx);
     pipe.consumer_release();
+    __syncthreads();
 
     pipe.producer_acquire();
     if (tree_idx + 2 < d_trees.size()) {
