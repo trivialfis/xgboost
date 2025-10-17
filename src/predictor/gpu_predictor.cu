@@ -192,7 +192,6 @@ struct DeviceAdapterLoader {
         is_valid{missing} {
     extern __shared__ float _smem[];
     this->smem = _smem;
-    SPAN_CHECK(!this->use_shared);
     if (this->use_shared) {
       size_t shared_elements = blockDim.x * n_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
@@ -298,6 +297,7 @@ using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTr
 template <std::uint32_t kBlockThreads, typename Fn>
 __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
   // auto group = cooperative_groups::this_thread_block();
+  // group.sync();
   // __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
   // __shared__ cuda::pipeline_shared_state<cuda::thread_scope_thread, 2> pss;
 
@@ -311,15 +311,15 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
 
   auto load = [&pipe, &smem](tree::ScalarTreeView const& tree, bst_tree_t tree_idx) {
     auto stage = tree_idx % 2 == 0;
-    auto dst = smem + stage * (kNodeSize * kNodesMax) + threadIdx.x;
+    auto dst = smem + stage * kNodesMax + threadIdx.x;
     if (threadIdx.x < tree.n) {
-      SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (sizeof(RegTree::Node) * kBlockThreads * 2));
+      // SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (kBlockThreads * 2 * kNodeSize));
       cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], sizeof(RegTree::Node), pipe);
     }
   };
   auto create_tree_view = [&](bst_tree_t tree_idx) {
     auto stage = tree_idx % 2 == 0;
-    auto dst = smem + stage * (kNodeSize * kNodesMax);
+    auto dst = smem + stage * kNodesMax;
     auto tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]);
     return tree::ScalarTreeView{dst, tree.stats, tree.GetCategoriesMatrix(),
                                 std::min(tree.n, static_cast<bst_node_t>(kNodesMax))};
@@ -340,6 +340,7 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
   for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
     cuda::pipeline_consumer_wait_prior<1>(pipe);
     __syncthreads();
+
     auto tree = create_tree_view(tree_idx);
     fn(tree, tree_idx);
     pipe.consumer_release();
