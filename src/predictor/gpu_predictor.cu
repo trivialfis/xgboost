@@ -165,7 +165,7 @@ struct EllpackLoader {
 };
 
 /**
- * @brief Use for in-place predict.
+ * @brief Used for in-place predict.
  */
 template <typename Batch, typename EncAccessor>
 struct DeviceAdapterLoader {
