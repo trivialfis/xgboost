@@ -234,9 +234,8 @@ struct DeviceAdapterLoader {
 
 namespace {
 template <bool has_missing, bool has_categorical, typename TreeView, typename Loader>
-__device__ bst_node_t GetLeafIndex(bst_idx_t ridx, TreeView const& tree, Loader* loader) {
-  bst_node_t nidx = 0;
-  while (!tree.IsLeaf(nidx)) {
+__device__ bst_node_t GetLeafIndex(bst_idx_t ridx, TreeView const& tree, bst_node_t nidx, Loader* loader) {
+  while (nidx < tree.n && !tree.IsLeaf(nidx)) {
     float fvalue = loader->GetElement(ridx, tree.SplitIndex(nidx));
     bool is_missing = has_missing && common::CheckNAN(fvalue);
     auto next = GetNextNode<has_missing, has_categorical>(tree, nidx, fvalue, is_missing,
@@ -251,9 +250,9 @@ template <bool has_missing, typename TreeView, typename Loader>
 __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, Loader* loader) {
   bst_node_t nidx = -1;
   if (tree.HasCategoricalSplit()) {
-    nidx = GetLeafIndex<has_missing, true>(ridx, tree, loader);
+    nidx = GetLeafIndex<has_missing, true>(ridx, tree, 0, loader);
   } else {
-    nidx = GetLeafIndex<has_missing, false>(ridx, tree, loader);
+    nidx = GetLeafIndex<has_missing, false>(ridx, tree, 0, loader);
   }
   return tree.LeafValue(nidx);
 }
@@ -261,24 +260,8 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, Loader* load
 template <bool has_missing, bool has_categorical, typename TreeView, typename Loader>
 __device__ bst_node_t GetLeafIndex(bst_idx_t ridx, TreeView const& tree,
                                    tree::ScalarTreeView const& shmem_tree, Loader* loader) {
-  bst_node_t nidx = 0;
-  while (nidx < shmem_tree.n && !shmem_tree.IsLeaf(nidx)) {
-    float fvalue = loader->GetElement(ridx, shmem_tree.SplitIndex(nidx));
-    bool is_missing = has_missing && common::CheckNAN(fvalue);
-    auto next = GetNextNode<has_missing, has_categorical>(shmem_tree, nidx, fvalue, is_missing,
-                                                          tree.GetCategoriesMatrix());
-    assert(nidx < next);
-    nidx = next;
-  }
-
-  while (!tree.IsLeaf(nidx)) {
-    float fvalue = loader->GetElement(ridx, tree.SplitIndex(nidx));
-    bool is_missing = has_missing && common::CheckNAN(fvalue);
-    auto next = GetNextNode<has_missing, has_categorical>(tree, nidx, fvalue, is_missing,
-                                                          tree.GetCategoriesMatrix());
-    assert(nidx < next);
-    nidx = next;
-  }
+  bst_node_t nidx = GetLeafIndex<has_missing, has_categorical>(ridx, shmem_tree, 0, loader);
+  nidx = GetLeafIndex<has_missing, has_categorical>(ridx, tree, nidx, loader);
   return nidx;
 }
 
@@ -305,10 +288,6 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
     }
     return;
   }
-  // auto group = cooperative_groups::this_thread_block();
-  // group.sync();
-  // __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
-  // __shared__ cuda::pipeline_shared_state<cuda::thread_scope_thread, 2> pss;
 
   cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
