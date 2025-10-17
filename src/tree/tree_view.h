@@ -161,6 +161,9 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
         n{tree->NumNodes()} {
     CHECK(!tree->IsMultiTarget());
   }
+  explicit ScalarTreeView(RegTree::Node const* nodes, RTreeNodeStat const* stats,
+                          RegTree::CategoricalSplitMatrix const& cats, bst_node_t n)
+      : CategoriesMixIn{cats}, nodes{nodes}, stats{stats}, n{n} {}
 };
 
 /**

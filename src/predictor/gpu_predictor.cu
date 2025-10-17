@@ -7,6 +7,7 @@
 #include <thrust/fill.h>
 
 #include <cuda/functional>   // for proclaim_return_type
+#include <cuda/pipeline>     // for make_pipeline
 #include <cuda/std/utility>  // for swap
 #include <memory>
 
@@ -254,9 +255,63 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, Loader* load
   }
   return tree.LeafValue(nidx);
 }
-}  // namespace
 
 using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTreeView>;
+
+template <std::uint32_t kBlockThreads, typename Fn>
+__device__ void ForEachTree(common::Span<TreeViewVar> const& d_trees, Fn&& fn) {
+  cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+
+  extern __shared__ char _smem[];
+  auto smem = reinterpret_cast<RegTree::Node *>(_smem);
+
+  constexpr auto kNodesMax = kBlockThreads;
+  constexpr auto kNodeSize = sizeof(RegTree::Node);
+
+  auto load = [&pipe, &smem](tree::ScalarTreeView const& tree, bst_tree_t tree_idx) {
+    auto stage = tree_idx % 2 == 0;
+    auto dst = smem + stage * (kNodeSize * kNodesMax) + threadIdx.x;
+    // fixme: invoke one
+    if (threadIdx.x < tree.n) {
+      cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], sizeof(RegTree::Node), pipe);
+    } else {
+      cuda::memcpy_async(dst, &tree.nodes[0], sizeof(RegTree::Node), pipe);
+    }
+  };
+  auto create_tree_view = [&](bst_tree_t tree_idx) {
+    auto stage = tree_idx % 2 == 0;
+    auto dst = smem + stage * (kNodeSize * kNodesMax);
+    auto tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]);
+    return tree::ScalarTreeView{dst, tree.stats, tree.GetCategoriesMatrix(),
+                                std::min(tree.n, static_cast<bst_node_t>(kNodesMax))};
+  };
+
+  bst_tree_t tree_idx = 0;
+
+  pipe.producer_acquire();
+  load(cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]), tree_idx);
+  pipe.producer_commit();
+  tree_idx += 1;
+
+  pipe.producer_acquire();
+  load(cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]), tree_idx);
+  pipe.producer_commit();
+  tree_idx += 1;
+
+  for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
+    cuda::pipeline_consumer_wait_prior<1>(pipe);
+    auto tree = create_tree_view(tree_idx);
+    fn(tree, tree_idx - 2);
+    pipe.consumer_release();
+
+    pipe.producer_acquire();
+    if (tree_idx + 2 < d_trees.size()) {
+      load(cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx + 2]));
+    }
+    pipe.producer_commit();
+  }
+}
+}  // namespace
 
 template <std::uint32_t kBlockThreads, typename Loader, typename Data, bool has_missing,
           typename EncAccessor>
