@@ -105,19 +105,18 @@ struct SparsePageLoader {
   float* smem;
 
   __device__ SparsePageLoader(SparsePageView data, bool use_shared, bst_feature_t num_features,
-                              bst_idx_t num_rows, float, EncAccessor&& acc)
+                              bst_idx_t ridx, float, EncAccessor&& acc)
       : use_shared(use_shared), data(data), acc_{std::forward<EncAccessor>(acc)} {
     extern __shared__ float _smem[];
     smem = _smem;
     // Copy instances
     if (use_shared) {
-      bst_uint global_idx = blockDim.x * blockIdx.x + threadIdx.x;
       int shared_elements = blockDim.x * data.num_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
       __syncthreads();
-      if (global_idx < num_rows) {
-        bst_uint elem_begin = data.d_row_ptr[global_idx];
-        bst_uint elem_end = data.d_row_ptr[global_idx + 1];
+      if (ridx < data.NumRows()) {
+        bst_uint elem_begin = data.d_row_ptr[ridx];
+        bst_uint elem_end = data.d_row_ptr[ridx + 1];
         for (bst_uint elem_idx = elem_begin; elem_idx < elem_end; elem_idx++) {
           Entry elem = data.d_data[elem_idx];
           smem[threadIdx.x * data.num_features + elem.index] = this->acc_(elem);
@@ -144,7 +143,7 @@ struct EllpackLoader {
   EncAccessor acc;
 
   XGBOOST_DEVICE EllpackLoader(Accessor m, bool /*use_shared*/, bst_feature_t /*n_features*/,
-                               bst_idx_t /*n_samples*/, float /*missing*/, EncAccessor&& acc)
+                               bst_idx_t /*ridx*/, float /*missing*/, EncAccessor&& acc)
       : matrix{std::move(m)}, acc{std::forward<EncAccessor>(acc)} {}
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
     auto gidx = matrix.template GetBinIndex<false>(ridx, fidx);
@@ -184,7 +183,7 @@ struct DeviceAdapterLoader {
   data::IsValidFunctor is_valid;
 
   XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch&& batch, bool use_shared, bst_feature_t n_features,
-                                         bst_idx_t n_samples, float missing, EncAccessor&& acc)
+                                         bst_idx_t ridx, float missing, EncAccessor&& acc)
       : batch_{std::move(batch)},
         acc_{std::forward<EncAccessor>(acc)},
         n_features{n_features},
@@ -193,13 +192,12 @@ struct DeviceAdapterLoader {
     extern __shared__ float _smem[];
     this->smem = _smem;
     if (this->use_shared) {
-      auto global_idx = blockDim.x * blockIdx.x + threadIdx.x;
       size_t shared_elements = blockDim.x * n_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
       __syncthreads();
-      if (global_idx < n_samples) {
-        auto beg = global_idx * n_features;
-        auto end = (global_idx + 1) * n_features;
+      if (ridx < batch_.NumRows()) {
+        auto beg = ridx * n_features;
+        auto end = (ridx + 1) * n_features;
         for (size_t i = beg; i < end; ++i) {
           data::COOTuple const& e = this->batch_.GetElement(i);
           if (is_valid(e)) {
@@ -253,72 +251,77 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, Loader* load
 
 using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTreeView>;
 
-template <typename Loader, typename Data, bool has_missing, typename EncAccessor>
-__global__ void PredictLeafKernel(Data data, common::Span<TreeViewVar const> d_trees,
-                                  common::Span<float> d_out_predictions, bst_tree_t tree_begin,
-                                  bst_tree_t tree_end, bst_feature_t num_features, bool use_shared,
-                                  float missing, EncAccessor acc) {
-  bst_idx_t ridx = blockDim.x * blockIdx.x + threadIdx.x;
-  if (ridx >= data.NumRows()) {
-    return;
-  }
-  Loader loader{std::move(data), use_shared, num_features, data.NumRows(), missing, std::move(acc)};
-  for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
-    auto const& d_tree = d_trees[tree_idx - tree_begin];
-    cuda::std::visit(
-        [&](auto&& tree) {
-          bst_node_t leaf = -1;
-          if (tree.HasCategoricalSplit()) {
-            leaf = GetLeafIndex<has_missing, true>(ridx, tree, &loader);
-          } else {
-            leaf = GetLeafIndex<has_missing, false>(ridx, tree, &loader);
-          }
-          d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
-        },
-        d_tree);
+template <std::uint32_t kBlockThreads, typename Loader, typename Data, bool has_missing,
+          typename EncAccessor>
+__global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
+    Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
+    bst_tree_t tree_begin, bst_tree_t tree_end, bst_feature_t num_features, bool use_shared,
+    float missing, EncAccessor acc) {
+  bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+  bst_idx_t grid_stride = gridDim.x * blockDim.x;
+
+  // Grid strided loop
+  for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
+    Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
+    for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
+      auto const& d_tree = d_trees[tree_idx - tree_begin];
+      cuda::std::visit(
+          [&](auto&& tree) {
+            bst_node_t leaf = -1;
+            if (tree.HasCategoricalSplit()) {
+              leaf = GetLeafIndex<has_missing, true>(ridx, tree, &loader);
+            } else {
+              leaf = GetLeafIndex<has_missing, false>(ridx, tree, &loader);
+            }
+            d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
+          },
+          d_tree);
+    }
   }
 }
 
-template <typename Loader, typename Data, bool has_missing, typename EncAccessor>
-__global__ void PredictKernel(Data data, common::Span<TreeViewVar const> d_trees,
-                              common::Span<float> d_out_predictions,
-                              common::Span<bst_target_t const> d_tree_groups,
-                              bst_feature_t num_features, bool use_shared, bst_target_t n_groups,
-                              float missing, EncAccessor acc) {
+template <std::uint32_t kBlockThreads, typename Loader, typename Data, bool has_missing,
+          typename EncAccessor>
+__global__ __launch_bounds__(kBlockThreads) void PredictKernel(
+    Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
+    common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, bool use_shared,
+    bst_target_t n_groups, float missing, EncAccessor acc) {
   bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
-  Loader loader{std::move(data), use_shared, num_features, data.NumRows(), missing, std::move(acc)};
-  if (global_idx >= data.NumRows()) {
-    return;
-  }
+  bst_idx_t grid_stride = gridDim.x * blockDim.x;
 
-  if (n_groups == 1u) {
-    float sum = 0;
-    for (auto const& d_tree : d_trees) {
-      auto const& sc_tree = cuda::std::get<tree::ScalarTreeView>(d_tree);
-      float leaf = GetLeafWeight<has_missing>(global_idx, sc_tree, &loader);
-      sum += leaf;
-    }
-    d_out_predictions[global_idx] += sum;
-  } else {
-    for (bst_tree_t tree_idx = 0, k = d_trees.size(); tree_idx < k; tree_idx++) {
-      // Both d_tree_group and d_tress are subset of trees.
-      auto tree_group = d_tree_groups[tree_idx];
-      auto const& d_tree = d_trees[tree_idx];
-      cuda::std::visit(
-          enc::Overloaded{[&](tree::ScalarTreeView const& tree) {
-                            auto leaf = GetLeafWeight<has_missing>(global_idx, tree, &loader);
-                            bst_idx_t out_prediction_idx = global_idx * n_groups + tree_group;
-                            d_out_predictions[out_prediction_idx] += leaf;
-                          },
-                          [&](tree::MultiTargetTreeView const& tree) {
-                            // Tree group is 0.
-                            auto leaf = GetLeafWeight<has_missing>(global_idx, tree, &loader);
-                            for (std::size_t i = 0, n = leaf.Shape(0); i < n; ++i) {
-                              bst_idx_t out_prediction_idx = global_idx * n_groups + i;
-                              d_out_predictions[out_prediction_idx] += leaf(i);
-                            }
-                          }},
-          d_tree);
+  // Grid strided loop
+  for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
+    Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
+
+    if (n_groups == 1u) {
+      float sum = 0;
+      for (auto const& d_tree : d_trees) {
+        auto const& sc_tree = cuda::std::get<tree::ScalarTreeView>(d_tree);
+        float leaf = GetLeafWeight<has_missing>(ridx, sc_tree, &loader);
+        sum += leaf;
+      }
+      d_out_predictions[ridx] += sum;
+    } else {
+      for (bst_tree_t tree_idx = 0, k = d_trees.size(); tree_idx < k; tree_idx++) {
+        // Both d_tree_group and d_tress are subset of trees.
+        auto tree_group = d_tree_groups[tree_idx];
+        auto const& d_tree = d_trees[tree_idx];
+        cuda::std::visit(
+            enc::Overloaded{[&](tree::ScalarTreeView const& tree) {
+                              auto leaf = GetLeafWeight<has_missing>(ridx, tree, &loader);
+                              bst_idx_t out_prediction_idx = ridx * n_groups + tree_group;
+                              d_out_predictions[out_prediction_idx] += leaf;
+                            },
+                            [&](tree::MultiTargetTreeView const& tree) {
+                              // Tree group is 0.
+                              auto leaf = GetLeafWeight<has_missing>(ridx, tree, &loader);
+                              for (std::size_t i = 0, n = leaf.Shape(0); i < n; ++i) {
+                                bst_idx_t out_prediction_idx = ridx * n_groups + i;
+                                d_out_predictions[out_prediction_idx] += leaf(i);
+                              }
+                            }},
+            d_tree);
+      }
     }
   }
 }
@@ -554,7 +557,7 @@ void ExtractPaths(Context const* ctx,
 }
 
 namespace {
-template <std::size_t kBlockThreads>
+template <std::uint32_t kBlockThreads>
 [[nodiscard]] std::size_t SharedMemoryBytes(std::size_t n_features, std::size_t max_shmem_bytes) {
   CHECK_GT(max_shmem_bytes, 0);
   size_t shared_memory_bytes = static_cast<size_t>(sizeof(float) * n_features * kBlockThreads);
@@ -571,37 +574,39 @@ __global__ void MaskBitVectorKernel(SparsePageView data, common::Span<TreeViewVa
                                     bst_tree_t tree_begin, bst_tree_t tree_end,
                                     bst_feature_t num_features, std::size_t num_nodes,
                                     bool use_shared, float missing) {
-  // This needs to be always instantiated since the data is loaded cooperatively by all threads.
-  SparsePageLoader loader{data, use_shared, num_features, data.NumRows(), missing, NoOpAccessor{}};
-  auto const row_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (row_idx >= data.NumRows()) {
-    return;
-  }
+  auto const global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  auto const grid_stride = gridDim.x * blockDim.x;
 
-  std::size_t tree_offset = 0;
-  for (auto tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
-    auto const& d_tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx - tree_begin]);
-    auto const tree_nodes = d_tree.Size();
-    for (auto nid = 0; nid < tree_nodes; nid++) {
-      if (d_tree.IsDeleted(nid) || d_tree.IsLeaf(nid)) {
-        continue;
-      }
-      auto const fvalue = loader.GetElement(row_idx, d_tree.SplitIndex(nid));
-      auto const is_missing = common::CheckNAN(fvalue);
-      auto const bit_index = row_idx * num_nodes + tree_offset + nid;
-      if (is_missing) {
-        missing_bits.Set(bit_index);
-      } else {
-        auto const decision =
-            d_tree.HasCategoricalSplit()
-                ? GetDecision<true>(d_tree, nid, fvalue, d_tree.GetCategoriesMatrix())
-                : GetDecision<false>(d_tree, nid, fvalue, d_tree.GetCategoriesMatrix());
-        if (decision) {
-          decision_bits.Set(bit_index);
+  // Grid strided loop
+  for (bst_idx_t row_idx = global_idx; row_idx < data.NumRows(); row_idx += grid_stride) {
+    // This needs to be always instantiated since the data is loaded cooperatively by all threads.
+    SparsePageLoader loader{data, use_shared, num_features, row_idx, missing, NoOpAccessor{}};
+
+    std::size_t tree_offset = 0;
+    for (auto tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
+      auto const& d_tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx - tree_begin]);
+      auto const tree_nodes = d_tree.Size();
+      for (auto nid = 0; nid < tree_nodes; nid++) {
+        if (d_tree.IsDeleted(nid) || d_tree.IsLeaf(nid)) {
+          continue;
+        }
+        auto const fvalue = loader.GetElement(row_idx, d_tree.SplitIndex(nid));
+        auto const is_missing = common::CheckNAN(fvalue);
+        auto const bit_index = row_idx * num_nodes + tree_offset + nid;
+        if (is_missing) {
+          missing_bits.Set(bit_index);
+        } else {
+          auto const decision =
+              d_tree.HasCategoricalSplit()
+                  ? GetDecision<true>(d_tree, nid, fvalue, d_tree.GetCategoriesMatrix())
+                  : GetDecision<false>(d_tree, nid, fvalue, d_tree.GetCategoriesMatrix());
+          if (decision) {
+            decision_bits.Set(bit_index);
+          }
         }
       }
+      tree_offset += tree_nodes;
     }
-    tree_offset += tree_nodes;
   }
 }
 
@@ -829,8 +834,8 @@ class LaunchConfig {
   void LaunchPredictKernel(Data batch, float missing, bst_feature_t n_features,
                            DeviceModel const& d_model, EncAccessorT acc, bst_idx_t batch_offset,
                            HostDeviceVector<float>* predictions) {
-    auto kernel = PredictKernel<typename Loader::Type, common::GetValueT<decltype(batch)>,
-                                HasMissing(), EncAccessorT>;
+    auto kernel = PredictKernel<Loader::kBlockThreads, typename Loader::Type,
+                                common::GetValueT<decltype(batch)>, HasMissing(), EncAccessorT>;
     this->Launch<Loader>(kernel, std::move(batch), dh::ToSpan(d_model.d_trees),
                          predictions->DeviceSpan().subspan(batch_offset), d_model.tree_groups,
                          n_features, this->UseShared(), d_model.n_groups, missing, acc);
@@ -851,7 +856,6 @@ class LaunchConfig {
   template <typename Loader>
   void AllocShmem() {
     this->shared_memory_bytes_ = Loader::AllocShmem(this->ctx_, this->n_features_);
-    std::cout << "this->shared_memory_bytes_:" << this->shared_memory_bytes_ << std::endl;
   }
 
  public:
@@ -1233,8 +1237,9 @@ class GPUPredictor : public xgboost::Predictor {
       cfg.ForEachBatch(p_fmat, [&](auto&& loader_t, auto&& batch) {
         using Loader = typename common::GetValueT<decltype(loader_t)>;
         using Config = common::GetValueT<decltype(cfg)>;
-        auto kernel = PredictLeafKernel<typename Loader::Type, common::GetValueT<decltype(batch)>,
-                                        Config::HasMissing(), typename Config::EncAccessorT>;
+        auto kernel = PredictLeafKernel<Loader::kBlockThreads, typename Loader::Type,
+                                        common::GetValueT<decltype(batch)>, Config::HasMissing(),
+                                        typename Config::EncAccessorT>;
         cfg.template Launch<Loader>(kernel, std::move(batch), dh::ToSpan(d_model.d_trees),
                                     predictions->DeviceSpan().subspan(batch_offset),
                                     d_model.tree_begin, d_model.tree_end, n_features,
