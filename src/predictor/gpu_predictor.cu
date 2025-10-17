@@ -825,8 +825,17 @@ class LaunchConfig {
  public:
   template <typename Loader, typename K, typename BatchT, typename... Args>
   void Launch(K&& kernel, BatchT&& batch, Args&&... args) const {
-    auto grid = static_cast<uint32_t>(common::DivRoundUp(batch.NumRows(), Loader::kBlockThreads));
-    dh::LaunchKernel{grid, Loader::kBlockThreads, this->shared_memory_bytes_,  // NOLINT
+    std::int32_t n_mps = 0;
+    dh::safe_cuda(
+        cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, this->ctx_->Ordinal()));
+    std::int32_t n_blocks_per_mp = 0;
+    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &n_blocks_per_mp, kernel, Loader::kBlockThreads, this->shared_memory_bytes_));
+
+    auto grid_ds = static_cast<uint32_t>(common::DivRoundUp(batch.NumRows(), Loader::kBlockThreads));
+    grid_ds = std::min(static_cast<std::uint32_t>(n_blocks_per_mp * n_mps), grid_ds);
+
+    dh::LaunchKernel{grid_ds, Loader::kBlockThreads, this->shared_memory_bytes_,  // NOLINT
                      this->ctx_->CUDACtx()->Stream()}(kernel, std::forward<BatchT>(batch),
                                                       std::forward<Args>(args)...);
   }
