@@ -400,11 +400,7 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
   RegTree::Node* tr_shmem = nullptr;
   float* ds_shmem = nullptr;
   static_assert(alignof(RegTree::Node) == 4);
-  if (shmem_status & kTree && shmem_status & kData) {
-    tr_shmem = reinterpret_cast<RegTree::Node*>(_shmem);
-    ds_shmem = reinterpret_cast<float*>(_shmem + TreeShmemBytes<kBlockThreads>());
-    SPAN_CHECK(reinterpret_cast<std::ptrdiff_t>(ds_shmem) % 4 == 0);
-  } else if (shmem_status & kData) {
+  if (shmem_status & kData) {
     ds_shmem = reinterpret_cast<float*>(_shmem);
   } else if (shmem_status & kTree) {
     tr_shmem = reinterpret_cast<RegTree::Node*>(_shmem);
@@ -1004,27 +1000,15 @@ class LaunchConfig {
   void AllocShmem() {
     auto available = ConfigureDevice(this->ctx_->Device());
     auto tree_n_bytes = TreeShmemBytes<Loader::kBlockThreads>();
-    available -= tree_n_bytes;
+    // available -= tree_n_bytes;
     auto n_bytes = Loader::AllocShmem(this->n_features_, available);
     this->shmem_status_ = 0;
     if (n_bytes > 0) {
-      // It can fit both
-      this->shmem_status_ = kData | kTree;
-      n_bytes += tree_n_bytes;
-      std::cout << "both" << std::endl;
-    }
-
-    if (this->shmem_status_ == 0) {
-      CHECK_EQ(n_bytes, 0);
-      // If it can not fit the tree and the data at the same time, try fitting only the data
-      available += tree_n_bytes;
-      n_bytes = Loader::AllocShmem(this->n_features_, available);
-      if (n_bytes > 0) {
-        this->shmem_status_ = kData;
-      }
+      // It can fit the data, use the shmem for data.
+      this->shmem_status_ = kData;
     }
     if (this->shmem_status_ == 0) {
-      // If it can not fit the data, then tree only.
+      // If it can not fit the data, then use it for the tree.
       n_bytes = tree_n_bytes;
       this->shmem_status_ = kTree;
     }
