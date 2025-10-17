@@ -101,17 +101,14 @@ struct SparsePageLoader {
   EncAccessor acc_;
 
  public:
-  bool use_shared;
   SparsePageView data;
   float* smem;
 
-  __device__ SparsePageLoader(SparsePageView data, bool use_shared, bst_feature_t num_features,
+  __device__ SparsePageLoader(SparsePageView data, float* shmem, bst_feature_t num_features,
                               bst_idx_t ridx, float, EncAccessor acc)
-      : use_shared(use_shared), data(data), acc_{std::forward<EncAccessor>(acc)} {
-    extern __shared__ float _smem[];
-    smem = _smem;
+      : data(data), acc_{std::forward<EncAccessor>(acc)} , smem{shmem}{
     // Copy instances
-    if (use_shared) {
+    if (smem) {
       int shared_elements = blockDim.x * data.num_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
       __syncthreads();
@@ -127,7 +124,7 @@ struct SparsePageLoader {
     }
   }
   [[nodiscard]] __device__ float GetElement(size_t ridx, size_t fidx) const {
-    if (use_shared) {
+    if (smem) {
       return smem[threadIdx.x * data.num_features + fidx];
     } else {
       return this->acc_(data.GetElement(ridx, fidx), fidx);
@@ -143,7 +140,7 @@ struct EllpackLoader {
   Accessor matrix;
   EncAccessor acc;
 
-  XGBOOST_DEVICE EllpackLoader(Accessor m, bool /*use_shared*/, bst_feature_t /*n_features*/,
+  XGBOOST_DEVICE EllpackLoader(Accessor m, float* /*use_shared*/, bst_feature_t /*n_features*/,
                                bst_idx_t /*ridx*/, float /*missing*/, EncAccessor acc)
       : matrix{std::move(m)}, acc{std::forward<EncAccessor>(acc)} {}
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
@@ -180,19 +177,16 @@ struct DeviceAdapterLoader {
  public:
   bst_feature_t n_features;
   float* smem;
-  bool use_shared;
   data::IsValidFunctor is_valid;
 
-  XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch batch, bool use_shared, bst_feature_t n_features,
+  XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch batch, float* shmem, bst_feature_t n_features,
                                          bst_idx_t ridx, float missing, EncAccessor acc)
       : batch_{std::move(batch)},
         acc_{std::forward<EncAccessor>(acc)},
         n_features{n_features},
-        use_shared{use_shared},
+        smem{shmem},
         is_valid{missing} {
-    extern __shared__ float _smem[];
-    this->smem = _smem;
-    if (this->use_shared) {
+    if (this->smem) {
       size_t shared_elements = blockDim.x * n_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
       __syncthreads();
@@ -220,7 +214,7 @@ struct DeviceAdapterLoader {
   }
 
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
-    if (use_shared) {
+    if (this->smem) {
       return smem[threadIdx.x * n_features + fidx];
     }
     auto value = this->batch_.GetElement(ridx * n_features + fidx).value;
@@ -230,6 +224,11 @@ struct DeviceAdapterLoader {
       return std::numeric_limits<float>::quiet_NaN();
     }
   }
+};
+
+enum ShmemTag : std::int32_t {
+  kData = 1,
+  kTree = 2,
 };
 
 namespace {
@@ -279,9 +278,23 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, tree::Scalar
 
 using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTreeView>;
 
+// An heuristic for how many nodes to load into shared memory. Tunable.
+template <std::uint32_t kBlockThreads>
+std::size_t constexpr TreeShmemNodes() {
+  // static_assert(alignof(RegTree::Node) == 20);
+  return kBlockThreads;
+}
+
+template <std::uint32_t kBlockThreads>
+std::size_t constexpr TreeShmemBytes() {
+  constexpr std::int32_t kStages = 2;  // 2-stage async load
+  return TreeShmemNodes<kBlockThreads>() * sizeof(RegTree::Node) * kStages;
+}
+
 template <std::uint32_t kBlockThreads, typename Fn>
-__device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
-  if (d_trees.size() <= 2) {
+__device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, RegTree::Node* smem,
+                            Fn&& fn) {
+  if (d_trees.size() <= 2 || !smem) {
     for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
       auto tree = cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx]);
       fn(tree, tree_idx);
@@ -291,18 +304,16 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
 
   cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
-  extern __shared__ char _smem[];
-  auto smem = reinterpret_cast<RegTree::Node *>(_smem);
+  // extern __shared__ char _smem[];
+  // auto smem = reinterpret_cast<RegTree::Node *>(_smem);
 
-  constexpr auto kNodesMax = kBlockThreads;
+  constexpr auto kNodesMax = TreeShmemNodes<kBlockThreads>();
   constexpr auto kNodeSize = sizeof(RegTree::Node);
 
   auto load = [&pipe, &smem](tree::ScalarTreeView const& tree, bst_tree_t tree_idx) {
     auto stage = tree_idx % 2 == 0;
     auto dst = smem + stage * kNodesMax + threadIdx.x;
     if (threadIdx.x < tree.n) {
-      // SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (kBlockThreads * 2 *
-      // kNodeSize));
       cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], kNodeSize, pipe);
     }
   };
@@ -355,7 +366,7 @@ __global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
 
   // Grid strided loop
   for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
-    Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
+    Loader loader{std::move(data), nullptr, num_features, ridx, missing, std::move(acc)};
     for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
       auto const& d_tree = d_trees[tree_idx - tree_begin];
       cuda::std::visit(
@@ -377,21 +388,37 @@ template <std::uint32_t kBlockThreads, typename Loader, typename Data, bool has_
           typename EncAccessor>
 __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
-    common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, bool use_shared,
+    common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, std::int32_t shmem_status,
     bst_target_t n_groups, float missing, EncAccessor acc) {
   bst_idx_t grid_stride = gridDim.x * blockDim.x;
 
   // Grid strided loop
   std::size_t offset = blockIdx.x * blockDim.x;
   bst_idx_t n_samples = data.NumRows();
+
+  extern __shared__ char _shmem[];
+  RegTree::Node* tr_shmem = nullptr;
+  float* ds_shmem = nullptr;
+  static_assert(alignof(RegTree::Node) == 4);
+  if (shmem_status & kTree && shmem_status & kData) {
+    tr_shmem = reinterpret_cast<RegTree::Node*>(_shmem);
+    ds_shmem = reinterpret_cast<float*>(_shmem + TreeShmemBytes<kBlockThreads>());
+    SPAN_CHECK(reinterpret_cast<std::ptrdiff_t>(ds_shmem) % 4 == 0);
+  } else if (shmem_status & kData) {
+    ds_shmem = reinterpret_cast<float*>(_shmem);
+  } else if (shmem_status & kTree) {
+    tr_shmem = reinterpret_cast<RegTree::Node*>(_shmem);
+  }
+  // SPAN_CHECK(ds_shmem == nullptr);
+
   while (offset < n_samples) {
     bst_idx_t ridx = offset + threadIdx.x;
-    Loader loader{data, use_shared, num_features, ridx, missing, acc};
+    Loader loader{data, ds_shmem, num_features, ridx, missing, acc};
 
     if (n_groups == 1u) {
       float sum = 0;
       ForEachTree<kBlockThreads>(
-          d_trees, [&](tree::ScalarTreeView const& shmem_tree, bst_tree_t tree_idx) {
+          d_trees, tr_shmem, [&](tree::ScalarTreeView const& shmem_tree, bst_tree_t tree_idx) {
             if (ridx >= n_samples) {
               return;
             }
@@ -663,7 +690,7 @@ void ExtractPaths(Context const* ctx,
 namespace {
 template <std::uint32_t kBlockThreads>
 [[nodiscard]] std::size_t SharedMemoryBytes(std::size_t n_features, std::size_t max_shmem_bytes) {
-  return 0;
+  // return 0;
   CHECK_GT(max_shmem_bytes, 0);
   size_t shared_memory_bytes = static_cast<size_t>(sizeof(float) * n_features * kBlockThreads);
   if (shared_memory_bytes > max_shmem_bytes) {
@@ -682,10 +709,12 @@ __global__ void MaskBitVectorKernel(SparsePageView data, common::Span<TreeViewVa
   auto const global_idx = blockIdx.x * blockDim.x + threadIdx.x;
   auto const grid_stride = gridDim.x * blockDim.x;
 
+  extern __shared__ char _shmem[];
+  float* shmem = use_shared ? reinterpret_cast<float*>(_shmem) : nullptr;
   // Grid strided loop
   for (bst_idx_t row_idx = global_idx; row_idx < data.NumRows(); row_idx += grid_stride) {
     // This needs to be always instantiated since the data is loaded cooperatively by all threads.
-    SparsePageLoader loader{data, use_shared, num_features, row_idx, missing, NoOpAccessor{}};
+    SparsePageLoader loader{data, shmem, num_features, row_idx, missing, NoOpAccessor{}};
 
     std::size_t tree_offset = 0;
     for (auto tree_idx = tree_begin; tree_idx < tree_end; tree_idx++) {
@@ -912,9 +941,9 @@ class LaunchConfig {
     using Type = T;
     constexpr static std::uint32_t kBlockThreads = block_threads;
 
-    static std::size_t AllocShmem(Context const* ctx, bst_feature_t n_features) {
+    static std::size_t AllocShmem(bst_feature_t n_features, std::size_t available) {
       if constexpr (typename Type::SupportShmemLoad{}) {
-        return SharedMemoryBytes<kBlockThreads>(n_features, ConfigureDevice(ctx->Device()));
+        return SharedMemoryBytes<kBlockThreads>(n_features, available);
       }
       return 0;
     }
@@ -925,16 +954,14 @@ class LaunchConfig {
 
   Context const* ctx_;
   bst_feature_t n_features_;
+  std::int32_t shmem_status_{0};
   std::size_t shared_memory_bytes_{0};
 
  public:
   template <typename Loader, typename K, typename BatchT, typename... Args>
   void Launch(K&& kernel, BatchT&& batch, Args&&... args) const {
     std::size_t shmem = this->shared_memory_bytes_;
-    if (!this->UseShared()) {
-      shmem = sizeof(RegTree::Node) * Loader::kBlockThreads * 2;
-    }
-    std::cout << "shmem:" << shmem << std::endl;
+    std::cout << "shmem:" << shmem << " status:" << shmem_status_ << std::endl;
 
     std::int32_t n_mps = 0;
     dh::safe_cuda(
@@ -958,10 +985,10 @@ class LaunchConfig {
                                 common::GetValueT<decltype(batch)>, HasMissing(), EncAccessorT>;
     this->Launch<Loader>(kernel, std::move(batch), dh::ToSpan(d_model.d_trees),
                          predictions->DeviceSpan().subspan(batch_offset), d_model.tree_groups,
-                         n_features, this->UseShared(), d_model.n_groups, missing, acc);
+                         n_features, this->shmem_status_, d_model.n_groups, missing, acc);
   }
 
-  [[nodiscard]] bool UseShared() const { return shared_memory_bytes_ != 0; }
+  [[nodiscard]] bool UseShared() const { return shmem_status_ & kData; }
 
   [[nodiscard]] static std::size_t ConfigureDevice(DeviceOrd const& device) {
     thread_local std::unordered_map<std::int32_t, std::size_t> max_shared;
@@ -975,7 +1002,36 @@ class LaunchConfig {
 
   template <typename Loader>
   void AllocShmem() {
-    this->shared_memory_bytes_ = Loader::AllocShmem(this->ctx_, this->n_features_);
+    auto available = ConfigureDevice(this->ctx_->Device());
+    auto tree_n_bytes = TreeShmemBytes<Loader::kBlockThreads>();
+    available -= tree_n_bytes;
+    auto n_bytes = Loader::AllocShmem(this->n_features_, available);
+    this->shmem_status_ = 0;
+    if (n_bytes > 0) {
+      // It can fit both
+      this->shmem_status_ = kData | kTree;
+      n_bytes += tree_n_bytes;
+      std::cout << "both" << std::endl;
+    }
+
+    if (this->shmem_status_ == 0) {
+      CHECK_EQ(n_bytes, 0);
+      // If it can not fit the tree and the data at the same time, try fitting only the data
+      available += tree_n_bytes;
+      n_bytes = Loader::AllocShmem(this->n_features_, available);
+      if (n_bytes > 0) {
+        this->shmem_status_ = kData;
+      }
+    }
+    if (this->shmem_status_ == 0) {
+      // If it can not fit the data, then tree only.
+      n_bytes = tree_n_bytes;
+      this->shmem_status_ = kTree;
+    }
+
+    CHECK_GT(n_bytes, 0);
+    CHECK_LE(n_bytes, available);
+    this->shared_memory_bytes_ = n_bytes;
   }
 
  public:
@@ -1028,7 +1084,7 @@ class LaunchConfig {
           using Acc = std::remove_reference_t<decltype(batch)>;
           // No shared memory use for ellpack
           auto loader = EllpackLoader{batch,
-                                      /*use_shared=*/false,
+                                      /*shmem=*/nullptr,
                                       this->n_features_,
                                       batch.NumRows(),
                                       std::numeric_limits<float>::quiet_NaN(),
