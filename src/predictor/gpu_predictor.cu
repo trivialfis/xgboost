@@ -205,8 +205,15 @@ struct DeviceAdapterLoader {
           }
         }
       }
+      __syncthreads();
+    } else {
+      // Prefetch, not using the PTX prefetch as we might have stride
+      auto beg = ridx * n_features;
+      auto end = std::min((ridx + 1) * n_features, beg + 64);
+      for (size_t i = beg; i < end; ++i) {
+        [[maybe_unused]] auto _ = this->batch_.GetElement(i);
+      }
     }
-    __syncthreads();
   }
 
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
@@ -257,11 +264,7 @@ __global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     bst_tree_t tree_begin, bst_tree_t tree_end, bst_feature_t num_features, bool use_shared,
     float missing, EncAccessor acc) {
-  bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
-  bst_idx_t grid_stride = gridDim.x * blockDim.x;
-
-  // Grid strided loop
-  for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
+  for (bst_idx_t ridx : dh::GridStrideRange(static_cast<bst_idx_t>(0), data.NumRows())) {
     Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
     for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_idx) {
       auto const& d_tree = d_trees[tree_idx - tree_begin];
@@ -286,11 +289,7 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, bool use_shared,
     bst_target_t n_groups, float missing, EncAccessor acc) {
-  bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
-  bst_idx_t grid_stride = gridDim.x * blockDim.x;
-
-  // Grid strided loop
-  for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
+  for (bst_idx_t ridx : dh::GridStrideRange(static_cast<bst_idx_t>(0), data.NumRows())) {
     Loader loader{std::move(data), use_shared, num_features, ridx, missing, std::move(acc)};
 
     if (n_groups == 1u) {
