@@ -362,9 +362,9 @@ __global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
           [&](auto&& tree) {
             bst_node_t leaf = -1;
             if (tree.HasCategoricalSplit()) {
-              leaf = GetLeafIndex<has_missing, true>(ridx, tree, &loader);
+              leaf = GetLeafIndex<has_missing, true>(ridx, tree, 0, &loader);
             } else {
-              leaf = GetLeafIndex<has_missing, false>(ridx, tree, &loader);
+              leaf = GetLeafIndex<has_missing, false>(ridx, tree, 0, &loader);
             }
             d_out_predictions[ridx * (tree_end - tree_begin) + tree_idx] = leaf;
           },
