@@ -313,7 +313,7 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, RegTree::No
   auto load = [&pipe, &smem](tree::ScalarTreeView const& tree, bst_tree_t tree_idx) {
     auto stage = tree_idx % 2 == 0;
     auto dst = smem + stage * kNodesMax + threadIdx.x;
-    if (threadIdx.x < tree.n) {
+    if (threadIdx.x < std::min(tree.n, static_cast<bst_node_t>(kNodesMax))) {
       cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], kNodeSize, pipe);
     }
   };
