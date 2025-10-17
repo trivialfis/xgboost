@@ -147,10 +147,6 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
   [[nodiscard]] XGBOOST_DEVICE auto SumHess(bst_node_t nidx) const { return stats[nidx].sum_hess; }
   [[nodiscard]] XGBOOST_DEVICE auto LossChg(bst_node_t nidx) const { return stats[nidx].loss_chg; }
 
-  XGBOOST_DEVICE explicit ScalarTreeView(RegTree::Node const* nodes, RTreeNodeStat const* stats,
-                                         RegTree::CategoricalSplitMatrix cats, bst_node_t n_nodes)
-      : CategoriesMixIn{std::move(cats)}, nodes{nodes}, stats{stats}, n{n_nodes} {}
-
   /** @brief Create a device view */
   explicit ScalarTreeView(Context const* ctx, RegTree const* tree);
   /** @brief Create a host view */
@@ -161,8 +157,8 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
         n{tree->NumNodes()} {
     CHECK(!tree->IsMultiTarget());
   }
-  explicit ScalarTreeView(RegTree::Node const* nodes, RTreeNodeStat const* stats,
-                          RegTree::CategoricalSplitMatrix const& cats, bst_node_t n)
+  XGBOOST_DEVICE explicit ScalarTreeView(RegTree::Node const* nodes, RTreeNodeStat const* stats,
+                                         RegTree::CategoricalSplitMatrix const& cats, bst_node_t n)
       : CategoriesMixIn{cats}, nodes{nodes}, stats{stats}, n{n} {}
 };
 

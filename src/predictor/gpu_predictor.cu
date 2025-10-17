@@ -192,6 +192,7 @@ struct DeviceAdapterLoader {
         is_valid{missing} {
     extern __shared__ float _smem[];
     this->smem = _smem;
+    SPAN_CHECK(!this->use_shared);
     if (this->use_shared) {
       size_t shared_elements = blockDim.x * n_features;
       dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
@@ -256,11 +257,51 @@ __device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, Loader* load
   return tree.LeafValue(nidx);
 }
 
+template <bool has_missing, bool has_categorical, typename TreeView, typename Loader>
+__device__ bst_node_t GetLeafIndex(bst_idx_t ridx, TreeView const& tree,
+                                   tree::ScalarTreeView const& shmem_tree, Loader* loader) {
+  bst_node_t nidx = 0;
+  while (nidx < shmem_tree.n && !shmem_tree.IsLeaf(nidx)) {
+    float fvalue = loader->GetElement(ridx, shmem_tree.SplitIndex(nidx));
+    bool is_missing = has_missing && common::CheckNAN(fvalue);
+    auto next = GetNextNode<has_missing, has_categorical>(shmem_tree, nidx, fvalue, is_missing,
+                                                          tree.GetCategoriesMatrix());
+    assert(nidx < next);
+    nidx = next;
+  }
+
+  while (!tree.IsLeaf(nidx)) {
+    float fvalue = loader->GetElement(ridx, tree.SplitIndex(nidx));
+    bool is_missing = has_missing && common::CheckNAN(fvalue);
+    auto next = GetNextNode<has_missing, has_categorical>(tree, nidx, fvalue, is_missing,
+                                                          tree.GetCategoriesMatrix());
+    assert(nidx < next);
+    nidx = next;
+  }
+  return nidx;
+}
+
+template <bool has_missing, typename TreeView, typename Loader>
+__device__ auto GetLeafWeight(bst_idx_t ridx, TreeView const& tree, tree::ScalarTreeView const& shmem_tree,
+                              Loader* loader) {
+  bst_node_t nidx = -1;
+  if (tree.HasCategoricalSplit()) {
+    nidx = GetLeafIndex<has_missing, true>(ridx, tree, shmem_tree, loader);
+  } else {
+    nidx = GetLeafIndex<has_missing, false>(ridx, tree, shmem_tree, loader);
+  }
+  return tree.LeafValue(nidx);
+}
+
 using TreeViewVar = cuda::std::variant<tree::ScalarTreeView, tree::MultiTargetTreeView>;
 
 template <std::uint32_t kBlockThreads, typename Fn>
-__device__ void ForEachTree(common::Span<TreeViewVar> const& d_trees, Fn&& fn) {
-  cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+__device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, Fn&& fn) {
+  auto group = cooperative_groups::this_thread_block();
+  // __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
+
+  __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> pss;
+  cuda::pipeline<cuda::thread_scope_block> pipe = cuda::make_pipeline(group, &pss);
 
   extern __shared__ char _smem[];
   auto smem = reinterpret_cast<RegTree::Node *>(_smem);
@@ -271,11 +312,9 @@ __device__ void ForEachTree(common::Span<TreeViewVar> const& d_trees, Fn&& fn) {
   auto load = [&pipe, &smem](tree::ScalarTreeView const& tree, bst_tree_t tree_idx) {
     auto stage = tree_idx % 2 == 0;
     auto dst = smem + stage * (kNodeSize * kNodesMax) + threadIdx.x;
-    // fixme: invoke one
     if (threadIdx.x < tree.n) {
+      SPAN_CHECK(stage * (kNodeSize * kNodesMax) + threadIdx.x < (sizeof(RegTree::Node) * kBlockThreads * 2));
       cuda::memcpy_async(dst, &tree.nodes[threadIdx.x], sizeof(RegTree::Node), pipe);
-    } else {
-      cuda::memcpy_async(dst, &tree.nodes[0], sizeof(RegTree::Node), pipe);
     }
   };
   auto create_tree_view = [&](bst_tree_t tree_idx) {
@@ -301,12 +340,12 @@ __device__ void ForEachTree(common::Span<TreeViewVar> const& d_trees, Fn&& fn) {
   for (bst_tree_t tree_idx = 0; tree_idx < d_trees.size(); ++tree_idx) {
     cuda::pipeline_consumer_wait_prior<1>(pipe);
     auto tree = create_tree_view(tree_idx);
-    fn(tree, tree_idx - 2);
+    fn(tree, tree_idx);
     pipe.consumer_release();
 
     pipe.producer_acquire();
     if (tree_idx + 2 < d_trees.size()) {
-      load(cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx + 2]));
+      load(cuda::std::get<tree::ScalarTreeView>(d_trees[tree_idx + 2]), tree_idx + 2);
     }
     pipe.producer_commit();
   }
@@ -349,11 +388,12 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
 
     if (n_groups == 1u) {
       float sum = 0;
-      for (auto const& d_tree : d_trees) {
+      ForEachTree<kBlockThreads>(d_trees, [&](tree::ScalarTreeView const& shmem_tree, bst_tree_t tree_idx) {
+        auto const& d_tree = d_trees[tree_idx];
         auto const& sc_tree = cuda::std::get<tree::ScalarTreeView>(d_tree);
-        float leaf = GetLeafWeight<has_missing>(ridx, sc_tree, &loader);
+        float leaf = GetLeafWeight<has_missing>(ridx, sc_tree, shmem_tree, &loader);
         sum += leaf;
-      }
+      });
       d_out_predictions[ridx] += sum;
     } else {
       for (bst_tree_t tree_idx = 0, k = d_trees.size(); tree_idx < k; tree_idx++) {
@@ -613,6 +653,7 @@ void ExtractPaths(Context const* ctx,
 namespace {
 template <std::uint32_t kBlockThreads>
 [[nodiscard]] std::size_t SharedMemoryBytes(std::size_t n_features, std::size_t max_shmem_bytes) {
+  return 0;
   CHECK_GT(max_shmem_bytes, 0);
   size_t shared_memory_bytes = static_cast<size_t>(sizeof(float) * n_features * kBlockThreads);
   if (shared_memory_bytes > max_shmem_bytes) {
@@ -879,17 +920,23 @@ class LaunchConfig {
  public:
   template <typename Loader, typename K, typename BatchT, typename... Args>
   void Launch(K&& kernel, BatchT&& batch, Args&&... args) const {
+    std::size_t shmem = this->shared_memory_bytes_;
+    if (!this->UseShared()) {
+      shmem = sizeof(RegTree::Node) * Loader::kBlockThreads * 2;
+    }
+    std::cout << "shmem:" << shmem << std::endl;
+
     std::int32_t n_mps = 0;
     dh::safe_cuda(
         cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, this->ctx_->Ordinal()));
     std::int32_t n_blocks_per_mp = 0;
-    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &n_blocks_per_mp, kernel, Loader::kBlockThreads, this->shared_memory_bytes_));
+    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_blocks_per_mp, kernel,
+                                                                Loader::kBlockThreads, shmem));
 
     auto grid_ds = static_cast<uint32_t>(common::DivRoundUp(batch.NumRows(), Loader::kBlockThreads));
     grid_ds = std::min(static_cast<std::uint32_t>(n_blocks_per_mp * n_mps), grid_ds);
 
-    dh::LaunchKernel{grid_ds, Loader::kBlockThreads, this->shared_memory_bytes_,  // NOLINT
+    dh::LaunchKernel{grid_ds, Loader::kBlockThreads, shmem,  // NOLINT
                      this->ctx_->CUDACtx()->Stream()}(kernel, std::forward<BatchT>(batch),
                                                       std::forward<Args>(args)...);
   }
