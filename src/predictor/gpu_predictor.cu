@@ -304,9 +304,6 @@ __device__ void ForEachTree(common::Span<TreeViewVar const> d_trees, RegTree::No
 
   cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
-  // extern __shared__ char _smem[];
-  // auto smem = reinterpret_cast<RegTree::Node *>(_smem);
-
   constexpr auto kNodesMax = TreeShmemNodes<kBlockThreads>();
   constexpr auto kNodeSize = sizeof(RegTree::Node);
 
@@ -390,11 +387,11 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     common::Span<bst_target_t const> d_tree_groups, bst_feature_t num_features, std::int32_t shmem_status,
     bst_target_t n_groups, float missing, EncAccessor acc) {
-  bst_idx_t grid_stride = gridDim.x * blockDim.x;
+  bst_idx_t const grid_stride = gridDim.x * blockDim.x;
 
   // Grid strided loop
   std::size_t offset = blockIdx.x * blockDim.x;
-  bst_idx_t n_samples = data.NumRows();
+  bst_idx_t const n_samples = data.NumRows();
 
   extern __shared__ char _shmem[];
   RegTree::Node* tr_shmem = nullptr;
@@ -405,7 +402,6 @@ __global__ __launch_bounds__(kBlockThreads) void PredictKernel(
   } else if (shmem_status & kTree) {
     tr_shmem = reinterpret_cast<RegTree::Node*>(_shmem);
   }
-  // SPAN_CHECK(ds_shmem == nullptr);
 
   while (offset < n_samples) {
     bst_idx_t ridx = offset + threadIdx.x;
