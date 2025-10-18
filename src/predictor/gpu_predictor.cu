@@ -284,6 +284,8 @@ std::size_t constexpr TreeShmemBytes() {
   constexpr std::int32_t kStages = 2;  // 2-stage async load
   return TreeShmemNodes<kBlockThreads>() * sizeof(RegTree::Node) * kStages;
 }
+
+constexpr std::uint32_t kItemsPerThread = 4;
 }  // namespace
 
 template <std::uint32_t kBlockThreads, typename Loader, typename Data, bool has_missing,
@@ -292,8 +294,16 @@ __global__ __launch_bounds__(kBlockThreads) void PredictLeafKernel(
     Data data, common::Span<TreeViewVar const> d_trees, common::Span<float> d_out_predictions,
     bst_tree_t tree_begin, bst_tree_t tree_end, bst_feature_t num_features, bool use_shared,
     float missing, EncAccessor acc) {
+  std::uint32_t constexpr static kItemsPerTile = kBlockThreads * kItemsPerThread;
+
   bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
-  bst_idx_t grid_stride = gridDim.x * blockDim.x;
+  bst_idx_t grid_stride = gridDim.x * kItemsPerTile;
+
+  std::size_t offset = blockIdx.x * kItemsPerTile;
+
+  while (offset < data.NumRows()) {
+    offset += kItemsPerTile * gridDim.x;
+  }
 
   // Grid strided loop
   for (bst_idx_t ridx = global_idx; ridx < data.NumRows(); ridx += grid_stride) {
