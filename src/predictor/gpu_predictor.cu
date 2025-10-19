@@ -9,6 +9,8 @@
 #include <cuda/functional>   // for proclaim_return_type
 #include <cuda/std/utility>  // for swap
 #include <memory>
+#include <cuda/barrier>
+#include <cuda/ptx>
 
 #include "../collective/allreduce.h"
 #include "../common/bitfield.h"
@@ -103,6 +105,8 @@ struct SparsePageLoader {
   SparsePageView data;
   float* smem;
 
+  SparsePageLoader() = default;
+
   __device__ SparsePageLoader(SparsePageView data, bool use_shared, bst_feature_t num_features,
                               bst_idx_t num_rows, float, EncAccessor&& acc)
       : use_shared(use_shared), data(data), acc_{std::forward<EncAccessor>(acc)} {
@@ -125,6 +129,10 @@ struct SparsePageLoader {
       __syncthreads();
     }
   }
+
+  __device__ void init(SparsePageView data, bool use_shared, bst_feature_t num_features,
+                       bst_idx_t num_rows, float, EncAccessor&& acc) {}
+  __device__ void Load() {}
   [[nodiscard]] __device__ float GetElement(size_t ridx, size_t fidx) const {
     if (use_shared) {
       return smem[threadIdx.x * data.num_features + fidx];
@@ -142,6 +150,7 @@ struct EllpackLoader {
   Accessor matrix;
   EncAccessor acc;
 
+  EllpackLoader() = default;
   XGBOOST_DEVICE EllpackLoader(Accessor m, bool /*use_shared*/, bst_feature_t /*n_features*/,
                                bst_idx_t /*n_samples*/, float /*missing*/, EncAccessor&& acc)
       : matrix{std::move(m)}, acc{std::forward<EncAccessor>(acc)} {}
@@ -160,6 +169,9 @@ struct EllpackLoader {
     }
     return matrix.gidx_fvalue_map[gidx - 1];
   }
+  __device__ void init(Accessor m, bool /*use_shared*/, bst_feature_t /*n_features*/, bst_idx_t /*n_samples*/,
+            float /*missing*/, EncAccessor&& acc) {}
+  __device__ void Load() {}
   [[nodiscard]] XGBOOST_DEVICE bst_idx_t NumCols() const { return this->matrix.NumFeatures(); }
   [[nodiscard]] XGBOOST_DEVICE bst_idx_t NumRows() const { return this->matrix.n_rows; }
 };
@@ -181,6 +193,7 @@ struct DeviceAdapterLoader {
   float* smem;
   bool use_shared;
   data::IsValidFunctor is_valid;
+  DeviceAdapterLoader() : is_valid{std::numeric_limits<float>::quiet_NaN()} {};
 
   XGBOOST_DEV_INLINE DeviceAdapterLoader(Batch&& batch, bool use_shared, bst_feature_t n_features,
                                          bst_idx_t n_samples, float missing, EncAccessor&& acc)
@@ -208,6 +221,36 @@ struct DeviceAdapterLoader {
       }
     }
     __syncthreads();
+  }
+
+  __device__ void init(Batch batch, bool use_shared, bst_feature_t n_features, bst_idx_t n_samples,
+                       float missing, EncAccessor&& acc) {
+    this->batch_ = std::move(batch);
+    this->acc_ = std::forward<EncAccessor>(acc);
+    this->n_features = n_features;
+    this->use_shared = use_shared;
+    this->is_valid = data::IsValidFunctor{missing};
+    extern __shared__ float _smem[];
+    this->smem = _smem;
+  }
+  __device__ void Load() {
+    if (this->use_shared) {
+      auto global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+      size_t shared_elements = blockDim.x * n_features;
+      dh::BlockFill(smem, shared_elements, std::numeric_limits<float>::quiet_NaN());
+      __syncthreads();
+
+      if (global_idx < batch_.NumRows()) {
+        auto beg = global_idx * n_features;
+        auto end = (global_idx + 1) * n_features;
+        for (size_t i = beg; i < end; ++i) {
+          data::COOTuple const& e = this->batch_.GetElement(i);
+          if (is_valid(e)) {
+            smem[threadIdx.x * n_features + (i - beg)] = this->acc_(e);
+          }
+        }
+      }
+    }
   }
 
   [[nodiscard]] XGBOOST_DEV_INLINE float GetElement(size_t ridx, size_t fidx) const {
@@ -285,7 +328,19 @@ __global__ void PredictKernel(Data data, common::Span<TreeViewVar const> d_trees
                               bst_feature_t num_features, bool use_shared, bst_target_t n_groups,
                               float missing, EncAccessor acc) {
   bst_idx_t global_idx = blockDim.x * blockIdx.x + threadIdx.x;
-  Loader loader{std::move(data), use_shared, num_features, data.NumRows(), missing, std::move(acc)};
+
+#pragma nv_diag_suppress static_var_with_dynamic_init
+  __shared__ Loader loader;
+  namespace cg = cooperative_groups;
+
+  auto block = cg::this_thread_block();
+  cg::invoke_one(block, [&] {
+    loader.init(data, use_shared, num_features, data.NumRows(), missing, std::move(acc));
+  });
+  block.sync();
+
+  loader.Load();
+
   if (global_idx >= data.NumRows()) {
     return;
   }
@@ -577,6 +632,7 @@ void ExtractPaths(Context const* ctx,
 namespace {
 template <std::size_t kBlockThreads>
 [[nodiscard]] std::size_t SharedMemoryBytes(std::size_t n_features, std::size_t max_shmem_bytes) {
+  // return 0;
   CHECK_GT(max_shmem_bytes, 0);
   size_t shared_memory_bytes = static_cast<size_t>(sizeof(float) * n_features * kBlockThreads);
   if (shared_memory_bytes > max_shmem_bytes) {
@@ -844,6 +900,7 @@ class LaunchConfig {
   template <typename Loader, typename K, typename BatchT, typename... Args>
   void Launch(K&& kernel, BatchT&& batch, Args&&... args) const {
     auto grid = static_cast<uint32_t>(common::DivRoundUp(batch.NumRows(), Loader::kBlockThreads));
+    std::cout << "shmem:" << this->shared_memory_bytes_ << " b:" << this->UseShared() << std::endl;
     dh::LaunchKernel{grid, Loader::kBlockThreads, this->shared_memory_bytes_,  // NOLINT
                      this->ctx_->CUDACtx()->Stream()}(kernel, std::forward<BatchT>(batch),
                                                       std::forward<Args>(args)...);
@@ -1065,7 +1122,7 @@ class GPUPredictor : public xgboost::Predictor {
           using EncAccessor = std::remove_reference_t<decltype(acc)>;
           using LoaderImpl = DeviceAdapterLoader<BatchT, EncAccessor>;
           using Loader =
-              typename common::GetValueT<decltype(cfg)>::template LoaderType<LoaderImpl, 128>;
+              typename common::GetValueT<decltype(cfg)>::template LoaderType<LoaderImpl, 384>;
           cfg.template AllocShmem<Loader>();
           cfg.template LaunchPredictKernel<Loader>(m->Value(), missing, n_features, d_model, acc, 0,
                                                    &out_preds->predictions);

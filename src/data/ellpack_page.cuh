@@ -55,7 +55,7 @@ struct EllpackAccessorImpl {
   /** @brief Type of each feature, categorical or numerical. */
   common::Span<const FeatureType> feature_types;
 
-  EllpackAccessorImpl() = delete;
+  EllpackAccessorImpl() = default;
   EllpackAccessorImpl(Context const* ctx, std::shared_ptr<const common::HistogramCuts> cuts,
                       bst_idx_t row_stride, bst_idx_t base_rowid, bst_idx_t n_rows,
                       IterType gidx_iter, bst_idx_t null_value, bool is_dense,
