@@ -13,6 +13,8 @@
 #include "common.h"
 
 #ifdef __CUDACC__
+#include <rmm/aligned.hpp>
+
 #include "device_helpers.cuh"
 #endif  // __CUDACC__
 
@@ -161,8 +163,13 @@ class CompressedBufferWriter {
   }
 };
 
-__device__ inline void PrefetchGlobalL2(const void *addr) {
+__device__ inline void PrefetchGlobalL2(void const *addr) {
+#if __CUDA_ARCH__ >= 90
+  addr = reinterpret_cast<void const *>(rmm::align_down(reinterpret_cast<ptrdiff_t>(addr), 16));
+  asm("async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
+#else
   asm("prefetch.global.L2 [%0];" : : "l"(addr));
+#endif
 }
 
 /**
