@@ -220,7 +220,8 @@ class HistogramAgent {
     for (int i = 0; i < kItemsPerThread; i += 2) {
       auto mask = 0xffffffff;
       auto v = __shfl_up_sync(mask, ridx[i + 1], 1);
-      if (Laneid() == 0 || v != ridx[i + 1]) {
+      // Laneid() == 0;
+      if (v != ridx[i + 1]) {
         matrix_.gidx_iter.Prefetch(
             IterIdx(matrix_, ridx[i + 1], FeatIdx(group_, idx[i + 1], feature_stride_)));
       }
