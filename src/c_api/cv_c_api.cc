@@ -1,16 +1,10 @@
-#include "../common/type.h"
+/**
+ * Copyright 2025, XGBoost contributors
+ */
+#include "../cross_validate/folds.h"
 #include "../data/array_interface.h"
 #include "c_api_error.h"
 #include "xgboost/json.h"
-
-namespace xgboost::cv {
-struct Segment {
-  bst_idx_t beg;
-  bst_idx_t cnt;
-
-  Segment(bst_idx_t beg, bst_idx_t cnt) : beg{beg}, cnt{cnt} {}
-};
-}  // namespace xgboost::cv
 
 using namespace xgboost;  // NOLINT
 
