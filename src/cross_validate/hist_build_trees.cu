@@ -20,10 +20,13 @@ namespace xgboost::cv {
 
 using xgboost::cuda_impl::StaticBatch;
 
+// Maybe we can modify the multi-target builder to handle many trees
 void BuildTrees(Context const* ctx, DMatrix* p_fmat, std::vector<GradientContainer const*> gpairs,
                 std::vector<std::vector<std::vector<cv::Segment>>> const& segments,
                 std::vector<RegTree*> trees) {
   // len(trees) == n_folds
+
+  // Build histogram for the root nodes
   std::int32_t batch_idx = 0;
   auto n_folds = trees.size();
   CHECK_EQ(segments.size(), p_fmat->NumBatches());
@@ -62,5 +65,7 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat, std::vector<GradientContain
     });
     batch_idx++;
   }
+
+  // Evaluate roots
 }
 }  // namespace xgboost::cv
