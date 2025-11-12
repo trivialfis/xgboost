@@ -9,10 +9,13 @@
 using namespace xgboost;  // NOLINT
 
 
-XGB_DLL int XGBCvUpdateOneIter(char const* tr_indices) {
+XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices) {
   using BatchTrIdx = std::vector<std::vector<bst_idx_t>>;
 
   API_BEGIN();
+  auto p_fmat = CastDMatrixHandle(fmat);
+  CHECK(p_fmat);
+
   auto jindices = Json::Load(StringView{tr_indices});
   auto const& jindices_array = get<Array const>(jindices);
   std::size_t n_batches = jindices_array.size();
