@@ -8,8 +8,8 @@
 
 using namespace xgboost;  // NOLINT
 
-
-XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices) {
+XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char const* grad,
+                               char const* hess) {
   using BatchTrIdx = std::vector<std::vector<bst_idx_t>>;
 
   API_BEGIN();
@@ -45,5 +45,21 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices) {
     tr_idx.emplace_back(std::move(batch_tr_idx));
   }
   CHECK_EQ(tr_idx.size(), n_batches);
+
+  // Load gradient
+  auto jgrad = Json::Load(grad);
+  auto jhess = Json::Load(hess);
+
+  auto const& jgrad_array = get<Array const>(jgrad);
+  CHECK_EQ(jgrad_array.size(), n_batches);
+  auto const& jhess_array = get<Array const>(jhess);
+  CHECK_EQ(jhess_array.size(), n_batches);
+
+  for (std::size_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
+    auto const& batch_grad = get<Array const>(jgrad_array[batch_idx]);
+    CHECK_EQ(batch_grad.size(), n_folds);
+    auto const& batch_hess = get<Array const>(jhess_array[batch_idx]);
+    CHECK_EQ(batch_hess.size(), n_folds);
+  }
   API_END();
 }

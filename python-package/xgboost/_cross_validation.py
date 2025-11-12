@@ -8,7 +8,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 
 import xgboost.testing as tm
 
-from ._data_utils import array_interface_dict
+from ._data_utils import array_interface_dict, cuda_array_interface_dict
 from ._typing import ArrayLike
 from .core import _LIB, DMatrix, ExtMemQuantileDMatrix, c_str
 from .objective import TreeObjective
@@ -35,9 +35,8 @@ class LsObj0(TreeObjective):
     """Split grad is the same as value grad."""
 
     def __call__(
-        self, y_pred: ArrayLike, dtrain: DMatrix
-    ) -> Tuple[cp.ndarray, cp.ndarray]:
-        y_true = dtrain.get_label().reshape(y_pred.shape)
+        self, y_pred: ArrayLike, y_true: ArrayLike,  # fixme
+    ) -> Tuple[np.ndarray, np.ndarray]:
         grad, hess = tm.ls_obj(y_true, y_pred, None)
         return cp.array(grad), cp.array(hess)
 
@@ -47,6 +46,24 @@ class LsObj0(TreeObjective):
         return cp.array(grad), cp.array(hess)
 
 
+def _make_aitfs(all_batches: list[list[ArrayLike]]) -> str:
+    all_aitfs = []
+    for batch in all_batches:
+        # assert len(batch) == n_splits
+
+        aitfs = []
+        for k, fold in enumerate(batch):
+            if hasattr(fold, "__cuda_array_interface__"):
+                f_aitf = cuda_array_interface_dict(fold)
+            else:
+                f_aitf = array_interface_dict(fold)
+            aitfs.append(f_aitf)
+        # assert len(aitfs) == n_splits
+        all_aitfs.append(aitfs)
+    jindices = json.dumps(all_aitfs, indent=2)
+    return jindices
+
+
 def cross_validate() -> None:
     n_groups = 5
     n_splits = 5
@@ -54,6 +71,7 @@ def cross_validate() -> None:
     n_batches = 17
 
     X_batches = [cp.array(x) for x in np.array_split(X, n_batches, axis=0)]
+    y_batches = [cp.array(y) for x in np.array_split(X, n_batches, axis=0)]
 
     it = IteratorForTest(
         X_batches,
@@ -79,21 +97,28 @@ def cross_validate() -> None:
 
     assert len(all_tr_batches_zipped) == n_batches
 
-    all_aitfs = []
-    for batch in all_tr_batches_zipped:
-        assert len(batch) == n_splits
-
-        aitfs = []
-        for k, fold in enumerate(batch):
-            f_aitf = array_interface_dict(fold)
-            aitfs.append(f_aitf)
-        assert len(aitfs) == n_splits
-        all_aitfs.append(aitfs)
-    assert len(all_aitfs) == n_batches
-    jindices = json.dumps(all_aitfs, indent=2)
+    jindices = _make_aitfs(all_tr_batches_zipped)
 
     fobj = LsObj0()
 
     num_boost_round = 1
     for i in range(num_boost_round):
-        _LIB.XGBCvUpdateOneIter(Xy.handle, c_str(jindices))
+        # Calculate the gradient
+        all_grad = []
+        all_hess = []
+        for batch_idx, batch in enumerate(all_tr_batches_zipped):
+            batch_grad = []
+            batch_hess = []
+            for k, fold in enumerate(batch):
+                y_pred = cp.zeros(fold.shape, dtype=np.float32)
+                grad, hess = fobj(y_pred, y_batches[batch_idx][fold])
+                batch_grad.append(grad)
+                batch_hess.append(hess)
+            all_grad.append(batch_grad)
+            all_hess.append(batch_hess)
+
+        g_aitfs = _make_aitfs(all_grad)
+        h_aitfs = _make_aitfs(all_hess)
+
+        # Update
+        _LIB.XGBCvUpdateOneIter(Xy.handle, c_str(jindices), c_str(g_aitfs), c_str(h_aitfs))
