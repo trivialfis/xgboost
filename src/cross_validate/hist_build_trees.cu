@@ -69,4 +69,9 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat, std::vector<GradientContain
 
   // Evaluate roots
 }
+
+void BuildTrees(Context const* ctx, DMatrix* p_fmat,
+                std::vector<std::vector<std::unique_ptr<GradientContainer>>> const& gpairs,
+                std::vector<std::vector<std::vector<bst_idx_t>>> const& tr_idx,
+                std::vector<RegTree*> trees) {}
 }  // namespace xgboost::cv

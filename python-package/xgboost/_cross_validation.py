@@ -10,7 +10,7 @@ import xgboost.testing as tm
 
 from ._data_utils import array_interface_dict, cuda_array_interface_dict
 from ._typing import ArrayLike
-from .core import _LIB, DMatrix, ExtMemQuantileDMatrix, c_str
+from .core import _LIB, DMatrix, ExtMemQuantileDMatrix, _check_call, c_str
 from .objective import TreeObjective
 from .testing.data import IteratorForTest
 
@@ -35,10 +35,12 @@ class LsObj0(TreeObjective):
     """Split grad is the same as value grad."""
 
     def __call__(
-        self, y_pred: ArrayLike, y_true: ArrayLike,  # fixme
+        self,
+        y_pred: ArrayLike,
+        y_true: ArrayLike,  # fixme
     ) -> Tuple[np.ndarray, np.ndarray]:
         grad, hess = tm.ls_obj(y_true, y_pred, None)
-        return cp.array(grad), cp.array(hess)
+        return np.array(grad.get()), np.array(hess)
 
     def split_grad(
         self, grad: ArrayLike, hess: ArrayLike
@@ -121,4 +123,8 @@ def cross_validate() -> None:
         h_aitfs = _make_aitfs(all_hess)
 
         # Update
-        _LIB.XGBCvUpdateOneIter(Xy.handle, c_str(jindices), c_str(g_aitfs), c_str(h_aitfs))
+        _check_call(
+            _LIB.XGBCvUpdateOneIter(
+                Xy.handle, c_str(jindices), c_str(g_aitfs), c_str(h_aitfs)
+            )
+        )

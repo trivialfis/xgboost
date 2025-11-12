@@ -1,7 +1,7 @@
 /**
  * Copyright 2025, XGBoost contributors
  */
-#include "../cross_validate/folds.h"
+#include "../cross_validate/hist_build_trees.h"
 #include "../data/array_interface.h"
 #include "c_api_error.h"
 #include "xgboost/json.h"
@@ -55,11 +55,40 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
   auto const& jhess_array = get<Array const>(jhess);
   CHECK_EQ(jhess_array.size(), n_batches);
 
+  std::vector<std::vector<std::unique_ptr<GradientContainer>>> gpairs;
   for (std::size_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
     auto const& batch_grad = get<Array const>(jgrad_array[batch_idx]);
     CHECK_EQ(batch_grad.size(), n_folds);
     auto const& batch_hess = get<Array const>(jhess_array[batch_idx]);
     CHECK_EQ(batch_hess.size(), n_folds);
+    std::vector<std::unique_ptr<GradientContainer>> batch_gpairs;
+    for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+      auto fold_grad = ArrayInterface<1>{get<Object const>(batch_grad[fold_idx])};
+      auto fold_hess = ArrayInterface<1>{get<Object const>(batch_hess[fold_idx])};
+
+      auto fold_gpair = std::make_unique<GradientContainer>();
+      fold_gpair->gpair.Reshape(fold_grad.Shape<0>(), 1);
+      auto& h_gpair = fold_gpair->gpair.Data()->HostVector();
+      CHECK_EQ(h_gpair.size(), fold_grad.n);
+      for (std::size_t i = 0; i < h_gpair.size(); ++i) {
+        h_gpair[i] = GradientPair{fold_grad(i), fold_hess(i)};
+      }
+    }
+    gpairs.emplace_back(std::move(batch_gpairs));
   }
+
+  Context ctx;
+  ctx.UpdateAllowUnknown(Args{{"device", "cuda"}});
+
+  std::vector<std::unique_ptr<RegTree>> trees;
+  for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    trees.emplace_back(std::make_unique<RegTree>(p_fmat->Info().num_col_, 1));
+  }
+  std::vector<RegTree*> p_trees;
+  std::transform(trees.begin(), trees.end(), std::back_inserter(p_trees),
+                 [](auto& t) { return t.get(); });
+
+  cv::BuildTrees(&ctx, p_fmat.get(), gpairs, tr_idx, p_trees);
+
   API_END();
 }
