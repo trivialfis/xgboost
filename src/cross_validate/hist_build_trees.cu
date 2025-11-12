@@ -73,5 +73,11 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat, std::vector<GradientContain
 void BuildTrees(Context const* ctx, DMatrix* p_fmat,
                 std::vector<std::vector<std::unique_ptr<GradientContainer>>> const& gpairs,
                 std::vector<std::vector<std::vector<bst_idx_t>>> const& tr_idx,
-                std::vector<RegTree*> trees) {}
+                std::vector<RegTree*> trees) {
+  std::int32_t batch_idx = 0;
+  auto n_folds = trees.size();
+  for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
+    // init root
+  }
+}
 }  // namespace xgboost::cv
