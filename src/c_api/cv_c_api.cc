@@ -8,59 +8,39 @@
 
 using namespace xgboost;  // NOLINT
 
-XGB_DLL int XGBCvSetIndex(char const* indices) {
+
+XGB_DLL int XGBCvUpdateOneIter(char const* tr_indices) {
+  using BatchTrIdx = std::vector<std::vector<bst_idx_t>>;
+
   API_BEGIN();
-  auto jindices = Json::Load(StringView{indices});
+  auto jindices = Json::Load(StringView{tr_indices});
   auto const& jindices_array = get<Array const>(jindices);
-  std::size_t n_folds = jindices_array.size();
-  std::int32_t n_batches = -1;
-  std::vector<std::vector<std::vector<cv::Segment>>> segments;
-  for (std::size_t f = 0; f < n_folds; ++f) {
-    auto const& jfold = jindices_array[f];
-    auto const& fold = get<Array const>(jfold);
-    if (n_batches == -1) {
-      n_batches = fold.size();
+  std::size_t n_batches = jindices_array.size();
+  std::cout << "n_batches:" << n_batches << std::endl;
+
+  std::int32_t n_folds = 0;
+  std::vector<BatchTrIdx> tr_idx;
+  for (std::size_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
+    auto const& batch = get<Array const>(jindices[batch_idx]);
+    if (n_folds == 0) {
+      n_folds = batch.size();
     }
-    CHECK_EQ(n_batches, fold.size())
-        << "The number of batches must be consistent across all folds.";
-
-    std::vector<std::vector<cv::Segment>> fold_segments;
-
-    for (std::int32_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
-      // integer array for index, encoded as array intereface
-      auto const& jbatch = get<Object const>(fold[batch_idx]);
-      auto array = ArrayInterface<1>{jbatch};
-      std::vector<bst_idx_t> pos{0};
-      std::vector<bst_idx_t> cnt{1};  // first sample
-      CHECK_EQ(array.type, xgboost::ArrayInterfaceHandler::kI8);
-      auto t = linalg::TensorView<std::int64_t const, 1>{
-          common::Span{static_cast<std::int64_t const*>(array.data),
-                       std::numeric_limits<std::size_t>::max()},
-          array.shape, array.strides, DeviceOrd::CPU()};
-
-      auto n_samples = t.Shape(0);
-      CHECK_GE(n_samples, 1);
-
-      for (std::size_t i = 1; i < n_samples; ++i) {
-        auto diff = t(i) - t(i - 1);
-        if (diff > 1) {
-          pos.push_back(i);
-          cnt.push_back(1);
-        } else {
-          cnt[pos.size() - 1]++;
+    CHECK_EQ(n_folds, batch.size());
+    BatchTrIdx batch_tr_idx;
+    for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+      auto const& jfold = get<Object const>(batch[fold_idx]);
+      auto fold = ArrayInterface<1>{jfold};
+      batch_tr_idx.emplace_back();
+      auto& fold_tr_idx = batch_tr_idx.back();
+      DispatchDType(fold, DeviceOrd::CPU(), [&](auto&& in) {
+        for (std::size_t i = 0; i < in.Shape(0); ++i) {
+          fold_tr_idx.push_back(in(i));
         }
-      }
-
-      // Segments within one batch of one fold
-      std::vector<cv::Segment> batch_segments;
-      CHECK_EQ(pos.size(), cnt.size());
-      for (std::size_t k = 0; k < pos.size(); ++k) {
-        batch_segments.emplace_back(pos[k], cnt[k]);
-      }
-      fold_segments.emplace_back(std::move(batch_segments));
+      });
     }
-    CHECK_EQ(fold_segments.size(), n_batches);
-    segments.emplace_back(std::move(fold_segments));
+    CHECK_EQ(batch_tr_idx.size(), n_folds);
+    tr_idx.emplace_back(std::move(batch_tr_idx));
   }
+  CHECK_EQ(tr_idx.size(), n_batches);
   API_END();
 }

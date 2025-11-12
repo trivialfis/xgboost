@@ -49,18 +49,19 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat, std::vector<GradientContain
         dh::device_vector<bst_idx_t> train_idx;      // fixme: regen
         CHECK_EQ(train_idx.size(), n_rows);
         auto d_train_idx = dh::ToSpan(train_idx);
-        dh::LaunchN(n_rows * d_acc.row_stride, ctx->CUDACtx()->Stream(), [=](std::size_t i) {
-          auto iidx = i / d_acc.row_stride;
-          auto ridx = d_train_idx[iidx];
-          auto fidx = i % d_acc.row_stride;
+        // dh::LaunchN(n_rows * d_acc.row_stride, ctx->CUDACtx()->Stream(),
+        //             [=] XGBOOST_DEVICE(std::size_t i) {
+        //               auto iidx = i / d_acc.row_stride;
+        //               auto ridx = d_train_idx[iidx];
+        //               auto fidx = i % d_acc.row_stride;
 
-          auto eidx = ridx * d_acc.row_stride + fidx;
-          auto compressed_bin = d_acc.gidx_iter[eidx];
-          // fixme: target
-          auto gpair = d_grad(ridx, 0);
-          // quantizer
-          // d_node_histogram[compressed_bin] += gpair;
-        });
+        //               auto eidx = ridx * d_acc.row_stride + fidx;
+        //               auto compressed_bin = d_acc.gidx_iter[eidx];
+        //               // fixme: target
+        //               auto gpair = d_grad(ridx, 0);
+        //               // quantizer
+        //               // d_node_histogram[compressed_bin] += gpair;
+        //             });
       }
     });
     batch_idx++;
