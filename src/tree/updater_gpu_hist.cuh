@@ -37,6 +37,29 @@ struct GoLeftWrapperOp {
   }
 };
 
+inline dh::device_vector<GradientPairInt64> CalcRootSum(
+    Context const* ctx, linalg::MatrixView<GradientPair> d_gpair,
+    common::Span<GradientQuantiser const> roundings) {
+  auto n_samples = d_gpair.Shape(0);
+  auto n_targets = d_gpair.Shape(1);
+  // Calculate the root sum
+  dh::device_vector<GradientPairInt64> root_sum(n_targets);
+
+  auto key_it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
+    auto cidx = i / n_samples;
+    return cidx;
+  });
+  auto val_it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) -> GradientPairInt64 {
+    auto cidx = i / n_samples;
+    auto ridx = i % n_samples;
+    auto g = d_gpair(ridx, cidx);
+    return roundings[cidx].ToFixedPoint(g);
+  });
+  thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + d_gpair.Size(), val_it,
+                        thrust::make_discard_iterator(), root_sum.begin());
+  return root_sum;
+}
+
 /**
  * @brief Implementation for vector leaf.
  */
@@ -120,36 +143,12 @@ class MultiTargetHistMaker {
                      cuts_->TotalBins() * n_targets, force_global);
   }
 
-  dh::device_vector<GradientPairInt64> CalcRootSum(
-      linalg::MatrixView<GradientPair> d_gpair,
-      common::Span<GradientQuantiser const> roundings) const {
-    auto n_samples = d_gpair.Shape(0);
-    auto n_targets = d_gpair.Shape(1);
-    // Calculate the root sum
-    dh::device_vector<GradientPairInt64> root_sum(n_targets);
-
-    auto key_it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
-      auto cidx = i / n_samples;
-      return cidx;
-    });
-    auto val_it =
-        dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) -> GradientPairInt64 {
-          auto cidx = i / n_samples;
-          auto ridx = i % n_samples;
-          auto g = d_gpair(ridx, cidx);
-          return roundings[cidx].ToFixedPoint(g);
-        });
-    thrust::reduce_by_key(ctx_->CUDACtx()->CTP(), key_it, key_it + d_gpair.Size(), val_it,
-                          thrust::make_discard_iterator(), root_sum.begin());
-    return root_sum;
-  }
-
   [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
     auto d_gpair = split_gpair_.View(ctx_->Device());
     auto n_targets = d_gpair.Shape(1);
 
     // Calculate the root sum
-    auto root_sum = this->CalcRootSum(d_gpair, this->split_quantizer_->Quantizers());
+    auto root_sum = CalcRootSum(this->ctx_, d_gpair, this->split_quantizer_->Quantizers());
     this->evaluator_.AllocNodeSum(RegTree::kRoot, n_targets);
     auto d_root_sum = this->evaluator_.GetNodeSum(RegTree::kRoot, n_targets);
     dh::safe_cuda(cudaMemcpyAsync(d_root_sum.data(), root_sum.data().get(), d_root_sum.size_bytes(),
