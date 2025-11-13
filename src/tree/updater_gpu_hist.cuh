@@ -37,11 +37,12 @@ struct GoLeftWrapperOp {
   }
 };
 
-inline dh::device_vector<GradientPairInt64> CalcRootSum(
-    Context const* ctx, linalg::MatrixView<GradientPair> d_gpair,
-    common::Span<GradientQuantiser const> roundings) {
-  auto n_samples = d_gpair.Shape(0);
-  auto n_targets = d_gpair.Shape(1);
+template <template <typename, std::int32_t> typename TensorView>
+dh::device_vector<GradientPairInt64> CalcRootSum(Context const* ctx,
+                                                 TensorView<GradientPair, 2> d_gpair,
+                                                 common::Span<GradientQuantiser const> roundings) {
+  auto n_samples = d_gpair.template Shape<0>();
+  auto n_targets = d_gpair.template Shape<1>();
   // Calculate the root sum
   dh::device_vector<GradientPairInt64> root_sum(n_targets);
 

@@ -505,15 +505,30 @@ class TensorView {
 
   LINALG_HD auto Shape() const { return common::Span<size_t const, kDim>{shape_}; }
   /**
-   * Get the shape for i^th dimension
+   * @brief Get the shape for i^th dimension.
    */
-  LINALG_HD auto Shape(size_t i) const { return shape_[i]; }
-  LINALG_HD auto Stride() const { return common::Span<size_t const, kDim>{stride_}; }
+  LINALG_HD auto Shape(std::size_t i) const { return shape_[i]; }
   /**
-   * Get the stride for i^th dimension, stride is specified as number of items instead of bytes.
+   * @brief Get the shape for i^th dimension, with i known at compile time.
    */
-  LINALG_HD auto Stride(size_t i) const { return stride_[i]; }
-
+  template <std::int32_t i>
+  LINALG_HD auto Shape() const {
+    return shape_[i];
+  }
+  LINALG_HD auto Stride() const { return common::Span<std::size_t const, kDim>{stride_}; }
+  /**
+   * @brief Get the stride for i^th dimension, stride is specified as number of items instead of
+   *        bytes.
+   */
+  LINALG_HD auto Stride(std::size_t i) const { return stride_[i]; }
+  /**
+   * @brief Get the stride for i^th dimension, stride is specified as number of items instead of
+   *        bytes, with i known at compile time.
+   */
+  template <std::int32_t i>
+  LINALG_HD auto Stride() const {
+    return stride_[i];
+  }
   /**
    * @brief Number of items in the tensor.
    */

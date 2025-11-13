@@ -9,6 +9,7 @@
 #include "xgboost/linalg.h"  // for TensorView
 
 namespace xgboost::linalg {
+// Supports only permuting at the first dimension, also, read-only.
 template <typename T, std::int32_t D>
 class PermutationTensorView {
  public:
@@ -26,11 +27,27 @@ class PermutationTensorView {
   }
 
   template <std::int32_t k>
-  XGBOOST_DEVICE auto Shape() const {
+  [[nodiscard]]XGBOOST_DEVICE auto Shape() const {
     if (k == 0) {
       return this->idx_.size();
     }
     return this->ten_.Shape(k);
+  }
+  [[nodiscard]] XGBOOST_DEVICE auto Size() const {
+    std::size_t shape[D];
+    shape[0] = idx_.size();
+
+    for (std::int32_t k = 1; k < D; ++k) {
+      shape[k] = this->ten_.Shape(k);
+    }
+    auto size = detail::CalcSize(shape);
+    return size;
+  }
+  template <typename Head, typename... Index>
+  XGBOOST_DEVICE T const &operator()(Head &&head, Index &&...index) const {
+    static_assert(sizeof...(index) + 1 <= D, "Invalid index.");
+    auto idx = this->idx_[std::forward<Head>(head)];
+    return this->ten_(idx, std::forward<Index>(index)...);
   }
 };
 }  // namespace xgboost::linalg
