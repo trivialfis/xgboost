@@ -95,7 +95,7 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   std::vector<std::unique_ptr<tree::GradientQuantiser>> split_quantizer;
   std::vector<Pair> running_sum(n_folds);
   std::vector<bst_idx_t> running_sum_rows(n_folds);
-  for (std::size_t batch_idx = 0; batch_idx < p_fmat->NumBatches(); ++batch_idx) {
+  for (std::int32_t batch_idx = 0; batch_idx < p_fmat->NumBatches(); ++batch_idx) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       auto fold_gpair = batch_gpairs.at(fold_idx)->gpair.View(ctx->Device());
@@ -131,5 +131,9 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   }
 
   // Build root histogram.
+  std::vector<tree::DeviceHistogramBuilder> histogram_builders(n_folds);
+  for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
+    auto batch = page.Impl();
+  }
 }
 }  // namespace xgboost::cv
