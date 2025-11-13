@@ -132,8 +132,12 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
 
   // Build root histogram.
   std::vector<tree::DeviceHistogramBuilder> histogram_builders(n_folds);
+  batch_idx = 0;
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
+    auto const& batch_gpairs = gpairs.at(batch_idx);
+    auto const& batch_tr_idx = tr_idx.at(batch_idx);  // fixme: find batch local idx
     auto batch = page.Impl();
+    ++batch_idx;
   }
 }
 }  // namespace xgboost::cv
