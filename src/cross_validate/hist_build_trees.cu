@@ -114,6 +114,7 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   // Init root
   std::int32_t batch_idx = 0;
   dh::device_vector<GradientPairInt64> root_sums(n_folds * n_targets);
+  CHECK_EQ(n_targets, 1);  // fixme
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     auto const& batch_tr_idx = tr_idx.at(batch_idx);

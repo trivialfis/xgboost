@@ -19,7 +19,6 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
   auto jindices = Json::Load(StringView{tr_indices});
   auto const& jindices_array = get<Array const>(jindices);
   std::size_t n_batches = jindices_array.size();
-  std::cout << "n_batches:" << n_batches << std::endl;
 
   std::int32_t n_folds = 0;
   std::vector<BatchTrIdx> tr_idx;
@@ -45,6 +44,7 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
     tr_idx.emplace_back(std::move(batch_tr_idx));
   }
   CHECK_EQ(tr_idx.size(), n_batches);
+  std::cout << "n_batches:" << n_batches << " n_folds:" << n_folds << std::endl;
 
   // Load gradient
   auto jgrad = Json::Load(grad);
@@ -73,7 +73,9 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
       for (std::size_t i = 0; i < h_gpair.size(); ++i) {
         h_gpair[i] = GradientPair{fold_grad(i), fold_hess(i)};
       }
+      batch_gpairs.emplace_back(std::move(fold_gpair));
     }
+    CHECK_EQ(batch_gpairs.size(), n_folds);
     gpairs.emplace_back(std::move(batch_gpairs));
   }
 
@@ -82,7 +84,7 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
 
   std::vector<std::unique_ptr<RegTree>> trees;
   for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
-    trees.emplace_back(std::make_unique<RegTree>(p_fmat->Info().num_col_, 1));
+    trees.emplace_back(std::make_unique<RegTree>(1, p_fmat->Info().num_col_));
   }
   std::vector<RegTree*> p_trees;
   std::transform(trees.begin(), trees.end(), std::back_inserter(p_trees),

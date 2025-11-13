@@ -68,9 +68,16 @@ def _make_aitfs(all_batches: list[list[ArrayLike]]) -> str:
 
 def _split_by_groups(X, y, groups, n_batches: int):
     # Use stratified kfold to batch the grouped data.
-    kfold = StratifiedKFold(n_splits=n_batches, random_state=2025)
+    # Assuming data are sorted according to groups
+    kfold = StratifiedKFold(n_splits=n_batches, shuffle=False)
+    X_batches = []
+    y_batches = []
+    g_batches = []
     for f, (train_idx, test_idx) in enumerate(kfold.split(X, y=groups)):
-        pass
+        X_batches.append(cp.array(X[test_idx]))
+        y_batches.append(cp.array(y[test_idx]))
+        g_batches.append(groups[test_idx])
+    return X_batches, y_batches, g_batches
 
 
 def cross_validate() -> None:
@@ -79,34 +86,33 @@ def cross_validate() -> None:
     X, y, groups = make_group_clf(n_groups)
     n_batches = 17
 
-    X_batches = [cp.array(x) for x in np.array_split(X, n_batches, axis=0)]
-    y_batches = [cp.array(y) for x in np.array_split(X, n_batches, axis=0)]
+    X_batches, y_batches, g_batches = _split_by_groups(X, y, groups, n_batches)
 
     it = IteratorForTest(
         X_batches,
-        np.array_split(y, n_batches, axis=0),
+        y_batches,
         None,
         cache="cache",
         on_host=True,
     )
     Xy = ExtMemQuantileDMatrix(it)
 
-    kfold = StratifiedGroupKFold(n_splits=n_splits, random_state=2025, shuffle=True)
-
-    all_tr_batches = []  # len == n_splits, each fold has n_batches
+    all_tr_batches = []
     all_te_batches = []
-    for f, (train_idx, test_idx) in enumerate(kfold.split(X, y, groups)):
-        tr_batches = np.array_split(train_idx, n_batches, axis=0)
-        te_batches = np.array_split(test_idx, n_batches, axis=0)
-        all_tr_batches.append(tr_batches)
-        all_te_batches.append(te_batches)
+    for batch_idx in range(n_batches):
+        kfold = StratifiedGroupKFold(n_splits=n_splits, random_state=2025, shuffle=True)
+        batch_tr_idx = []
+        batch_te_idx = []
+        for tr_idx, te_idx in kfold.split(
+            X_batches[batch_idx], y_batches[batch_idx].get(), g_batches[batch_idx]
+        ):
+            batch_tr_idx.append(tr_idx)
+            batch_te_idx.append(te_idx)
+        assert len(batch_tr_idx) == n_splits
+        all_tr_batches.append(batch_tr_idx)
+        all_te_batches.append(batch_te_idx)
 
-    # Convert into the batches[folds] layout
-    all_tr_batches_zipped = list(zip(*all_tr_batches))
-
-    assert len(all_tr_batches_zipped) == n_batches
-
-    jindices = _make_aitfs(all_tr_batches_zipped)
+    jindices = _make_aitfs(all_tr_batches)
 
     fobj = LsObj0()
 
@@ -115,14 +121,18 @@ def cross_validate() -> None:
         # Calculate the gradient
         all_grad = []
         all_hess = []
-        for batch_idx, batch in enumerate(all_tr_batches_zipped):
+        for batch_idx, batch_tr_idx in enumerate(all_tr_batches):
             batch_grad = []
             batch_hess = []
-            for k, fold in enumerate(batch):
+            assert len(batch_tr_idx) == n_splits
+
+            for k, fold in enumerate(batch_tr_idx):
                 y_pred = cp.zeros(fold.shape, dtype=np.float32)
-                grad, hess = fobj(y_pred, y_batches[batch_idx][fold])
+                # Generate a batch of gradient for each fold
+                grad, hess = fobj(y_pred, cp.array(y_batches[batch_idx][fold]))
                 batch_grad.append(grad)
                 batch_hess.append(hess)
+
             all_grad.append(batch_grad)
             all_hess.append(batch_hess)
 
