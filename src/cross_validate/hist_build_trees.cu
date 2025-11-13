@@ -139,5 +139,10 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
     auto batch = page.Impl();
     ++batch_idx;
   }
+
+  // Evaluate root split
+
+
+  // Apply root split
 }
 }  // namespace xgboost::cv

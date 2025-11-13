@@ -4,7 +4,7 @@ from typing import Tuple
 import cupy as cp
 import numpy as np
 from sklearn.datasets import make_classification
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
 import xgboost.testing as tm
 
@@ -64,6 +64,13 @@ def _make_aitfs(all_batches: list[list[ArrayLike]]) -> str:
         all_aitfs.append(aitfs)
     jindices = json.dumps(all_aitfs, indent=2)
     return jindices
+
+
+def _split_by_groups(X, y, groups, n_batches: int):
+    # Use stratified kfold to batch the grouped data.
+    kfold = StratifiedKFold(n_splits=n_batches, random_state=2025)
+    for f, (train_idx, test_idx) in enumerate(kfold.split(X, y=groups)):
+        pass
 
 
 def cross_validate() -> None:
