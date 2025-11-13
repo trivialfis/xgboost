@@ -76,8 +76,12 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
                 std::vector<RegTree*> trees) {
   std::int32_t batch_idx = 0;
   auto n_folds = trees.size();
+  std::int32_t k = 0;
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
     // init root
+    auto const& batch_gpairs = gpairs.at(k);
+    auto const& batch_tr_idx = tr_idx.at(k);
+    ++k;
   }
 }
 }  // namespace xgboost::cv
