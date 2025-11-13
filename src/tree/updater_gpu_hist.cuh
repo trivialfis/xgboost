@@ -38,13 +38,13 @@ struct GoLeftWrapperOp {
 };
 
 template <template <typename, std::int32_t> typename TensorView>
-dh::device_vector<GradientPairInt64> CalcRootSum(Context const* ctx,
-                                                 TensorView<GradientPair, 2> d_gpair,
-                                                 common::Span<GradientQuantiser const> roundings) {
+void CalcRootSum(Context const* ctx, TensorView<GradientPair, 2> d_gpair,
+                 common::Span<GradientQuantiser const> roundings,
+                 common::Span<GradientPairInt64> running_sum) {
   auto n_samples = d_gpair.template Shape<0>();
   auto n_targets = d_gpair.template Shape<1>();
   // Calculate the root sum
-  dh::device_vector<GradientPairInt64> root_sum(n_targets);
+  CHECK_EQ(running_sum.size(), n_targets);
 
   auto key_it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
     auto cidx = i / n_samples;
@@ -57,8 +57,7 @@ dh::device_vector<GradientPairInt64> CalcRootSum(Context const* ctx,
     return roundings[cidx].ToFixedPoint(g);
   });
   thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + d_gpair.Size(), val_it,
-                        thrust::make_discard_iterator(), root_sum.begin());
-  return root_sum;
+                        thrust::make_discard_iterator(), running_sum.begin());
 }
 
 /**
@@ -146,10 +145,11 @@ class MultiTargetHistMaker {
 
   [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
     auto d_gpair = split_gpair_.View(ctx_->Device());
-    auto n_targets = d_gpair.Shape(1);
+    auto n_targets = d_gpair.Shape<1>();
 
     // Calculate the root sum
-    auto root_sum = CalcRootSum(this->ctx_, d_gpair, this->split_quantizer_->Quantizers());
+    dh::device_vector<GradientPairInt64> root_sum(n_targets);
+    CalcRootSum(this->ctx_, d_gpair, this->split_quantizer_->Quantizers(), dh::ToSpan(root_sum));
     this->evaluator_.AllocNodeSum(RegTree::kRoot, n_targets);
     auto d_root_sum = this->evaluator_.GetNodeSum(RegTree::kRoot, n_targets);
     dh::safe_cuda(cudaMemcpyAsync(d_root_sum.data(), root_sum.data().get(), d_root_sum.size_bytes(),

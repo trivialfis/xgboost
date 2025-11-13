@@ -111,11 +111,9 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   }
 
   // Accumulate the root sum from all batches
-  linalg::Matrix<GradientPairInt64> all_root_sum =
-      linalg::Constant(ctx, GradientPairInt64{}, n_folds, n_targets);
-
   // Init root
   std::int32_t batch_idx = 0;
+  dh::device_vector<GradientPairInt64> root_sums(n_folds * n_targets);
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     auto const& batch_tr_idx = tr_idx.at(batch_idx);
@@ -123,10 +121,15 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
     for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       auto d_gpair = batch_gpairs[0]->gpair.View(ctx->Device());
       // We can use d_gpair without permutation indexing as it's calculated from the fold.
-      // auto root_sum = tree::cuda_impl::CalcRootSum(ctx, d_gpair, {});  // fixme
+      auto fold_root_sum = dh::ToSpan(root_sums).subspan(fold_idx * n_targets, n_targets);
+      // fixme: multi
+      dh::device_vector<tree::GradientQuantiser> d_q{*split_quantizer.at(fold_idx)};
+      tree::cuda_impl::CalcRootSum(ctx, d_gpair, dh::ToSpan(d_q), fold_root_sum);
     }
 
     ++batch_idx;
   }
+
+  // Build root histogram.
 }
 }  // namespace xgboost::cv
