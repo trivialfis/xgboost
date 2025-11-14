@@ -27,7 +27,6 @@ XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
   CHECK_HANDLE();
 
   auto p_fmat = CastDMatrixHandle(fmat);
-  CHECK(p_fmat);
 
   auto jindices = Json::Load(StringView{tr_indices});
   auto const& jindices_array = get<Array const>(jindices);
@@ -68,7 +67,7 @@ XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
   auto const& jhess_array = get<Array const>(jhess);
   CHECK_EQ(jhess_array.size(), n_batches);
 
-  bst_target_t n_targets = 1;  // fixme
+  bst_target_t n_targets = 0;  // fixme
 
   std::vector<std::vector<std::unique_ptr<GradientContainer>>> gpairs;
   for (std::size_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
@@ -78,11 +77,16 @@ XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
     CHECK_EQ(batch_hess.size(), n_folds);
     std::vector<std::unique_ptr<GradientContainer>> batch_gpairs;
     for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
-      auto fold_grad = ArrayInterface<1>{get<Object const>(batch_grad[fold_idx])};
-      auto fold_hess = ArrayInterface<1>{get<Object const>(batch_hess[fold_idx])};
+      auto fold_grad = ArrayInterface<2>{get<Object const>(batch_grad[fold_idx])};
+      auto fold_hess = ArrayInterface<2>{get<Object const>(batch_hess[fold_idx])};
 
       auto fold_gpair = std::make_unique<GradientContainer>();
-      fold_gpair->gpair.Reshape(fold_grad.Shape<0>(), 1);
+      fold_gpair->gpair.Reshape(fold_grad.Shape<0>(), fold_grad.Shape<1>());
+      if (n_targets == 0) {
+        n_targets = fold_gpair->NumTargets();
+      }
+      CHECK_EQ(n_targets, fold_gpair->NumTargets());
+
       auto& h_gpair = fold_gpair->gpair.Data()->HostVector();
       CHECK_EQ(h_gpair.size(), fold_grad.n);
       for (std::size_t i = 0; i < h_gpair.size(); ++i) {
@@ -110,6 +114,7 @@ XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
   // fixme
   LearnerModelParam lparam;
   lparam.num_feature = p_fmat->Info().num_col_;
+  CHECK_GE(n_targets, 1);
   lparam.num_output_group = n_targets;
 
   auto p_folds = static_cast<gbm::GBTreeCvFolds*>(handle);
