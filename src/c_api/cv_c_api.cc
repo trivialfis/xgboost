@@ -3,13 +3,24 @@
  */
 #include "../cross_validate/hist_build_trees.h"
 #include "../data/array_interface.h"
+#include "../gbm/gbtree_model.h"
 #include "c_api_error.h"
 #include "xgboost/json.h"
+#include "xgboost/predictor.h"
 
 using namespace xgboost;  // NOLINT
 
-XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char const* grad,
-                               char const* hess) {
+namespace xgboost::gbm {
+struct GBTreeCvFolds {
+  std::vector<std::shared_ptr<GBTreeModel>> folds;
+};
+}  // namespace xgboost::gbm
+
+typedef void* GBTreeCvFoldsHandle;  // NOLINT
+typedef void* GBTreeModelHandle;    // NOLINT
+
+XGB_DLL int XGCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char const* grad,
+                              char const* hess) {
   using BatchTrIdx = std::vector<std::vector<bst_idx_t>>;
 
   API_BEGIN();
@@ -35,7 +46,7 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
       batch_tr_idx.emplace_back();
       auto& fold_tr_idx = batch_tr_idx.back();
       DispatchDType(fold, DeviceOrd::CPU(), [&](auto&& in) {
-        for (std::size_t i = 0; i < in.Shape(0); ++i) {
+        for (std::size_t i = 0; i < in.template Shape<0>(); ++i) {
           fold_tr_idx.push_back(in(i));
         }
       });
@@ -54,6 +65,8 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
   CHECK_EQ(jgrad_array.size(), n_batches);
   auto const& jhess_array = get<Array const>(jhess);
   CHECK_EQ(jhess_array.size(), n_batches);
+
+  bst_target_t n_targets = 1;  // fixme
 
   std::vector<std::vector<std::unique_ptr<GradientContainer>>> gpairs;
   for (std::size_t batch_idx = 0; batch_idx < n_batches; ++batch_idx) {
@@ -92,5 +105,57 @@ XGB_DLL int XGBCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char 
 
   cv::BuildTrees(&ctx, p_fmat.get(), gpairs, tr_idx, p_trees);
 
+  // fixme
+  LearnerModelParam lparam;
+  lparam.num_feature = p_fmat->Info().num_col_;
+  lparam.num_output_group = n_targets;
+
+  for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    auto model = std::make_shared<gbm::GBTreeModel>(&lparam, &ctx);
+    // fixme
+    auto& tree = trees[fold_idx];
+    gbm::TreesOneGroup group_trees;
+    group_trees.emplace_back(std::move(tree));
+    gbm::TreesOneIter fold_trees;
+    fold_trees.emplace_back(std::move(group_trees));
+    model->CommitModel(std::move(fold_trees));
+  }
+
+  API_END();
+}
+
+XGB_DLL int XGCvGetFold(GBTreeCvFoldsHandle handle, int fold_idx, GBTreeModelHandle* out) {
+  API_BEGIN();
+  xgboost_CHECK_C_ARG_PTR(handle);
+  auto* folds = static_cast<gbm::GBTreeCvFolds*>(handle);
+  auto n_folds = folds->folds.size();
+  CHECK_LE(fold_idx, n_folds);
+  auto fold = folds->folds[fold_idx];
+  xgboost_CHECK_C_ARG_PTR(out);
+  *out = new std::shared_ptr<gbm::GBTreeModel>{fold};
+  API_END();
+}
+
+XGB_DLL int XGGBTreeModelFree(GBTreeModelHandle handle) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto fold = static_cast<std::shared_ptr<gbm::GBTreeModel>*>(handle);
+  delete fold;
+  API_END();
+}
+
+XGB_DLL int XGGBTreeModelPredict(GBTreeModelHandle handle, DMatrixHandle fmat) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto fold = static_cast<std::shared_ptr<gbm::GBTreeModel>*>(handle);
+  Context ctx;
+  ctx.UpdateAllowUnknown(Args{{"device", "cuda"}});
+  auto predictor = std::unique_ptr<Predictor>{Predictor::Create("gpu_predictor", &ctx)};
+
+  auto p_fmat = CastDMatrixHandle(fmat);
+  PredictionCacheEntry out_prediction;
+  predictor->InitOutPredictions(p_fmat->Info(), &out_prediction.predictions, **fold);
+
+  predictor->PredictBatch(p_fmat.get(), &out_prediction, **fold, 0);
   API_END();
 }
