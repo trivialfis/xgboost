@@ -95,21 +95,34 @@ XGBOOST_DEV_INLINE void AtomicAddGpairGlobal(xgboost::GradientPairInt64* dest,
   atomicAdd(dst_ptr + 1, *reinterpret_cast<uint64_t*>(&h));
 }
 
-template <typename Accessor, bool kCompressed, bool kDense, bool use_shared_memory_histograms,
-          std::int32_t kBlockThreads, std::int32_t kItemsPerThread>
-__global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
-    Accessor const matrix, common::Span<const tree::RowPartitioner::RowIndexT> d_ridx,
-    GradientPairInt64* d_node_hist, linalg::MatrixView<const GradientPair> d_gpair,
-    common::Span<tree::GradientQuantiser const> roundings) {
+template <typename IterT>
+XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, bst_idx_t base_rowid,
+                                     tree::RowPartitioner::RowIndexT ridx, bst_feature_t fidx) {
+  // ridx_local = ridx - base_rowid  <== Row index local to each batch
+  // entry_idx = ridx_local * row_stride <== Starting entry index for this row in the matrix
+  // entry_idx += start_feature  <== Inside a row, first column inside this feature group
+  // idx % feature_stride <== The feaature index local to the current feature group
+  // entry_idx += idx % feature_stride <== Final index.
+  return (ridx - base_rowid) * matrix.row_stride + fidx;
+}
+
+template <typename Accessor>
+__global__ void MultiHistKernel(Accessor const matrix, bst_idx_t base_rowid,
+                                common::Span<tree::RowPartitioner::RowIndexT const> d_ridx,
+                                GradientPairInt64* d_node_hist,
+                                linalg::MatrixView<const GradientPair> d_gpair,
+                                common::Span<tree::GradientQuantiser const> roundings) {
   std::int32_t feature_stride = matrix.row_stride;
   bst_idx_t n_elements = feature_stride * d_ridx.size();
   using Idx = tree::RowPartitioner::RowIndexT;
   for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
     Idx ridx = d_ridx[idx / feature_stride];
     auto fidx = idx % feature_stride;
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, base_rowid, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
-      if (kCompressed) {
+      // bool kCompressed
+      // fixme
+      if (true) {
         compressed_bin += matrix.feature_segments[fidx];
       }
       bst_target_t n_targets = roundings.size();
@@ -178,14 +191,18 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   // fixme: find a better ds.
   BatchPtr batch_ptr(p_fmat->NumBatches(), n_folds);
 
+  std::shared_ptr<common::HistogramCuts const> cuts;
+
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
+    cuts = page.Impl()->CutsShared();
+
     auto const& batch_gpairs = gpairs.at(batch_idx);
     auto const& batch_tr_idx = tr_idx.at(batch_idx);
 
     auto& local_ptr = batch_ptr.Batch(batch_idx + 1);
 
     for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
-      auto d_gpair = batch_gpairs[0]->gpair.View(ctx->Device());
+      auto d_gpair = batch_gpairs.at(fold_idx)->gpair.View(ctx->Device());
       // We can use d_gpair without permutation indexing as it's calculated from the fold.
       auto fold_root_sum = dh::ToSpan(root_sums).subspan(fold_idx * n_targets, n_targets);
       // fixme: multi
@@ -197,12 +214,13 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
 
     ++batch_idx;
   }
+  batch_ptr.InclusiveSum();
 
   // Initialize partitioners
   std::vector<std::unique_ptr<tree::RowPartitioner>> partitioners;
   for (std::int32_t batch_idx = 0; batch_idx < p_fmat->NumBatches(); ++batch_idx) {
     // auto const& local_ptr = batch_ptr.Fold(batch_idx);
-    for (std::int32_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       partitioners.emplace_back(std::make_unique<tree::RowPartitioner>());
       auto base_rowid = batch_ptr.Batch(batch_idx).at(fold_idx);
       auto fold_size = batch_ptr.Batch(batch_idx + 1).at(fold_idx) - base_rowid;
@@ -213,11 +231,38 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
 
   // Build root histogram.
   std::vector<tree::DeviceHistogramBuilder> histogram_builders(n_folds);
+  tree::HistMakerTrainParam hist_param;
+  auto feature_groups = std::make_unique<tree::FeatureGroups>(*cuts, true, 0ul);
+  hist_param.UpdateAllowUnknown(Args{{}});
+  for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    histogram_builders.at(fold_idx).Reset(ctx, hist_param.MaxCachedHistNodes(ctx->Device()),
+                                          feature_groups->DeviceAccessor(ctx->Device()),
+                                          cuts->TotalBins(), false);
+    histogram_builders.at(fold_idx).AllocateHistograms(ctx, {RegTree::kRoot});
+  }
+
   batch_idx = 0;
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     auto const& batch_tr_idx = tr_idx.at(batch_idx);  // fixme: find batch local idx
     auto batch = page.Impl();
+    for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+      auto d_ridx = partitioners.at(batch_idx * n_folds + fold_idx)->GetRows(RegTree::kRoot);
+      auto d_node_hist = histogram_builders.at(fold_idx).GetNodeHistogram(RegTree::kRoot);
+      auto d_gpair = batch_gpairs.at(fold_idx)->gpair.View(ctx->Device());
+      auto roundings = *split_quantizer.at(fold_idx);
+      auto base_rowid = batch_ptr.Batch(batch_idx).at(fold_idx);
+      dh::device_vector<tree::GradientQuantiser> d_roundings{roundings};  // fixme
+      batch->Visit(ctx, {}, [&](auto&& d_acc) {
+        using Accessor = common::GetValueT<decltype(d_acc)>;
+        constexpr std::uint32_t kBlockThreads = 512;
+        // fixme
+        std::uint32_t grid_size = std::min(d_ridx.size() * d_acc.row_stride / kBlockThreads, 4ul);
+        MultiHistKernel<<<grid_size, kBlockThreads>>>(d_acc, base_rowid, d_ridx, d_node_hist.data(),
+                                                      d_gpair, dh::ToSpan(d_roundings));
+      });
+    }
+
     ++batch_idx;
   }
 
@@ -225,7 +270,7 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   std::vector<std::unique_ptr<tree::MultiGradientQuantiser>> evaluators;
 
   // Apply root split
-  for (std::int32_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+  for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
     auto p_tree = trees.at(fold_idx);
     // p_tre
   }
