@@ -275,9 +275,17 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   std::vector<tree::cuda_impl::MultiExpandEntry> root_entries;
 
   for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    evaluators.emplace_back(std::make_unique<tree::cuda_impl::MultiHistEvaluator>());
+
     auto node_hist = histogram_builders.at(fold_idx).GetNodeHistogram(RegTree::kRoot);
     auto p_tree = trees[fold_idx];
+
     auto fold_root_sum = dh::ToSpan(root_sums).subspan(fold_idx * n_targets, n_targets);
+    evaluators.back()->AllocNodeSum(RegTree::kRoot, n_targets);
+    auto d_root_sum = evaluators.back()->GetNodeSum(RegTree::kRoot, n_targets);
+    dh::safe_cuda(cudaMemcpyAsync(d_root_sum.data(), fold_root_sum.data(), d_root_sum.size_bytes(),
+                                  cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
+
     tree::MultiEvaluateSplitInputs input{RegTree::kRoot, p_tree->GetDepth(RegTree::kRoot),
                                          fold_root_sum, node_hist};
     auto roundings = *split_quantizer.at(fold_idx);
