@@ -221,6 +221,7 @@ XGB_DLL int XGGBTreeModelPredict(GBTreeModelHandle handle, DMatrixHandle fmat,
   auto array = static_cast<ArrayContainer*>(c_array);
   CHECK_EQ(array->data.Size(), out_prediction.predictions.Size());
   array->data.SetDevice(out_prediction.predictions.Device());
+  // fixme: set shape here
   array->data.ModifyInplace(
       [&](HostDeviceVector<float>* data, auto) { data->Copy(out_prediction.predictions); });
   API_END();
