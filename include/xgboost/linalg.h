@@ -767,11 +767,13 @@ auto Make1dInterface(T const *vec, std::size_t len) {
  * \brief A tensor storage. To use it for other functionality like slicing one needs to
  *        obtain a view first.  This way we can use it on both host and device.
  */
-template <typename T, int32_t kDim = 5>
+template <typename T, std::int32_t kDim = 5>
 class Tensor {
  public:
   using ShapeT = std::size_t[kDim];
   using StrideT = ShapeT;
+
+  std::size_t constexpr static kDimension = kDim;
 
  private:
   HostDeviceVector<T> data_;

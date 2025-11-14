@@ -16,8 +16,9 @@ struct GBTreeCvFolds {
 };
 }  // namespace xgboost::gbm
 
-typedef void* GBTreeCvFoldsHandle;  // NOLINT
-typedef void* GBTreeModelHandle;    // NOLINT
+typedef void* GBTreeCvFoldsHandle;   // NOLINT
+typedef void* GBTreeModelHandle;     // NOLINT
+typedef void* ArrayContainerHandle;  // NOLINT
 
 XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
                               char const* tr_indices, char const* grad, char const* hess) {
@@ -171,7 +172,38 @@ XGB_DLL int XGGBTreeModelFree(GBTreeModelHandle handle) {
   API_END();
 }
 
-XGB_DLL int XGGBTreeModelPredict(GBTreeModelHandle handle, DMatrixHandle fmat) {
+struct ArrayContainer {
+  linalg::Tensor<float> data;
+  std::int32_t kdims{0};
+};
+
+XGB_DLL int XGArrayContainerCreate(char const* config, ArrayContainerHandle* out) {
+  API_BEGIN();
+  auto jconf = Json::Load(config);
+  auto jshape = get<Array const>(jconf["shape"]);
+  auto n_dims = jshape.size();
+  constexpr auto kFullDim = decltype(std::declval<ArrayContainer>().data)::kDimension;
+  std::vector<std::size_t> shape(kFullDim, 1);
+  for (std::size_t k = 0; k < n_dims; ++k) {
+    shape[k] = get<Integer const>(jshape[k]);
+  }
+  auto array = new ArrayContainer;
+  array->data.Reshape(common::Span<std::size_t const, kFullDim>{shape});
+  array->kdims = n_dims;
+  *out = array;
+  API_END();
+}
+
+XGB_DLL int XGArrayContainerFree(ArrayContainerHandle handle) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto array = static_cast<ArrayContainer*>(handle);
+  delete array;
+  API_END();
+}
+
+XGB_DLL int XGGBTreeModelPredict(GBTreeModelHandle handle, DMatrixHandle fmat,
+                                 ArrayContainerHandle c_array) {
   API_BEGIN();
   CHECK_HANDLE();
   auto fold = static_cast<std::shared_ptr<gbm::GBTreeModel>*>(handle);
@@ -184,5 +216,12 @@ XGB_DLL int XGGBTreeModelPredict(GBTreeModelHandle handle, DMatrixHandle fmat) {
   predictor->InitOutPredictions(p_fmat->Info(), &out_prediction.predictions, **fold);
 
   predictor->PredictBatch(p_fmat.get(), &out_prediction, **fold, 0);
+
+  // fixme: less copies
+  auto array = static_cast<ArrayContainer*>(c_array);
+  CHECK_EQ(array->data.Size(), out_prediction.predictions.Size());
+  array->data.SetDevice(out_prediction.predictions.Device());
+  array->data.ModifyInplace(
+      [&](HostDeviceVector<float>* data, auto) { data->Copy(out_prediction.predictions); });
   API_END();
 }
