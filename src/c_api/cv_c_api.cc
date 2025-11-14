@@ -19,11 +19,13 @@ struct GBTreeCvFolds {
 typedef void* GBTreeCvFoldsHandle;  // NOLINT
 typedef void* GBTreeModelHandle;    // NOLINT
 
-XGB_DLL int XGCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char const* grad,
-                              char const* hess) {
+XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
+                              char const* tr_indices, char const* grad, char const* hess) {
   using BatchTrIdx = std::vector<std::vector<bst_idx_t>>;
 
   API_BEGIN();
+  CHECK_HANDLE();
+
   auto p_fmat = CastDMatrixHandle(fmat);
   CHECK(p_fmat);
 
@@ -110,6 +112,7 @@ XGB_DLL int XGCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char c
   lparam.num_feature = p_fmat->Info().num_col_;
   lparam.num_output_group = n_targets;
 
+  auto p_folds = static_cast<gbm::GBTreeCvFolds*>(handle);
   for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
     auto model = std::make_shared<gbm::GBTreeModel>(&lparam, &ctx);
     // fixme
@@ -119,8 +122,27 @@ XGB_DLL int XGCvUpdateOneIter(DMatrixHandle fmat, char const* tr_indices, char c
     gbm::TreesOneIter fold_trees;
     fold_trees.emplace_back(std::move(group_trees));
     model->CommitModel(std::move(fold_trees));
+    p_folds->folds.at(fold_idx) = model;
   }
 
+  API_END();
+}
+
+XGB_DLL int XGCvFoldsCreate(char const* config, GBTreeCvFoldsHandle* out) {
+  API_BEGIN();
+  xgboost_CHECK_C_ARG_PTR(config);
+  auto n_folds = get<Integer const>(Json::Load(config)["n_folds"]);
+  auto p_folds = new gbm::GBTreeCvFolds{};
+  p_folds->folds.resize(n_folds);
+  *out = p_folds;
+  API_END();
+}
+
+XGB_DLL int XGCvFoldsFree(GBTreeCvFoldsHandle handle) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto p_folds = static_cast<gbm::GBTreeCvFolds*>(handle);
+  delete p_folds;
   API_END();
 }
 

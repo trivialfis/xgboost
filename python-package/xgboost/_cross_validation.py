@@ -1,3 +1,4 @@
+import ctypes
 import json
 from typing import Tuple
 
@@ -10,7 +11,7 @@ import xgboost.testing as tm
 
 from ._data_utils import array_interface_dict, cuda_array_interface_dict
 from ._typing import ArrayLike
-from .core import _LIB, DMatrix, ExtMemQuantileDMatrix, _check_call, c_str
+from .core import _LIB, ExtMemQuantileDMatrix, _check_call, c_str, make_jcargs
 from .objective import TreeObjective
 from .testing.data import IteratorForTest
 
@@ -60,7 +61,6 @@ def _make_aitfs(all_batches: list[list[ArrayLike]]) -> str:
             else:
                 f_aitf = array_interface_dict(fold)
             aitfs.append(f_aitf)
-        # assert len(aitfs) == n_splits
         all_aitfs.append(aitfs)
     jindices = json.dumps(all_aitfs, indent=2)
     return jindices
@@ -78,6 +78,20 @@ def _split_by_groups(X, y, groups, n_batches: int):
         y_batches.append(cp.array(y[test_idx]))
         g_batches.append(groups[test_idx])
     return X_batches, y_batches, g_batches
+
+
+class _CvFolds:
+    def __init__(self, n_splits: int) -> None:
+        hdl = ctypes.c_void_p()
+        _check_call(
+            _LIB.XGCvFoldsCreate(make_jcargs(n_folds=n_splits), ctypes.byref(hdl))
+        )
+        self._hdl = hdl
+
+    def __del__(self) -> None:
+        if hasattr(self, "_hdl"):
+            _check_call(_LIB.XGCvFoldsFree(self._hdl))
+            del self._hdl
 
 
 def cross_validate() -> None:
@@ -116,6 +130,7 @@ def cross_validate() -> None:
 
     fobj = LsObj0()
 
+    folds = _CvFolds(n_splits=n_splits)
     num_boost_round = 1
     for i in range(num_boost_round):
         # Calculate the gradient
@@ -141,7 +156,7 @@ def cross_validate() -> None:
 
         # Update
         _check_call(
-            _LIB.XGBCvUpdateOneIter(
-                Xy.handle, c_str(jindices), c_str(g_aitfs), c_str(h_aitfs)
+            _LIB.XGCvUpdateOneIter(
+                folds._hdl, Xy.handle, c_str(jindices), c_str(g_aitfs), c_str(h_aitfs)
             )
         )
