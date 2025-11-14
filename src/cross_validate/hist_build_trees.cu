@@ -267,12 +267,58 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   }
 
   // Evaluate root split
-  std::vector<std::unique_ptr<tree::MultiGradientQuantiser>> evaluators;
+  std::vector<std::unique_ptr<tree::cuda_impl::MultiHistEvaluator>> evaluators;
+  tree::TrainParam param;
+  param.UpdateAllowUnknown(Args{{}});
+  tree::GPUTrainingParam gpu_param{param};
+
+  std::vector<tree::cuda_impl::MultiExpandEntry> root_entries;
+
+  for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
+    auto node_hist = histogram_builders.at(fold_idx).GetNodeHistogram(RegTree::kRoot);
+    auto p_tree = trees[fold_idx];
+    auto fold_root_sum = dh::ToSpan(root_sums).subspan(fold_idx * n_targets, n_targets);
+    tree::MultiEvaluateSplitInputs input{RegTree::kRoot, p_tree->GetDepth(RegTree::kRoot),
+                                         fold_root_sum, node_hist};
+    auto roundings = *split_quantizer.at(fold_idx);
+    dh::device_vector<tree::GradientQuantiser> d_roundings{roundings};  // fixme
+
+    tree::MultiEvaluateSplitSharedInputs shared_inputs{dh::ToSpan(d_roundings),
+                                                       cuts->cut_ptrs_.ConstDeviceSpan(),
+                                                       cuts->cut_values_.ConstDeviceSpan(),
+                                                       cuts->min_vals_.ConstDeviceSpan(),
+                                                       param.max_bin,
+                                                       gpu_param};
+    auto entry = evaluators.at(fold_idx)->EvaluateSingleSplit(ctx, input, shared_inputs);
+    root_entries.push_back(entry);
+
+    // TODO(jiamingy): Support learning rate.
+    // TODO(jiamingy): We need to modify the tree structure to account for internal reduced weight
+    // size.
+    std::vector<float> h_base_weight(entry.base_weight.size());
+    dh::CopyDeviceSpanToVector(&h_base_weight, entry.base_weight);
+    p_tree->SetRoot(linalg::MakeVec(h_base_weight));
+  }
 
   // Apply root split
   for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
     auto p_tree = trees.at(fold_idx);
-    // p_tre
+    auto candidate = root_entries.at(fold_idx);
+
+    // TODO(jiamingy): Support learning rate.
+    // TODO(jiamingy): Avoid device to host copies.
+    std::vector<float> h_base_weight(candidate.base_weight.size());
+    std::vector<float> h_left_weight(candidate.left_weight.size());
+    std::vector<float> h_right_weight(candidate.right_weight.size());
+    dh::CopyDeviceSpanToVector(&h_base_weight, candidate.base_weight);
+    dh::CopyDeviceSpanToVector(&h_left_weight, candidate.left_weight);
+    dh::CopyDeviceSpanToVector(&h_right_weight, candidate.right_weight);
+
+    p_tree->ExpandNode(candidate.nidx, candidate.split.findex, candidate.split.fvalue,
+                       candidate.split.dir == tree::kLeftDir, linalg::MakeVec(h_base_weight),
+                       linalg::MakeVec(h_left_weight), linalg::MakeVec(h_right_weight));
+
+    evaluators.at(fold_idx)->ApplyTreeSplit(ctx, p_tree, candidate);
   }
 }
 }  // namespace xgboost::cv
