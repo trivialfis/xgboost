@@ -123,6 +123,22 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   }
 }
 
+struct BatchPtr {
+  std::vector<std::vector<bst_idx_t>> batch_ptr;
+  BatchPtr(std::int32_t n_batches, std::int32_t n_folds) : batch_ptr(n_batches + 1) {
+    CHECK_GE(n_batches, 1);
+    batch_ptr[0] = std::vector<bst_idx_t>(n_folds, 0);
+  }
+  std::vector<bst_idx_t>& Batch(std::int32_t fold_idx) { return batch_ptr.at(fold_idx); }
+  void InclusiveSum() {
+    for (std::size_t fold_idx = 0; fold_idx < batch_ptr.front().size(); ++fold_idx) {
+      for (std::size_t batch_idx = 1; batch_idx < batch_ptr.size(); ++batch_idx) {
+        auto size = batch_ptr[batch_idx - 1].at(fold_idx);
+        batch_ptr[batch_idx].at(fold_idx) += size;
+      }
+    }
+  }
+};
 }  // namespace
 
 // Maybe we can modify the multi-target builder to handle many trees
@@ -160,13 +176,13 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   CHECK_EQ(n_targets, 1);  // fixme
 
   // fixme: find a better ds.
-  std::vector<std::vector<bst_idx_t>> batch_ptr(p_fmat->NumBatches());
+  BatchPtr batch_ptr(p_fmat->NumBatches(), n_folds);
 
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, StaticBatch(true))) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     auto const& batch_tr_idx = tr_idx.at(batch_idx);
 
-    auto& local_ptr = batch_ptr[batch_idx];
+    auto& local_ptr = batch_ptr.Batch(batch_idx + 1);
 
     for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       auto d_gpair = batch_gpairs[0]->gpair.View(ctx->Device());
@@ -185,13 +201,15 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   // Initialize partitioners
   std::vector<std::unique_ptr<tree::RowPartitioner>> partitioners;
   for (std::int32_t batch_idx = 0; batch_idx < p_fmat->NumBatches(); ++batch_idx) {
-    auto const& local_ptr = batch_ptr.at(batch_idx);
+    // auto const& local_ptr = batch_ptr.Fold(batch_idx);
     for (std::int32_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       partitioners.emplace_back(std::make_unique<tree::RowPartitioner>());
-      auto fold_size = local_ptr.at(fold_idx);
-      partitioners.back()->Reset(ctx, fold_size, base_ridx);
+      auto base_rowid = batch_ptr.Batch(batch_idx).at(fold_idx);
+      auto fold_size = batch_ptr.Batch(batch_idx + 1).at(fold_idx) - base_rowid;
+      partitioners.back()->Reset(ctx, fold_size, base_rowid);
     }
   }
+  CHECK_EQ(partitioners.size(), n_folds * p_fmat->NumBatches());
 
   // Build root histogram.
   std::vector<tree::DeviceHistogramBuilder> histogram_builders(n_folds);
