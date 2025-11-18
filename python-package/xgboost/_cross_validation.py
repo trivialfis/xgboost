@@ -172,7 +172,7 @@ def cross_validate() -> None:
             assert len(batch_tr_idx) == n_splits
 
             for k, fold in enumerate(batch_tr_idx):
-                y_pred = cp.zeros(fold.shape, dtype=np.float32)
+                y_pred = cp.zeros((fold.shape[0], n_classes), dtype=np.float32)
                 # Generate a batch of gradient for each fold
                 grad, hess = fobj(y_pred, cp.array(y_batches[batch_idx][fold]))
                 batch_grad.append(grad)
