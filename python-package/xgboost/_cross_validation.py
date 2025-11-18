@@ -11,12 +11,20 @@ import xgboost.testing as tm
 
 from ._data_utils import array_interface_dict, cuda_array_interface_dict
 from ._typing import ArrayLike
-from .core import _LIB, ExtMemQuantileDMatrix, _check_call, c_str, make_jcargs
+from .core import (
+    _LIB,
+    ExtMemQuantileDMatrix,
+    QuantileDMatrix,
+    _check_call,
+    c_str,
+    make_jcargs,
+)
 from .objective import TreeObjective
 from .testing.data import IteratorForTest
-
+from .training import train
 
 n_classes = 3
+
 
 def make_group_clf(n_groups: int):
     n_samples = 4096
@@ -121,6 +129,69 @@ class _CvFolds:
         if hasattr(self, "_hdl"):
             _check_call(_LIB.XGCvFoldsFree(self._hdl))
             del self._hdl
+
+
+def in_core() -> None:
+    n_groups = 5
+    n_splits = 5
+    X, y, groups = make_group_clf(n_groups)
+    n_batches = 17
+
+    X_batches, y_batches, g_batches = _split_by_groups(X, y, groups, n_batches)
+
+    it = IteratorForTest(
+        X_batches,
+        y_batches,
+        None,
+        cache=None,
+        on_host=True,
+    )
+    Xy_ref = QuantileDMatrix(it)
+
+    all_tr_batches = []
+    all_te_batches = []
+    for batch_idx in range(n_batches):
+        kfold = StratifiedGroupKFold(n_splits=n_splits, random_state=2025, shuffle=True)
+        batch_tr_idx = []
+        batch_te_idx = []
+        for tr_idx, te_idx in kfold.split(
+            X_batches[batch_idx], y_batches[batch_idx].get(), g_batches[batch_idx]
+        ):
+            batch_tr_idx.append(tr_idx)
+            batch_te_idx.append(te_idx)
+        assert len(batch_tr_idx) == n_splits
+        all_tr_batches.append(batch_tr_idx)
+        all_te_batches.append(batch_te_idx)
+
+    Xy_folds = []
+    for fold_idx in range(n_splits):
+        X_batches_fold = []
+        y_batches_fold = []
+        for batch_idx in range(n_batches):
+            batch_tr_idx = all_tr_batches[batch_idx][fold_idx]
+            X_i = X_batches[batch_idx][batch_tr_idx, :]
+            y_i = y_batches[batch_idx][batch_tr_idx]
+            X_batches_fold.append(X_i)
+            y_batches_fold.append(y_i)
+        it_fold = IteratorForTest(
+            X_batches_fold, y_batches_fold, None, cache=None, on_host=True
+        )
+        Xy_fold = QuantileDMatrix(it_fold, ref=Xy_ref)
+        Xy_folds.append(Xy_fold)
+
+    booster_0 = train(
+        {
+            "device": "cuda",
+            "multi_strategy": "multi_output_tree",
+            "base_score": 0.5,
+            "num_class": n_classes,
+            "objective": "multi:softprob",
+            "eta": 1.0,
+        },
+        dtrain=Xy_folds[0],
+        num_boost_round=2,
+        evals=[(Xy_folds[0], "Train")],
+    )
 
 
 def cross_validate() -> None:

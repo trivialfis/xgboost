@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.datasets import make_classification
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
-from xgboost._cross_validation import cross_validate
+from xgboost._cross_validation import cross_validate, in_core
 
 
 def make_group_clf(n_groups: int):
@@ -37,4 +37,5 @@ def test_group_kfold() -> None:
 
 if __name__ == "__main__":
     # test_group_kfold()
-    cross_validate()
+    in_core()
+    # cross_validate()
