@@ -16,6 +16,8 @@ from .objective import TreeObjective
 from .testing.data import IteratorForTest
 
 
+n_classes = 3
+
 def make_group_clf(n_groups: int):
     n_samples = 4096
     n_features = 16
@@ -24,12 +26,44 @@ def make_group_clf(n_groups: int):
         n_samples,
         n_features,
         random_state=2025,
-        n_classes=3,
+        n_classes=n_classes,
         n_informative=n_features,
         n_redundant=0,
     )
     groups = rng.integers(0, n_groups, size=(n_samples,))
     return X, y, groups
+
+
+def softmax(x: np.ndarray) -> np.ndarray:
+    """Softmax function with x as input vector."""
+    e = np.exp(x)
+    return e / np.sum(e)
+
+
+class CeObj:
+    def __init__(self, n_classes: int) -> None:
+        self.n_classes = n_classes
+
+    def __call__(
+        self, predt: np.ndarray, y_true: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        labels = y_true
+        n_samples = predt.shape[0]
+
+        grad = np.zeros((n_samples, self.n_classes), dtype=np.float32)
+        hess = np.zeros((n_samples, self.n_classes), dtype=np.float32)
+        eps = 1e-6
+        for r in range(predt.shape[0]):
+            target = labels[r]
+            p = softmax(predt[r, :])
+            for c in range(predt.shape[1]):
+                assert target >= 0 or target <= self.n_classes
+                g = p[c] - 1.0 if c == target else p[c]
+                h = max((2.0 * p[c] * (1.0 - p[c])).item(), eps)
+                grad[r, c] = g
+                hess[r, c] = h
+
+        return grad, hess
 
 
 class LsObj0(TreeObjective):
@@ -42,11 +76,6 @@ class LsObj0(TreeObjective):
     ) -> Tuple[np.ndarray, np.ndarray]:
         grad, hess = tm.ls_obj(y_true, y_pred, None)
         return np.array(grad.get()), np.array(hess)
-
-    def split_grad(
-        self, grad: ArrayLike, hess: ArrayLike
-    ) -> Tuple[ArrayLike, ArrayLike]:
-        return cp.array(grad), cp.array(hess)
 
 
 def _make_aitfs(all_batches: list[list[ArrayLike]]) -> str:
@@ -128,7 +157,8 @@ def cross_validate() -> None:
 
     jindices = _make_aitfs(all_tr_batches)
 
-    fobj = LsObj0()
+    # fobj = LsObj0()
+    fobj = CeObj(n_classes)
 
     folds = _CvFolds(n_splits=n_splits)
     num_boost_round = 1
