@@ -104,7 +104,7 @@ XGB_DLL int XGCvUpdateOneIter(GBTreeCvFoldsHandle handle, DMatrixHandle fmat,
 
   std::vector<std::unique_ptr<RegTree>> trees;
   for (decltype(n_folds) fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
-    trees.emplace_back(std::make_unique<RegTree>(1, p_fmat->Info().num_col_));
+    trees.emplace_back(std::make_unique<RegTree>(n_targets, p_fmat->Info().num_col_));
   }
   std::vector<RegTree*> p_trees;
   std::transform(trees.begin(), trees.end(), std::back_inserter(p_trees),

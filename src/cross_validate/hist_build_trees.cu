@@ -165,28 +165,32 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
   // Init data
   // each fold needs a different quantizer
   std::vector<std::unique_ptr<tree::GradientQuantiser>> split_quantizer;
-  std::vector<Pair> running_sum(n_folds);
+  std::vector<Pair> running_sum(n_folds * n_targets);
   std::vector<bst_idx_t> running_sum_rows(n_folds);
   for (std::int32_t batch_idx = 0; batch_idx < p_fmat->NumBatches(); ++batch_idx) {
     auto const& batch_gpairs = gpairs.at(batch_idx);
     for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
       auto fold_gpair = batch_gpairs.at(fold_idx)->gpair.View(ctx->Device());
       auto beg = thrust::make_transform_iterator(linalg::tcbegin(fold_gpair), Clip());
-      running_sum[fold_idx] = dh::Reduce(ctx->CUDACtx()->CTP(), beg, beg + fold_gpair.Size(),
-                                         running_sum[fold_idx], thrust::plus<Pair>{});
+      for (bst_target_t t = 0; t < n_targets; ++t) {
+        running_sum[fold_idx * n_targets + t] =
+            dh::Reduce(ctx->CUDACtx()->CTP(), beg, beg + fold_gpair.Size(),
+                       running_sum[fold_idx * n_targets + t], thrust::plus<Pair>{});
+      }
       running_sum_rows[fold_idx] += fold_gpair.Shape<0>();
     }
   }
   for (std::size_t fold_idx = 0; fold_idx < n_folds; ++fold_idx) {
-    split_quantizer.emplace_back(
-        CreateQuantizer(running_sum[fold_idx], running_sum_rows[fold_idx]));
+    for (bst_target_t t = 0; t < n_targets; ++t) {
+      split_quantizer.emplace_back(
+          CreateQuantizer(running_sum[fold_idx * n_targets + t], running_sum_rows[fold_idx]));
+    }
   }
 
   // Accumulate the root sum from all batches
   // Init root
   std::int32_t batch_idx = 0;
   dh::device_vector<GradientPairInt64> root_sums(n_folds * n_targets);
-  CHECK_EQ(n_targets, 1);  // fixme
 
   // fixme: find a better ds.
   BatchPtr batch_ptr(p_fmat->NumBatches(), n_folds);
@@ -205,8 +209,11 @@ void BuildTrees(Context const* ctx, DMatrix* p_fmat,
       auto d_gpair = batch_gpairs.at(fold_idx)->gpair.View(ctx->Device());
       // We can use d_gpair without permutation indexing as it's calculated from the fold.
       auto fold_root_sum = dh::ToSpan(root_sums).subspan(fold_idx * n_targets, n_targets);
-      // fixme: multi
-      dh::device_vector<tree::GradientQuantiser> d_q{*split_quantizer.at(fold_idx)};
+      // fixme: perf
+      dh::device_vector<tree::GradientQuantiser> d_q;
+      for (bst_target_t t = 0; t < n_targets; ++t) {
+        d_q.push_back(*split_quantizer.at(fold_idx * n_targets + t));
+      }
       tree::cuda_impl::CalcRootSum(ctx, d_gpair, dh::ToSpan(d_q), fold_root_sum);
       auto const& fold_tr_idx = batch_tr_idx.at(fold_idx);
       local_ptr.push_back(fold_tr_idx.size());
