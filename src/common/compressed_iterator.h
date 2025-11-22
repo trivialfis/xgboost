@@ -168,7 +168,7 @@ inline std::size_t AlignDown(std::size_t value, std::size_t alignment) noexcept 
 __device__ inline void PrefetchGlobalL2(void const *addr) {
 #if __CUDA_ARCH__ >= 90
   addr = reinterpret_cast<void const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
-  asm("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
+  volatile asm("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
 #else
   asm("trap;");
 #endif
@@ -202,6 +202,15 @@ class CompressedIterator {
   CompressedIterator() = default;
   CompressedIterator(CompressedByteT const *buffer, bst_idx_t num_symbols)
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
+
+  void Prefetch(std::size_t offset) const {
+    const int bits_per_byte = 8;
+    size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
+    size_t start_byte_idx = start_bit_idx / bits_per_byte;
+    start_byte_idx += detail::kPadding;
+
+    PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
+  }
 
   XGBOOST_DEVICE reference operator*() const {
     const int bits_per_byte = 8;
@@ -263,6 +272,26 @@ class DoubleCompressedIter {
   DoubleCompressedIter(CompressedByteT const *XGBOOST_RESTRICT buf0, std::size_t n0_bytes,
                        CompressedByteT const *XGBOOST_RESTRICT buf1, bst_idx_t n_symbols)
       : buf0_{buf0}, buf1_{buf1}, n0_{n0_bytes}, symbol_bits_{detail::SymbolBits(n_symbols)} {}
+
+  void Prefetch(std::size_t offset) const {
+    const int bits_per_byte = 8;
+    size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
+    size_t start_byte_idx = start_bit_idx / bits_per_byte;
+    start_byte_idx += detail::kPadding;
+
+    if (start_byte_idx >= this->n0_ && (start_byte_idx - 4) < this->n0_) {
+      // do nothing
+    } else {
+      bool ind = start_byte_idx >= n0_;
+      // Pick the buffer to read
+      auto const *XGBOOST_RESTRICT buf = reinterpret_cast<CompressedByteT const *>(
+          (!ind) * reinterpret_cast<std::uintptr_t>(buf0_) +
+          ind * reinterpret_cast<std::uintptr_t>(buf1_));
+      auto shifted = start_byte_idx - n0_ * ind;
+
+      PrefetchGlobalL2(buf + (shifted - 4));
+    }
+  }
 
   XGBOOST_HOST_DEV_INLINE reference operator*() const {
     constexpr std::int32_t kBitsPerByte = 8;
