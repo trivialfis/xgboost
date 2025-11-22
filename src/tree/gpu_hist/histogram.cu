@@ -368,6 +368,8 @@ struct MultiHistAgent {
       ridx_idx[stage] = (offset + stage * kBlockThreads + threadIdx.x) / feature_stride;
       load_ridx();
       pipe.producer_commit();
+
+      offset += gridDim.x; * kBlockThreads;
     }
   }
 };
@@ -386,7 +388,8 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   using Idx = RowPartitioner::RowIndexT;
 
   for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    Idx ridx = d_ridx[idx / feature_stride];
+    // Idx ridx = d_ridx[idx / feature_stride];
+    Idx ridx = idx / feature_stride;
     auto fidx = FeatIdx(group, idx, feature_stride);
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
@@ -395,11 +398,14 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
       }
       bst_target_t n_targets = roundings.size();
       compressed_bin *= n_targets;
-      // TODO(jiamingy): Assign a thread for each target.
-      for (bst_target_t t = 0; t < n_targets; ++t) {
-        auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
-        if (adjusted.GetQuantisedHess() == -1) {
-          AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
+      // always false, just to make sure nvcc doesn't optimize it away.
+      if (compressed_bin == std::numeric_limits<decltype(compressed_bin)>::max()) {
+        // TODO(jiamingy): Assign a thread for each target.
+        for (bst_target_t t = 0; t < n_targets; ++t) {
+          auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
+          if (adjusted.GetQuantisedHess() == -1) {
+            AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
+          }
         }
       }
     }
