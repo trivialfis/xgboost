@@ -352,7 +352,7 @@ struct MultiHistAgent {
       cuda::pipeline_consumer_wait_prior<1>(pipe);
 
       auto ridx = d_ridx_staging[stage * kBlockThreads + ridx_idx[stage]];
-      auto fidx = FeatIdx(group, idx, feature_stride);
+      auto fidx = FeatIdx(group, ridx_idx[stage], feature_stride);  // fixme
       bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
       // fixme: kDense
       if (compressed_bin != matrix.NullValue()) {
