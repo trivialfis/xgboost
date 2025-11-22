@@ -168,9 +168,10 @@ inline std::size_t AlignDown(std::size_t value, std::size_t alignment) noexcept 
 __device__ inline void PrefetchGlobalL2(void const *addr) {
 #if __CUDA_ARCH__ >= 90
   addr = reinterpret_cast<void const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
-  volatile asm("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
+  asm volatile("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
 #else
-  asm("trap;");
+  addr = reinterpret_cast<void const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
+  asm volatile("prefetch.global.L2 [%0];" : : "l"(addr));
 #endif
 }
 #endif  // defined(__CUDACC__)
@@ -203,6 +204,7 @@ class CompressedIterator {
   CompressedIterator(CompressedByteT const *buffer, bst_idx_t num_symbols)
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
 
+#if defined(__CUDACC__)
   __device__ void Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
@@ -211,6 +213,7 @@ class CompressedIterator {
 
     PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
   }
+#endif
 
   XGBOOST_DEVICE reference operator*() const {
     const int bits_per_byte = 8;
@@ -273,6 +276,7 @@ class DoubleCompressedIter {
                        CompressedByteT const *XGBOOST_RESTRICT buf1, bst_idx_t n_symbols)
       : buf0_{buf0}, buf1_{buf1}, n0_{n0_bytes}, symbol_bits_{detail::SymbolBits(n_symbols)} {}
 
+#if defined(__CUDACC__)
   __device__ void Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
@@ -292,6 +296,7 @@ class DoubleCompressedIter {
       PrefetchGlobalL2(buf + (shifted - 4));
     }
   }
+#endif
 
   XGBOOST_HOST_DEV_INLINE reference operator*() const {
     constexpr std::int32_t kBitsPerByte = 8;
