@@ -203,7 +203,7 @@ class CompressedIterator {
   CompressedIterator(CompressedByteT const *buffer, bst_idx_t num_symbols)
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
 
-  void Prefetch(std::size_t offset) const {
+  __device__ void Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
@@ -273,7 +273,7 @@ class DoubleCompressedIter {
                        CompressedByteT const *XGBOOST_RESTRICT buf1, bst_idx_t n_symbols)
       : buf0_{buf0}, buf1_{buf1}, n0_{n0_bytes}, symbol_bits_{detail::SymbolBits(n_symbols)} {}
 
-  void Prefetch(std::size_t offset) const {
+  __device__ void Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
