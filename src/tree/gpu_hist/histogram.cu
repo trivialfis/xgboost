@@ -374,7 +374,8 @@ struct MultiHistAgent {
   }
 };
 
-// Kernel for vector-leaf, bare minimum for now.
+// Kernel for vector-leaf with prefetching support using CompressedIterator::Prefetch.
+// Uses prefetching to issue memory reads ahead of time, improving memory throughput.
 template <typename Accessor, bool kCompressed, bool kDense, bool use_shared_memory_histograms,
           std::int32_t kBlockThreads, std::int32_t kItemsPerThread>
 __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
@@ -386,13 +387,13 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   std::int32_t feature_stride = kCompressed ? group.num_features : matrix.row_stride;
   bst_idx_t n_elements = feature_stride * d_ridx.size();
   using Idx = RowPartitioner::RowIndexT;
+  bst_target_t n_targets = roundings.size();
 
   auto write_bin = [&](Idx ridx, auto fidx, auto compressed_bin) {
     if (compressed_bin != matrix.NullValue()) {
       if (kCompressed) {
         compressed_bin += matrix.feature_segments[fidx];
       }
-      bst_target_t n_targets = roundings.size();
       compressed_bin *= n_targets;
       // always false, just to make sure nvcc doesn't optimize it away.
       if (compressed_bin == std::numeric_limits<decltype(compressed_bin)>::max()) {
@@ -405,11 +406,25 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
     }
   };
 
+  std::size_t stride = gridDim.x * blockDim.x;
+
   for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    // Idx ridx = d_ridx[idx / feature_stride];
     Idx ridx = idx / feature_stride;
     auto fidx = FeatIdx(group, idx, feature_stride);
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    bst_idx_t current_iter_idx = IterIdx(matrix, ridx, fidx);
+
+    // Prefetch next iteration's compressed_bin access to improve memory throughput
+    std::size_t next_idx = idx + stride;
+    if (next_idx < n_elements) {
+      Idx next_ridx = next_idx / feature_stride;
+      auto next_fidx = FeatIdx(group, next_idx, feature_stride);
+      bst_idx_t next_iter_idx = IterIdx(matrix, next_ridx, next_fidx);
+      // Prefetch the compressed iterator data for the next iteration
+      matrix.gidx_iter.Prefetch(next_iter_idx);
+    }
+
+    // Read current compressed_bin (data may already be prefetched)
+    bst_bin_t compressed_bin = matrix.gidx_iter[current_iter_idx];
     write_bin(ridx, fidx, compressed_bin);
   }
 }

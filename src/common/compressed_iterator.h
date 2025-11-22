@@ -160,7 +160,7 @@ class CompressedBufferWriter {
   }
 };
 
-inline std::size_t AlignDown(std::size_t value, std::size_t alignment) noexcept {
+XGBOOST_DEVICE inline std::size_t AlignDown(std::size_t value, std::size_t alignment) noexcept {
   return value & ~(alignment - 1);
 }
 
