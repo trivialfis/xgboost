@@ -55,9 +55,9 @@ TEST(GpuMultiHistogram, Large) {
 
   bst_bin_t n_bins = 256;
   bst_target_t n_targets = 1;
-  bst_feature_t n_features = 128;
+  bst_feature_t n_features = 256;
 
-  bst_idx_t n_samples = 1 << 19;
+  bst_idx_t n_samples = 1 << 20;
   auto page = MakeEllpackForTest(&ctx, n_samples, n_features, n_bins);
 
   auto cuts = page->CutsShared();
