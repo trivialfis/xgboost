@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
-
+#include <cuda/pipeline>
 #include "../../collective/aggregator.h"
 #include "../../common/deterministic.cuh"
 #include "../../common/device_helpers.cuh"
@@ -308,6 +308,70 @@ __global__ void __launch_bounds__(kBlockThreads)
   }
 }
 
+template <typename Accessor, bool kCompressed, std::int32_t kBlockThreads>
+struct MultiHistAgent {
+  using RowIndexT = RowPartitioner::RowIndexT;
+  RowIndexT const* d_ridx;
+  RowIndexT* d_ridx_staging;
+  bst_idx_t n_elements;
+  Accessor const& matrix;
+
+  __device__ void BuildHistogram(FeatureGroupsAccessor const& feature_groups) {
+    std::size_t offset = blockIdx.x * kBlockThreads;
+
+    const FeatureGroup group = feature_groups[blockIdx.y];
+    std::int32_t feature_stride = kCompressed ? group.num_features : matrix.row_stride;
+
+    cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+    int stage = 0;
+    RowPartitioner::RowIndexT ridx_idx[2];
+
+    auto calc_idx = [&](std::int32_t stage) {
+      return (offset + stage * kBlockThreads + threadIdx.x) / feature_stride;
+    };
+    auto load_ridx = [&](std::int32_t stage) {
+      cuda::memcpy_async(d_ridx_staging + stage * kBlockThreads + ridx_idx[stage],
+                         d_ridx + ridx_idx[stage], sizeof(RowIndexT), pipe);
+    };
+
+    pipe.producer_acquire();
+    ridx_idx[stage] = (offset + stage * kBlockThreads + threadIdx.x) / feature_stride;
+    load_ridx();
+    pipe.producer_commit();
+
+    stage ^= 1;
+
+    pipe.producer_acquire();
+    ridx_idx[stage] = (offset + stage * kBlockThreads + threadIdx.x) / feature_stride;
+    load_ridx();
+    pipe.producer_commit();
+
+    stage ^= 1;
+
+    while (offset <= n_elements) {
+      cuda::pipeline_consumer_wait_prior<1>(pipe);
+
+      auto ridx = d_ridx_staging[stage * kBlockThreads + ridx_idx[stage]];
+      auto fidx = FeatIdx(group, idx, feature_stride);
+      bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+      // fixme: kDense
+      if (compressed_bin != matrix.NullValue()) {
+        if (kCompressed) {
+          compressed_bin += matrix.feature_segments[fidx];
+        }
+      }
+
+      pipe.consumer_release();
+
+      pipe.producer_acquire();
+      // fixme: correct load
+      ridx_idx[stage] = (offset + stage * kBlockThreads + threadIdx.x) / feature_stride;
+      load_ridx();
+      pipe.producer_commit();
+    }
+  }
+};
+
 // Kernel for vector-leaf, bare minimum for now.
 template <typename Accessor, bool kCompressed, bool kDense, bool use_shared_memory_histograms,
           std::int32_t kBlockThreads, std::int32_t kItemsPerThread>
@@ -320,6 +384,7 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   std::int32_t feature_stride = kCompressed ? group.num_features : matrix.row_stride;
   bst_idx_t n_elements = feature_stride * d_ridx.size();
   using Idx = RowPartitioner::RowIndexT;
+
   for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
     Idx ridx = d_ridx[idx / feature_stride];
     auto fidx = FeatIdx(group, idx, feature_stride);
@@ -333,7 +398,9 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
       // TODO(jiamingy): Assign a thread for each target.
       for (bst_target_t t = 0; t < n_targets; ++t) {
         auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
-        AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
+        if (adjusted.GetQuantisedHess() == -1) {
+          AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
+        }
       }
     }
   }
