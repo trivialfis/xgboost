@@ -165,7 +165,7 @@ XGBOOST_DEVICE inline std::size_t AlignDown(std::size_t value, std::size_t align
 }
 
 #if defined(__CUDACC__)
-#if __CUDA_ARCH__ >= 90
+#if __CUDA_ARCH__ >= 900
 __device__ inline void PrefetchGlobalL2(void const *addr) {
   addr = reinterpret_cast<void const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
   asm volatile("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
