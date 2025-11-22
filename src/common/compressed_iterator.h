@@ -9,7 +9,6 @@
 #include <cmath>      // for ceil, log2
 #include <cstddef>    // for size_t
 #include <cstdint>    // for uint32_t
-
 #include "common.h"
 
 #ifdef __CUDACC__
@@ -160,6 +159,21 @@ class CompressedBufferWriter {
     }
   }
 };
+
+inline std::size_t AlignDown(std::size_t value, std::size_t alignment) noexcept {
+  return value & ~(alignment - 1);
+}
+
+#if defined(__CUDACC__)
+__device__ inline void PrefetchGlobalL2(void const *addr) {
+#if __CUDA_ARCH__ >= 90
+  addr = reinterpret_cast<void const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
+  asm("cp.async.bulk.prefetch.L2.global [%0], 16;" ::"l"(addr));
+#else
+  asm("trap;");
+#endif
+}
+#endif  // defined(__CUDACC__)
 
 /**
  * \brief Read symbols from a bit compressed memory buffer. Usable on device and host.

@@ -369,7 +369,7 @@ struct MultiHistAgent {
       load_ridx();
       pipe.producer_commit();
 
-      offset += gridDim.x; * kBlockThreads;
+      offset += gridDim.x * kBlockThreads;
     }
   }
 };
@@ -387,11 +387,7 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   bst_idx_t n_elements = feature_stride * d_ridx.size();
   using Idx = RowPartitioner::RowIndexT;
 
-  for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    // Idx ridx = d_ridx[idx / feature_stride];
-    Idx ridx = idx / feature_stride;
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+  auto write_bin = [&](Idx ridx, auto fidx, auto compressed_bin) {
     if (compressed_bin != matrix.NullValue()) {
       if (kCompressed) {
         compressed_bin += matrix.feature_segments[fidx];
@@ -403,17 +399,23 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
         // TODO(jiamingy): Assign a thread for each target.
         for (bst_target_t t = 0; t < n_targets; ++t) {
           auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
-          if (adjusted.GetQuantisedHess() == -1) {
-            AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
-          }
+          AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
         }
       }
     }
+  };
+
+  for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
+    // Idx ridx = d_ridx[idx / feature_stride];
+    Idx ridx = idx / feature_stride;
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    write_bin(ridx, fidx, compressed_bin);
   }
 }
 
 namespace {
-constexpr std::int32_t kBlockThreads = 1024;
+constexpr std::int32_t kBlockThreads = 512;
 constexpr std::int32_t kItemsPerThread = 8;
 constexpr std::int32_t ItemsPerTile() { return kBlockThreads * kItemsPerThread; }
 template <auto Ker>
