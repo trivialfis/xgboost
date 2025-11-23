@@ -130,6 +130,36 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+// 385.23GB/s
+template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
+__global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
+                                    common::Span<std::uint32_t const> d_ridx) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  constexpr auto kItemsPerTile = kItemsPerThread * kBlockThreads;
+
+  bst_bin_t gidx[kItemsPerThread];
+
+  auto load = [&](std::size_t offset) {
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto idx = offset + i * kBlockThreads + threadIdx.x;
+      gidx[i] = matrix.gidx_iter[idx];
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto compressed_bin = gidx[i];
+      if (compressed_bin == -1) {
+        printf("-1\n");
+      }
+    }
+  };
+
+  std::size_t offset = blockIdx.x * kItemsPerTile;
+  while (offset + kItemsPerTile < n_elements) {
+    load(offset);
+    offset += kItemsPerTile * gridDim.x;
+  }
+}
+
 // 537MB, 30.18TP
 __global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
                                            common::Span<GradientPairInt64> d_node_hist,
@@ -233,15 +263,24 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
+  // {
+  //   constexpr std::int32_t kItemsPerThread = 8;
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
+  //   auto kernel = ReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+  //   std::cout << "n_grids:" << n_grids << std::endl;
+  //   kernel<<<n_grids, kBlockThreads>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+  //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  // }
   {
     constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
-    auto kernel = ReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+    auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
     std::cout << "n_grids:" << n_grids << std::endl;
     kernel<<<n_grids, kBlockThreads>>>(
-        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
-        dh::ToSpan(ridx), dh::ToSpan(quantizers));
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
   debug::SyncDevice();
 
