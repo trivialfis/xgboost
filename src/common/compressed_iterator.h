@@ -174,8 +174,7 @@ __device__ inline void PrefetchGlobalL2(void const *addr) {
 template <typename T>
 __device__ inline void PrefetchGlobalL2(T const *addr) {
   addr = reinterpret_cast<T const *>(AlignDown(reinterpret_cast<ptrdiff_t>(addr), 16));
-  __ldg(addr);
-  // asm volatile("prefetch.global.L2 [%0];" : : "l"(addr));
+  asm volatile("prefetch.global.L2 [%0];" : : "l"(addr));
 }
 #endif
 #endif  // defined(__CUDACC__)

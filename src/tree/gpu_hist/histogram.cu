@@ -406,27 +406,57 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
     }
   };
 
-  std::size_t stride = gridDim.x * blockDim.x;
+  std::size_t stride = gridDim.x * kItemsPerThread;
+  std::size_t offset = blockIdx.x * kItemsPerThread;
 
-  for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    Idx ridx = idx / feature_stride;
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    bst_idx_t current_iter_idx = IterIdx(matrix, ridx, fidx);
+  bst_idx_t idxs[kItemsPerThread];
+  cuda_impl::RowIndexT ridxs[kItemsPerThread];
+  bst_bin_t gidxs[kItemsPerThread];
 
-    // Prefetch next iteration's compressed_bin access to improve memory throughput
-    std::size_t next_idx = idx + stride;
-    if (next_idx < n_elements) {
-      Idx next_ridx = next_idx / feature_stride;
-      auto next_fidx = FeatIdx(group, next_idx, feature_stride);
-      bst_idx_t next_iter_idx = IterIdx(matrix, next_ridx, next_fidx);
-      // Prefetch the compressed iterator data for the next iteration
-      matrix.gidx_iter.Prefetch(next_iter_idx);
+  auto get_idx = [](bst_idx_t offset, auto i) {
+    return offset + i * kBlockThreads + threadIdx.x;
+  };
+
+  while (offset < n_elements) {
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; ++i) {
+      auto idx = get_idx(offset, i);
+      ridxs[i] = idx / feature_stride;
+      auto fidx = FeatIdx(group, idx, feature_stride);
+      idxs[i] = IterIdx(matrix, ridxs[i], fidx);
     }
-
-    // Read current compressed_bin (data may already be prefetched)
-    bst_bin_t compressed_bin = matrix.gidx_iter[current_iter_idx];
-    write_bin(ridx, fidx, compressed_bin);
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; ++i) {
+      gidxs[i] = matrix.gidx_iter[idxs[i]];
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; ++i) {
+      auto idx = get_idx(offset, i);
+      auto fidx = FeatIdx(group, idx, feature_stride);
+      write_bin(ridxs[i], fidx, gidxs[i]);
+    }
+    offset += stride;
   }
+
+  // for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
+  //   Idx ridx = idx / feature_stride;
+  //   auto fidx = FeatIdx(group, idx, feature_stride);
+  //   bst_idx_t current_iter_idx = IterIdx(matrix, ridx, fidx);
+
+  //   // Prefetch next iteration's compressed_bin access to improve memory throughput
+  //   std::size_t next_idx = idx + stride;
+  //   if (next_idx < n_elements) {
+  //     Idx next_ridx = next_idx / feature_stride;
+  //     auto next_fidx = FeatIdx(group, next_idx, feature_stride);
+  //     bst_idx_t next_iter_idx = IterIdx(matrix, next_ridx, next_fidx);
+  //     // Prefetch the compressed iterator data for the next iteration
+  //     matrix.gidx_iter.Prefetch(next_iter_idx);
+  //   }
+
+  //   // Read current compressed_bin (data may already be prefetched)
+  //   bst_bin_t compressed_bin = matrix.gidx_iter[current_iter_idx];
+  //   write_bin(ridx, fidx, compressed_bin);
+  // }
 }
 
 namespace {
