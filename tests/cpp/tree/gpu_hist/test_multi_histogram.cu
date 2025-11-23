@@ -151,6 +151,7 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   bst_bin_t gidx[kItemsPerThread];
 
   auto load = [&](std::size_t offset) {
+#pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       auto idx = offset + i * kBlockThreads + threadIdx.x;
       gidx[i] = matrix.gidx_iter[idx];
@@ -184,6 +185,7 @@ __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
   auto node_hist = reinterpret_cast<GradientPairInt64*>(shmem);
 
   auto load = [&](std::size_t offset) {
+#pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       auto idx = offset + i * kBlockThreads + threadIdx.x;
       gidx[i] = matrix.gidx_iter[idx];
