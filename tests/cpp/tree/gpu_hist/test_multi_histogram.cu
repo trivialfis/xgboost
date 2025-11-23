@@ -131,6 +131,16 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
+                                             xgboost::GradientPairInt64 const& gpair) {
+  auto dst_ptr = reinterpret_cast<int64_t*>(dest);
+  auto g = gpair.GetQuantisedGrad();
+  auto h = gpair.GetQuantisedHess();
+
+  AtomicAdd64As32(dst_ptr, g);
+  AtomicAdd64As32(dst_ptr + 1, h);
+}
+
 // 385.23GB/s, but occupancy is 100%
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
@@ -151,6 +161,35 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
       if (compressed_bin == -1) {
         printf("-1\n");
       }
+    }
+  };
+
+  std::size_t offset = blockIdx.x * kItemsPerTile;
+  while (offset + kItemsPerTile < n_elements) {
+    load(offset);
+    offset += kItemsPerTile * gridDim.x;
+  }
+}
+
+template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
+__global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
+                                          common::Span<std::uint32_t const> d_ridx) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  constexpr auto kItemsPerTile = kItemsPerThread * kBlockThreads;
+
+  bst_bin_t gidx[kItemsPerThread];
+
+  extern __shared__ GradientPairInt64 node_hist[];
+
+  auto load = [&](std::size_t offset) {
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto idx = offset + i * kBlockThreads + threadIdx.x;
+      gidx[i] = matrix.gidx_iter[idx];
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto compressed_bin = gidx[i];
+      AtomicAddGpairShared(node_hist + compressed_bin, GradientPairInt64{gidx[i], i});
     }
   };
 
@@ -274,13 +313,23 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
+  // {
+  //   constexpr std::int32_t kItemsPerThread = 8;
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
+  //   auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+  //   std::cout << "n_grids:" << n_grids << std::endl;
+  //   auto n_bytes = sizeof(GradientPairInt64) * 256;
+  //   kernel<<<n_grids, kBlockThreads, n_bytes>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  // }
   {
     constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
-    auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
-    std::cout << "n_grids:" << n_grids << std::endl;
-    kernel<<<n_grids, kBlockThreads>>>(
+    auto kernel = ReadSharedAddUnrollKernel<kItemsPerThread, kBlockThreads>;
+    auto n_bytes = sizeof(GradientPairInt64) * n_bins;
+    kernel<<<n_grids, kBlockThreads, n_bytes>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
   debug::SyncDevice();
