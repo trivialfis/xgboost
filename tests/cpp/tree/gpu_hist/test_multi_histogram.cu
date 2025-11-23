@@ -171,7 +171,7 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// 37.89GB/s
+// 37.89GB/s 100 occupancy
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
                                           common::Span<std::uint32_t const> d_ridx) {
@@ -180,7 +180,8 @@ __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
 
   bst_bin_t gidx[kItemsPerThread];
 
-  extern __shared__ GradientPairInt64 node_hist[];
+  extern __align__(16) __shared__ char shmem[];
+  auto node_hist = reinterpret_cast<GradientPairInt64*>(shmem);
 
   auto load = [&](std::size_t offset) {
     for (int i = 0; i < kItemsPerThread; i++) {
