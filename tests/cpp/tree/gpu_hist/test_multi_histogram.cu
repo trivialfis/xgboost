@@ -87,6 +87,50 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
     printf("-1\n");
   }
 }
+
+// 4-IPT, 152GB/s, same ballpart with 8-IPT
+template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
+__global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
+                                 common::Span<GradientPairInt64> d_node_hist,
+                                 common::Span<std::uint32_t const> d_ridx,
+                                 common::Span<GradientQuantiser const> roundings) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  constexpr auto kItemsPerTile = kItemsPerThread * kBlockThreads;
+
+  auto load = [&](std::size_t offset) {
+    std::size_t idx[kItemsPerThread];
+    std::uint32_t ridx[kItemsPerThread];
+    bst_bin_t gidx[kItemsPerThread];
+
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      idx[i] = offset + i * kBlockThreads + threadIdx.x;
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      ridx[i] = idx[i] / matrix.row_stride;
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto fidx = FeatIdx(idx[i], matrix.row_stride);
+      gidx[i] = matrix.gidx_iter[IterIdx(matrix, ridx[i], fidx)];
+    }
+#pragma unroll
+    for (int i = 0; i < kItemsPerThread; i++) {
+      auto compressed_bin = gidx[i];
+      if (compressed_bin == -1) {
+        printf("-1\n");
+      }
+    }
+  };
+
+  std::size_t offset = blockIdx.x * kItemsPerTile;
+  while (offset + kItemsPerTile < n_elements) {
+    load(offset);
+    offset += kItemsPerTile * gridDim.x;
+  }
+}
+
 // 537MB, 30.18TP
 __global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
                                            common::Span<GradientPairInt64> d_node_hist,
@@ -182,11 +226,21 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
-  {
-    auto n = page->Size() * page->info.row_stride;
-    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+  // {
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
 
-    TestGlobalAtomicKernel<<<n_grids, kBlockThreads>>>(
+  //   TestGlobalAtomicKernel<<<n_grids, kBlockThreads>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+  //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  // }
+  {
+    constexpr std::int32_t kItemsPerThread = 8;
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
+    auto kernel = ReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+    std::cout << "n_grids:" << n_grids << std::endl;
+    kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
         dh::ToSpan(ridx), dh::ToSpan(quantizers));
   }
