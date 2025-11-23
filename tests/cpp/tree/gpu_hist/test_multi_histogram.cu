@@ -57,17 +57,21 @@ TEST(GpuMultiHistogram, Large) {
   bst_target_t n_targets = 1;
   bst_feature_t n_features = 256;
 
-  bst_idx_t n_samples = 1 << 19;
+  bool use_single_target = false;
+
+  bst_idx_t n_samples = 1 << 21;
   auto page = MakeEllpackForTest(&ctx, n_samples, n_features, n_bins);
 
   auto cuts = page->CutsShared();
 
-  FeatureGroups fg{*cuts, true, std::numeric_limits<std::size_t>::max()};
+  FeatureGroups fg{
+      *cuts, true,
+      use_single_target ? dh::MaxSharedMemoryOptin(0) : std::numeric_limits<std::size_t>::max()};
   auto fg_acc = fg.DeviceAccessor(ctx.Device());
 
   DeviceHistogramBuilder histogram;
   bst_bin_t n_total_bins = n_targets * n_features * n_bins;
-  histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, true);
+  histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, !use_single_target);
 
   auto gpairs = linalg::Constant(&ctx, GradientPair{1.0f, 1.0f}, n_samples, n_targets);
   dh::device_vector<std::uint32_t> ridx(n_samples);
@@ -75,10 +79,16 @@ TEST(GpuMultiHistogram, Large) {
 
   histogram.AllocateHistograms(&ctx, {0});
   auto node_hist = histogram.GetNodeHistogram(0);
-  auto quantizers = MakeDummyQuantizers(n_targets);
 
-  histogram.BuildHistogram(ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), fg_acc,
-                           gpairs.View(ctx.Device()), dh::ToSpan(ridx), node_hist,
-                           dh::ToSpan(quantizers));
+  if (use_single_target) {
+    GradientQuantiser q{GradientPairPrecise{1.0f, 1.0f}, GradientPairPrecise{1.0f, 1.0f}};
+    histogram.BuildHistogram(ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), fg_acc,
+                             gpairs.View(ctx.Device()).Values(), dh::ToSpan(ridx), node_hist, q);
+  } else {
+    auto quantizers = MakeDummyQuantizers(n_targets);
+    histogram.BuildHistogram(ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), fg_acc,
+                             gpairs.View(ctx.Device()), dh::ToSpan(ridx), node_hist,
+                             dh::ToSpan(quantizers));
+  }
 }
 }  // namespace xgboost::tree::cuda_impl

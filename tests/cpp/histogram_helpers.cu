@@ -79,6 +79,7 @@ namespace xgboost {
       ctx, adapter.Value(), missing, true, dh::ToSpan(row_counts),
       common::Span<FeatureType const>{}, row_stride, n_samples, p_cuts);
 
+  LOG(INFO) << "Ellpack size:" << common::HumanMemUnit(ellpack->MemCostBytes()) << std::endl;
   return ellpack;
 }
 }  // namespace xgboost
