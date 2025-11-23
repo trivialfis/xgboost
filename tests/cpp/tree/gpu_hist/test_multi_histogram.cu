@@ -65,7 +65,8 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, s
   // We can pre-calculate the multiplication if necessary.
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
-// 537MB, 122.07TP
+
+// 537MB, 122.07GB/s
 __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
                                     common::Span<GradientPairInt64> d_node_hist,
                                     common::Span<std::uint32_t> d_ridx,
@@ -130,7 +131,7 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// 385.23GB/s
+// 385.23GB/s, but occupancy is 100%
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
                                     common::Span<std::uint32_t const> d_ridx) {
@@ -160,7 +161,7 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// 537MB, 30.18TP
+// 537MB, 30.18GB/s
 __global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
                                            common::Span<GradientPairInt64> d_node_hist,
                                            common::Span<std::uint32_t> d_ridx,
@@ -276,7 +277,7 @@ TEST(GpuMultiHistogram, Large) {
   {
     constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
-    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
     auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
     std::cout << "n_grids:" << n_grids << std::endl;
     kernel<<<n_grids, kBlockThreads>>>(
