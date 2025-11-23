@@ -89,6 +89,9 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
 }
 
 // 4-IPT, 152GB/s, same ballpart with 8-IPT
+//
+// Without the gidx_iter read, this kernel has about 242GB/s throughput, most of the
+// overhead comes from the integer multiplication inside IterIdx.
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
                                  common::Span<GradientPairInt64> d_node_hist,
