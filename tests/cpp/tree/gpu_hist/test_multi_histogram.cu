@@ -171,6 +171,7 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+// 37.89GB/s
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
                                           common::Span<std::uint32_t const> d_ridx) {
