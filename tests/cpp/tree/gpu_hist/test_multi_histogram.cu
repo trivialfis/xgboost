@@ -97,11 +97,11 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
   constexpr auto kItemsPerTile = kItemsPerThread * kBlockThreads;
 
-  auto load = [&](std::size_t offset) {
-    std::size_t idx[kItemsPerThread];
-    std::uint32_t ridx[kItemsPerThread];
-    bst_bin_t gidx[kItemsPerThread];
+  std::size_t idx[kItemsPerThread];
+  std::uint32_t ridx[kItemsPerThread];
+  bst_bin_t gidx[kItemsPerThread];
 
+  auto load = [&](std::size_t offset) {
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
       idx[i] = offset + i * kBlockThreads + threadIdx.x;
