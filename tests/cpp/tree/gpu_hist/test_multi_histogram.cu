@@ -62,11 +62,7 @@ XGBOOST_DEV_INLINE bst_feature_t FeatIdx(bst_idx_t idx, std::int32_t feature_str
 template <typename IterT>
 XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, std::uint32_t ridx,
                                      bst_feature_t fidx) {
-  // ridx_local = ridx - base_rowid  <== Row index local to each batch
-  // entry_idx = ridx_local * row_stride <== Starting entry index for this row in the matrix
-  // entry_idx += start_feature  <== Inside a row, first column inside this feature group
-  // idx % feature_stride <== The feaature index local to the current feature group
-  // entry_idx += idx % feature_stride <== Final index.
+  // We can pre-calculate the multiplication if necessary.
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
 // 537MB, 122.07TP
