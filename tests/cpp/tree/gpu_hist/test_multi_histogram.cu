@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <thrust/sequence.h>
 
+#include <cuda/functional>
+
 #include "../../../../src/common/device_debug.cuh"
 #include "../../../../src/tree/gpu_hist/histogram.cuh"
 #include "../../helpers.h"
@@ -73,14 +75,16 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
                                     common::Span<std::uint32_t> d_ridx,
                                     common::Span<GradientQuantiser const> roundings) {
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
-  for (auto i : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    std::uint32_t ridx = i / matrix.row_stride;
-    auto fidx = FeatIdx(i, matrix.row_stride);
-    auto idx = IterIdx(matrix, ridx, fidx);
-    bst_bin_t compressed_bin = matrix.gidx_iter[idx];
-    if (compressed_bin == -1) {
-      printf("-1\n");
-    }
+  auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_elements) {
+    return;
+  }
+  std::uint32_t ridx = tid / matrix.row_stride;
+  auto fidx = FeatIdx(tid, matrix.row_stride);
+  auto idx = IterIdx(matrix, ridx, fidx);
+  bst_bin_t compressed_bin = matrix.gidx_iter[idx];
+  if (compressed_bin == -1) {
+    printf("-1\n");
   }
 }
 }  // namespace
