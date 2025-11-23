@@ -67,8 +67,18 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, s
   // entry_idx += start_feature  <== Inside a row, first column inside this feature group
   // idx % feature_stride <== The feaature index local to the current feature group
   // entry_idx += idx % feature_stride <== Final index.
-  return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
+  return ridx * matrix.row_stride + fidx;
 }
+
+XGBOOST_DEV_INLINE bst_idx_t IterIdxR(bst_idx_t row_stride, std::uint32_t ridx, bst_feature_t fidx) {
+  // ridx_local = ridx - base_rowid  <== Row index local to each batch
+  // entry_idx = ridx_local * row_stride <== Starting entry index for this row in the matrix
+  // entry_idx += start_feature  <== Inside a row, first column inside this feature group
+  // idx % feature_stride <== The feaature index local to the current feature group
+  // entry_idx += idx % feature_stride <== Final index.
+  return ridx * row_stride + fidx;
+}
+
 // 537MB, 122.07TP
 __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
                                     common::Span<GradientPairInt64> d_node_hist,
@@ -99,7 +109,8 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
 
   std::size_t idx[kItemsPerThread];
   std::uint32_t ridx[kItemsPerThread];
-  bst_bin_t gidx[kItemsPerThread];
+  bst_idx_t gidx[kItemsPerThread];
+  bst_idx_t const row_stride = matrix.row_stride;
 
   auto load = [&](std::size_t offset) {
 #pragma unroll
@@ -112,8 +123,8 @@ __global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
     }
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
-      auto fidx = FeatIdx(idx[i], matrix.row_stride);
-      gidx[i] = matrix.gidx_iter[IterIdx(matrix, ridx[i], fidx)];
+      auto fidx = FeatIdx(idx[i], row_stride);
+      gidx[i] = IterIdxR(row_stride, ridx[i], fidx);
     }
 #pragma unroll
     for (int i = 0; i < kItemsPerThread; i++) {
