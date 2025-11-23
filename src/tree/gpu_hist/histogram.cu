@@ -413,16 +413,6 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
     auto fidx = FeatIdx(group, idx, feature_stride);
     bst_idx_t current_iter_idx = IterIdx(matrix, ridx, fidx);
 
-    // Prefetch next iteration's compressed_bin access to improve memory throughput
-    std::size_t next_idx = idx + stride;
-    if (next_idx < n_elements) {
-      Idx next_ridx = next_idx / feature_stride;
-      auto next_fidx = FeatIdx(group, next_idx, feature_stride);
-      bst_idx_t next_iter_idx = IterIdx(matrix, next_ridx, next_fidx);
-      // Prefetch the compressed iterator data for the next iteration
-      matrix.gidx_iter.Prefetch(next_iter_idx);
-    }
-
     // Read current compressed_bin (data may already be prefetched)
     bst_bin_t compressed_bin = matrix.gidx_iter[current_iter_idx];
     write_bin(ridx, fidx, compressed_bin);
