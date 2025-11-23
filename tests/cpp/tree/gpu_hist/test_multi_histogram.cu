@@ -85,6 +85,19 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+// 186.93GB/s
+__global__ void RawReadKernel(EllpackDeviceAccessor matrix, common::Span<std::uint32_t> d_ridx) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_elements) {
+    return;
+  }
+  bst_bin_t compressed_bin = matrix.gidx_iter[tid];
+  if (compressed_bin == -1) {
+    printf("-1\n");
+  }
+}
+
 // 4-IPT, 152GB/s, same ballpart with 8-IPT
 //
 // Without the gidx_iter read, this kernel has about 242GB/s throughput, most of the
@@ -292,6 +305,13 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
+  {
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+
+    RawReadKernel<<<n_grids, kBlockThreads>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  }
   // {
   //   auto n = page->Size();
   //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
@@ -327,15 +347,15 @@ TEST(GpuMultiHistogram, Large) {
   //   kernel<<<n_grids, kBlockThreads, n_bytes>>>(
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   // }
-  {
-    constexpr std::int32_t kItemsPerThread = 8;
-    auto n = page->Size() * page->info.row_stride;
-    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
-    auto kernel = ReadSharedAddUnrollKernel<kItemsPerThread, kBlockThreads>;
-    auto n_bytes = sizeof(GradientPairInt64) * n_bins;
-    kernel<<<n_grids, kBlockThreads, n_bytes>>>(
-        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
-  }
+  // {
+  //   constexpr std::int32_t kItemsPerThread = 8;
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
+  //   auto kernel = ReadSharedAddUnrollKernel<kItemsPerThread, kBlockThreads>;
+  //   auto n_bytes = sizeof(GradientPairInt64) * n_bins;
+  //   kernel<<<n_grids, kBlockThreads, n_bytes>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  // }
   debug::SyncDevice();
 
   // if (use_single_target) {
