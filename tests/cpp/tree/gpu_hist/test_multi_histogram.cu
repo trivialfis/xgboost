@@ -69,7 +69,7 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, s
   // entry_idx += idx % feature_stride <== Final index.
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
-
+// 537MB, 122.07TP
 __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
                                     common::Span<GradientPairInt64> d_node_hist,
                                     common::Span<std::uint32_t> d_ridx,
@@ -85,6 +85,25 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
   bst_bin_t compressed_bin = matrix.gidx_iter[idx];
   if (compressed_bin == -1) {
     printf("-1\n");
+  }
+}
+// 537MB, 30.18TP
+__global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
+                                           common::Span<GradientPairInt64> d_node_hist,
+                                           common::Span<std::uint32_t> d_ridx,
+                                           common::Span<GradientQuantiser const> roundings) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= d_ridx.size()) {
+    return;
+  }
+  // std::uint32_t ridx = tid / matrix.row_stride;
+  for (auto fidx = 0; fidx < matrix.row_stride; ++fidx) {
+    auto idx = IterIdx(matrix, tid, fidx);
+    bst_bin_t compressed_bin = matrix.gidx_iter[idx];
+    if (compressed_bin == -1) {
+      printf("-1\n");
+    }
   }
 }
 }  // namespace
@@ -121,12 +140,21 @@ TEST(GpuMultiHistogram, Large) {
 
   auto quantizers = MakeDummyQuantizers(n_targets);
   constexpr std::uint32_t kBlockThreads = 512;
-  auto n = page->Size() * page->info.row_stride;
-  auto n_grids = common::DivRoundUp(n, kBlockThreads);
+  // {
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
 
-  TestHistBuildKernel<<<n_grids, kBlockThreads>>>(
-      std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
-      dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  //   TestHistBuildKernel<<<n_grids, kBlockThreads>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+  //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  // }
+  {
+    auto n = page->Size();
+    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+    TestHistBuildKernelRowWise<<<n_grids, kBlockThreads>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+        dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  }
   debug::SyncDevice();
 
   // if (use_single_target) {
