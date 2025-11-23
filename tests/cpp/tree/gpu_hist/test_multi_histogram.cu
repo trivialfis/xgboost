@@ -106,6 +106,33 @@ __global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
     }
   }
 }
+
+XGBOOST_DEV_INLINE void AtomicAddGpairGlobal(xgboost::GradientPairInt64* dest,
+                                             xgboost::GradientPairInt64 const& gpair) {
+  auto dst_ptr = reinterpret_cast<uint64_t*>(dest);
+  auto g = gpair.GetQuantisedGrad();
+  auto h = gpair.GetQuantisedHess();
+
+  atomicAdd(dst_ptr, *reinterpret_cast<uint64_t*>(&g));
+  atomicAdd(dst_ptr + 1, *reinterpret_cast<uint64_t*>(&h));
+}
+
+// Ellpack size / kernel duration: 35.58GB/s
+__global__ void TestGlobalAtomicKernel(EllpackDeviceAccessor matrix,
+                                       common::Span<GradientPairInt64> d_node_hist,
+                                       common::Span<std::uint32_t> d_ridx,
+                                       common::Span<GradientQuantiser const> roundings) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_elements) {
+    return;
+  }
+  std::uint32_t ridx = tid / matrix.row_stride;
+  auto fidx = FeatIdx(tid, matrix.row_stride);
+  auto idx = IterIdx(matrix, ridx, fidx);
+  auto g = GradientPairInt64{ridx, fidx};  // simulate
+  AtomicAddGpairGlobal(d_node_hist.data() + idx % d_node_hist.size(), g);
+}
 }  // namespace
 
 TEST(GpuMultiHistogram, Large) {
@@ -148,10 +175,18 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
+  // {
+  //   auto n = page->Size();
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
+  //   TestHistBuildKernelRowWise<<<n_grids, kBlockThreads>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+  //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  // }
   {
-    auto n = page->Size();
+    auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads);
-    TestHistBuildKernelRowWise<<<n_grids, kBlockThreads>>>(
+
+    TestGlobalAtomicKernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
         dh::ToSpan(ridx), dh::ToSpan(quantizers));
   }
