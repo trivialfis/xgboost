@@ -263,6 +263,26 @@ __global__ void TestGlobalAtomicKernel(EllpackDeviceAccessor matrix,
   auto g = GradientPairInt64{ridx, fidx};  // simulate
   AtomicAddGpairGlobal(d_node_hist.data() + idx % d_node_hist.size(), g);
 }
+
+// 181GB/s
+__global__ void TestSharedAtomicKernel(EllpackDeviceAccessor matrix,
+                                       common::Span<GradientPairInt64> d_node_hist,
+                                       common::Span<std::uint32_t> d_ridx,
+                                       common::Span<GradientQuantiser const> roundings) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+  auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_elements) {
+    return;
+  }
+
+  extern __align__(16) __shared__ char shmem[];
+  auto node_hist = reinterpret_cast<GradientPairInt64*>(shmem);
+
+  std::uint32_t ridx = tid / matrix.row_stride;
+  auto fidx = FeatIdx(tid, matrix.row_stride);
+  auto g = GradientPairInt64{ridx, fidx};  // simulate
+  AtomicAddGpairShared(node_hist + tid % 256, g);
+}
 }  // namespace
 
 TEST(GpuMultiHistogram, Large) {
@@ -305,13 +325,13 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
-  {
-    auto n = page->Size() * page->info.row_stride;
-    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+  // {
+  //   auto n = page->Size() * page->info.row_stride;
+  //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
 
-    RawReadKernel<<<n_grids, kBlockThreads>>>(
-        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
-  }
+  //   RawReadKernel<<<n_grids, kBlockThreads>>>(
+  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  // }
   // {
   //   auto n = page->Size();
   //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
@@ -327,6 +347,15 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
+  {
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+    auto n_bytes = sizeof(GradientPairInt64) * 256;
+
+    TestSharedAtomicKernel<<<n_grids, kBlockThreads, n_bytes>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+        dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  }
   // {
   //   constexpr std::int32_t kItemsPerThread = 8;
   //   auto n = page->Size() * page->info.row_stride;
@@ -357,6 +386,7 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   // }
   debug::SyncDevice();
+
 
   // if (use_single_target) {
   //   GradientQuantiser q{GradientPairPrecise{1.0f, 1.0f}, GradientPairPrecise{1.0f, 1.0f}};
