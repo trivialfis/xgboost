@@ -66,7 +66,7 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix, s
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
 
-// 537MB, 122.07GB/s
+// rtx4070tis, 537MB, 122.07GB/s
 __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
                                     common::Span<GradientPairInt64> d_node_hist,
                                     common::Span<std::uint32_t> d_ridx,
@@ -85,7 +85,7 @@ __global__ void TestHistBuildKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// 186.93GB/s
+// rtx4070tis 186.93GB/s
 __global__ void RawReadKernel(EllpackDeviceAccessor matrix, common::Span<std::uint32_t> d_ridx) {
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
   auto tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -98,7 +98,7 @@ __global__ void RawReadKernel(EllpackDeviceAccessor matrix, common::Span<std::ui
   }
 }
 
-// 4-IPT, 152GB/s, same ballpart with 8-IPT
+// rtx4070tis 4-IPT, 152GB/s, same ballpart with 8-IPT
 //
 // Without the gidx_iter read, this kernel has about 242GB/s throughput, most of the
 // overhead comes from the integer multiplication inside IterIdx.
@@ -154,7 +154,7 @@ XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
   AtomicAdd64As32(dst_ptr + 1, h);
 }
 
-// 385.23GB/s, but occupancy is 100%
+// rtx4070tis 385.23GB/s, but occupancy is 100%
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
                                     common::Span<std::uint32_t const> d_ridx) {
@@ -226,7 +226,7 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
   }
 }
 
-// 37.89GB/s 100 occupancy
+// rtx4070tis 37.89GB/s 100 occupancy
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
                                           common::Span<std::uint32_t const> d_ridx) {
@@ -258,7 +258,7 @@ __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// 537MB, 30.18GB/s
+// rtx4070tis 537MB, 30.18GB/s
 __global__ void TestHistBuildKernelRowWise(EllpackDeviceAccessor matrix,
                                            common::Span<GradientPairInt64> d_node_hist,
                                            common::Span<std::uint32_t> d_ridx,
@@ -288,7 +288,7 @@ XGBOOST_DEV_INLINE void AtomicAddGpairGlobal(xgboost::GradientPairInt64* dest,
   atomicAdd(dst_ptr + 1, *reinterpret_cast<uint64_t*>(&h));
 }
 
-// Ellpack size / kernel duration: 35.58GB/s
+// rtx4070tis Ellpack size / kernel duration: 35.58GB/s
 __global__ void TestGlobalAtomicKernel(EllpackDeviceAccessor matrix,
                                        common::Span<GradientPairInt64> d_node_hist,
                                        common::Span<std::uint32_t> d_ridx,
@@ -305,7 +305,7 @@ __global__ void TestGlobalAtomicKernel(EllpackDeviceAccessor matrix,
   AtomicAddGpairGlobal(d_node_hist.data() + idx % d_node_hist.size(), g);
 }
 
-// 181GB/s
+// rtx4070tis 181GB/s
 __global__ void TestSharedAtomicKernel(EllpackDeviceAccessor matrix,
                                        common::Span<GradientPairInt64> d_node_hist,
                                        common::Span<std::uint32_t> d_ridx,
