@@ -204,12 +204,13 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
     auto idx = offset + threadIdx.x;
     return matrix.gidx_iter[idx];
   };
+#pragma unroll kItemsPerThread
   for (std::int32_t k = 0; k < kItemsPerThread; ++k) {
     prefetch(offset, k);
   }
 
   while (offset + kBlockThreads < n_elements) {
-    prefetch(offset, 1);
+    prefetch(offset, kItemsPerThread);
     auto compressed_bin = load(offset);
     if (compressed_bin == -1) {
       printf("-1\n");
