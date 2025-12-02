@@ -185,6 +185,7 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+// ncu --set full --kernel-name PrefetchReadKernel --launch-skip 0 --launch-count 1 -o pf-tis-%i ./testxgboost --gtest_filter="MicroBenchHist.PrefetchRead"
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
     EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
