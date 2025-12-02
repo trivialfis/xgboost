@@ -190,32 +190,39 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
     EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
 
-  std::size_t offset = blockIdx.x * kBlockThreads;
-  auto stride = kBlockThreads * gridDim.x;
+  constexpr std::int32_t kPrefetch = 4;
+
+  constexpr auto kItemsPerTile = kBlockThreads;
+  std::size_t offset = blockIdx.x * kItemsPerTile;
+  auto stride = kItemsPerTile * gridDim.x;
+
+  // bst_idx_t indices[kItemsPerThread];
 
   auto prefetch = [&](std::size_t offset, std::int32_t k) {
-    auto idx = offset + (k * stride) + threadIdx.x;
+    auto idx = offset + (k * stride) + (kItemsPerThread * stride) + threadIdx.x;
     if (idx < n_elements) {
       matrix.gidx_iter.Prefetch(idx);
     }
   };
-  auto load = [&](std::size_t offset) {
-    // i = 0
-    auto idx = offset + threadIdx.x;
-    return matrix.gidx_iter[idx];
-  };
-#pragma unroll kItemsPerThread
-  for (std::int32_t k = 0; k < kItemsPerThread; ++k) {
-    prefetch(offset, k);
-  }
-
-  while (offset + kBlockThreads < n_elements) {
-    prefetch(offset, kItemsPerThread);
-    auto compressed_bin = load(offset);
-    if (compressed_bin == -1) {
-      printf("-1\n");
+  auto load = [&](std::size_t offset, std::int32_t k) {
+    auto idx = offset + (k * stride) + threadIdx.x;
+    if (idx < n_elements) {
+      return matrix.gidx_iter[idx];
     }
-    offset += stride;
+    return 0u;
+  };
+
+  while (offset + kItemsPerTile < n_elements) {
+#pragma unroll kItemsPerThread
+    for (std::int32_t k = 0; k < kItemsPerThread; ++k) {
+      prefetch(offset, k);
+      auto compressed_bin = load(offset, k);
+      if (compressed_bin == -1) {
+        printf("-1\n");
+      }
+    }
+
+    offset += stride * kItemsPerThread;
   }
 }
 
@@ -396,7 +403,7 @@ class MicroBenchHist : public ::testing::Test {
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
   void BenchPrefetchRead() {
-    constexpr std::int32_t kItemsPerThread = 8;
+    constexpr std::int32_t kItemsPerThread = 4;
     auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
     std::cout << "n_grids:" << n_grids << " n:" << n << std::endl;
