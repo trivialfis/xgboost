@@ -283,6 +283,85 @@ __global__ void TestSharedAtomicKernel(EllpackDeviceAccessor matrix,
   auto g = GradientPairInt64{ridx, fidx};  // simulate
   AtomicAddGpairShared(node_hist + tid % 256, g);
 }
+
+class MicroBenchHist : public ::testing::Test {
+ public:
+  Context ctx{MakeCUDACtx(0)};
+
+  bst_bin_t n_bins = 256;
+  bst_target_t n_targets = 1;
+  bst_feature_t n_features = 256;
+
+  bool use_single_target = false;
+
+  bst_idx_t n_samples = 1 << 21;
+
+  std::unique_ptr<EllpackPageImpl> page;
+
+  std::shared_ptr<common::HistogramCuts const> cuts;
+  std::unique_ptr<FeatureGroups> p_fg;
+
+  DeviceHistogramBuilder histogram;
+  common::Span<GradientPairInt64> node_hist;
+  linalg::Matrix<GradientPair> gpairs;
+  dh::device_vector<std::uint32_t> ridx;
+  dh::device_vector<GradientQuantiser> quantizers;
+
+  static constexpr std::uint32_t kBlockThreads = 512;
+
+  void SetUp() override {
+    this->page = MakeEllpackForTest(&ctx, n_samples, n_features, n_bins);
+    this->cuts = page->CutsShared();
+
+    this->p_fg = std::make_unique<FeatureGroups>(
+        *cuts, true,
+        use_single_target ? dh::MaxSharedMemoryOptin(0) : std::numeric_limits<std::size_t>::max());
+
+    bst_bin_t n_total_bins = n_targets * n_features * n_bins;
+    auto fg_acc = p_fg->DeviceAccessor(ctx.Device());
+    histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, !use_single_target);
+
+    gpairs = linalg::Constant(&ctx, GradientPair{1.0f, 1.0f}, n_samples, n_targets);
+
+    ridx.resize(n_samples);
+    thrust::sequence(ctx.CUDACtx()->CTP(), ridx.begin(), ridx.end(), 0);
+
+    histogram.AllocateHistograms(&ctx, {0});
+    node_hist = histogram.GetNodeHistogram(0);
+
+    quantizers = MakeDummyQuantizers(n_targets);
+  }
+
+  void BenchSharedAtomic() {
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads);
+    auto n_bytes = sizeof(GradientPairInt64) * 256;
+
+    TestSharedAtomicKernel<<<n_grids, kBlockThreads, n_bytes>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+        dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  }
+  void BenchReadUnroll(){
+    constexpr std::int32_t kItemsPerThread = 8;
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
+    auto kernel = ReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+    std::cout << "n_grids:" << n_grids << std::endl;
+    kernel<<<n_grids, kBlockThreads>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
+        dh::ToSpan(ridx), dh::ToSpan(quantizers));
+  }
+  void BenchRawReadUnroll() {
+    constexpr std::int32_t kItemsPerThread = 8;
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
+    auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
+    std::cout << "n_grids:" << n_grids << std::endl;
+    auto n_bytes = sizeof(GradientPairInt64) * 256;
+    kernel<<<n_grids, kBlockThreads, n_bytes>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  }
+};
 }  // namespace
 
 TEST(GpuMultiHistogram, Large) {
@@ -347,35 +426,6 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
   //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
   // }
-  {
-    auto n = page->Size() * page->info.row_stride;
-    auto n_grids = common::DivRoundUp(n, kBlockThreads);
-    auto n_bytes = sizeof(GradientPairInt64) * 256;
-
-    TestSharedAtomicKernel<<<n_grids, kBlockThreads, n_bytes>>>(
-        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
-        dh::ToSpan(ridx), dh::ToSpan(quantizers));
-  }
-  // {
-  //   constexpr std::int32_t kItemsPerThread = 8;
-  //   auto n = page->Size() * page->info.row_stride;
-  //   auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
-  //   auto kernel = ReadUnrollKernel<kItemsPerThread, kBlockThreads>;
-  //   std::cout << "n_grids:" << n_grids << std::endl;
-  //   kernel<<<n_grids, kBlockThreads>>>(
-  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
-  //       dh::ToSpan(ridx), dh::ToSpan(quantizers));
-  // }
-  // {
-  //   constexpr std::int32_t kItemsPerThread = 8;
-  //   auto n = page->Size() * page->info.row_stride;
-  //   auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
-  //   auto kernel = RawReadUnrollKernel<kItemsPerThread, kBlockThreads>;
-  //   std::cout << "n_grids:" << n_grids << std::endl;
-  //   auto n_bytes = sizeof(GradientPairInt64) * 256;
-  //   kernel<<<n_grids, kBlockThreads, n_bytes>>>(
-  //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
-  // }
   // {
   //   constexpr std::int32_t kItemsPerThread = 8;
   //   auto n = page->Size() * page->info.row_stride;
@@ -398,5 +448,20 @@ TEST(GpuMultiHistogram, Large) {
   //                            gpairs.View(ctx.Device()), dh::ToSpan(ridx), node_hist,
   //                            dh::ToSpan(quantizers));
   // }
+}
+
+TEST_F(MicroBenchHist, SharedAtomic) {
+  this->BenchSharedAtomic();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, ReadUnroll) {
+  this->BenchReadUnroll();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, RawReadUnroll) {
+  this->BenchRawReadUnroll();
+  debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
