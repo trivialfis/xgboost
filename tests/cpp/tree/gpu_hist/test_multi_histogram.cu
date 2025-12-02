@@ -185,6 +185,39 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
+template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
+__global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
+    EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
+  bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
+
+  std::size_t offset = blockIdx.x * kBlockThreads;
+  auto stride = kBlockThreads * gridDim.x;
+
+  auto prefetch = [&](std::size_t offset, std::int32_t k) {
+    auto idx = offset + (k * stride) + threadIdx.x;
+    if (idx < n_elements) {
+      matrix.gidx_iter.Prefetch(idx);
+    }
+  };
+  auto load = [&](std::size_t offset) {
+    // i = 0
+    auto idx = offset + threadIdx.x;
+    return matrix.gidx_iter[idx];
+  };
+  for (std::int32_t k = 0; k < kItemsPerThread; ++k) {
+    prefetch(offset, k);
+  }
+
+  while (offset + kBlockThreads < n_elements) {
+    prefetch(offset, 1);
+    auto compressed_bin = load(offset);
+    if (compressed_bin == -1) {
+      printf("-1\n");
+    }
+    offset += stride;
+  }
+}
+
 // 37.89GB/s 100 occupancy
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
@@ -361,6 +394,15 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads, n_bytes>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
+  void BenchPrefetchRead() {
+    constexpr std::int32_t kItemsPerThread = 8;
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads) / 64;
+    std::cout << "n_grids:" << n_grids << " n:" << n << std::endl;
+    auto kernel = PrefetchReadKernel<kItemsPerThread, kBlockThreads>;
+    kernel<<<n_grids, kBlockThreads>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  }
 };
 }  // namespace
 
@@ -462,6 +504,11 @@ TEST_F(MicroBenchHist, ReadUnroll) {
 
 TEST_F(MicroBenchHist, RawReadUnroll) {
   this->BenchRawReadUnroll();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, PrefetchRead) {
+  this->BenchPrefetchRead();
   debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
