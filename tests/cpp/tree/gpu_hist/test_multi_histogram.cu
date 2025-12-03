@@ -154,9 +154,6 @@ XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
   AtomicAdd64As32(dst_ptr + 1, h);
 }
 
-// rtx4070tis 385.23GB/s, but occupancy is 100%
-// dgx 145.85GB/s
-// H200 536.91GB/s
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
                                     common::Span<std::uint32_t const> d_ridx) {
@@ -395,6 +392,9 @@ class MicroBenchHist : public ::testing::Test {
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
         dh::ToSpan(ridx), dh::ToSpan(quantizers));
   }
+  // tis: 385.23GB/s
+  // dgx: 145.85GB/s
+  // H200: 536.91GB/s
   void BenchRawReadUnroll() {
     constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
