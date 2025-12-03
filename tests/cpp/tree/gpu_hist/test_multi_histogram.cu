@@ -419,6 +419,14 @@ class MicroBenchHist : public ::testing::Test {
     thrust::transform(iter.data(), iter.data() + iter.size_bytes(), tmp.data(),
                       [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
   }
+
+  void BenchThrustTransformCntIter() {
+    auto const& iter = page->gidx_buffer.data();
+    dh::device_vector<char> tmp(page->gidx_buffer.size_bytes());
+    auto it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) { return iter[i]; });
+    thrust::transform(it, it + page->gidx_buffer.size_bytes(), tmp.data(),
+                      [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
+  }
 };
 }  // namespace
 
@@ -530,6 +538,11 @@ TEST_F(MicroBenchHist, PrefetchRead) {
 
 TEST_F(MicroBenchHist, ThrustTransform) {
   this->BenchThrustTransform();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, ThrustTransformCntIter) {
+  this->BenchThrustTransformCntIter();
   debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
