@@ -412,6 +412,13 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
+
+  void BenchThrustTransform() {
+    auto const& iter = page->gidx_buffer;
+    dh::device_vector<char> tmp(iter.size_bytes());
+    thrust::transform(iter.data(), iter.data() + iter.size_bytes(), tmp.data(),
+                      [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
+  }
 };
 }  // namespace
 
@@ -518,6 +525,11 @@ TEST_F(MicroBenchHist, RawReadUnroll) {
 
 TEST_F(MicroBenchHist, PrefetchRead) {
   this->BenchPrefetchRead();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, ThrustTransform) {
+  this->BenchThrustTransform();
   debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
