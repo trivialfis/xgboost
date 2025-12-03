@@ -406,6 +406,8 @@ class MicroBenchHist : public ::testing::Test {
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
   // tis: 242.45GB/s
+  // H200: 233.05GB/s!!!!
+  // DGX: 117.59GB/s
   void BenchPrefetchRead() {
     constexpr std::int32_t kItemsPerThread = 4;
     auto n = page->Size() * page->info.row_stride;
