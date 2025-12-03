@@ -417,21 +417,25 @@ class MicroBenchHist : public ::testing::Test {
   // H200: 1.02T/s
   // DGX: 108GB/s
   // tis: 314.58GB/s
+  // tis (copyable): 314.48GB/s
   void BenchThrustTransform() {
     auto const& iter = page->gidx_buffer;
     dh::device_vector<char> tmp(iter.size_bytes());
     thrust::transform(iter.data(), iter.data() + iter.size_bytes(), tmp.data(),
-                      [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
+                      cuda::proclaim_copyable_arguments(
+                          [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; }));
   }
   // H200: 580.90GB/s
   // DGX: 103GB/s
   // tis: 259.29GB/s
+  // tis (copyable): 259.07GB/s
   void BenchThrustTransformCntIter() {
     auto const& iter = page->gidx_buffer.data();
     dh::device_vector<char> tmp(page->gidx_buffer.size_bytes());
     auto it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) { return iter[i]; });
     thrust::transform(it, it + page->gidx_buffer.size_bytes(), tmp.data(),
-                      [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
+                      cuda::proclaim_copyable_arguments(
+                          [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; }));
   }
   // tis 240.37GB/s
   // dgx 107GB/s
