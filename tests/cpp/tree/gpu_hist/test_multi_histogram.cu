@@ -414,7 +414,7 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
-
+  // H200: 1.02T/s
   void BenchThrustTransform() {
     auto const& iter = page->gidx_buffer;
     dh::device_vector<char> tmp(iter.size_bytes());
@@ -431,6 +431,7 @@ class MicroBenchHist : public ::testing::Test {
   }
   // tis 240.37GB/s
   // dgx 107GB/s
+  // h200 402.18GB/s
   void BenchForEachIter() {
     auto acc = std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {}));
 
