@@ -417,6 +417,8 @@ class MicroBenchHist : public ::testing::Test {
   // H200: 1.02T/s
   // DGX: 108GB/s
   // tis: 314.58GB/s
+  // H200 (copyable): 1.55T/s
+  // DGX (copyable): 115.87GB/s
   // tis (copyable): 314.48GB/s
   void BenchThrustTransform() {
     auto const& iter = page->gidx_buffer;
@@ -428,6 +430,7 @@ class MicroBenchHist : public ::testing::Test {
   // H200: 580.90GB/s
   // DGX: 103GB/s
   // tis: 259.29GB/s
+  // H200 (copyable): 581.96GB/s
   // tis (copyable): 259.07GB/s
   void BenchThrustTransformCntIter() {
     auto const& iter = page->gidx_buffer.data();
