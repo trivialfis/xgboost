@@ -415,13 +415,17 @@ class MicroBenchHist : public ::testing::Test {
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
   // H200: 1.02T/s
+  // DGX: 108GB/s
+  // tis: 314.58GB/s
   void BenchThrustTransform() {
     auto const& iter = page->gidx_buffer;
     dh::device_vector<char> tmp(iter.size_bytes());
     thrust::transform(iter.data(), iter.data() + iter.size_bytes(), tmp.data(),
                       [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
   }
-
+  // H200: 580.90GB/s
+  // DGX: 103GB/s
+  // tis: 259.29GB/s
   void BenchThrustTransformCntIter() {
     auto const& iter = page->gidx_buffer.data();
     dh::device_vector<char> tmp(page->gidx_buffer.size_bytes());
