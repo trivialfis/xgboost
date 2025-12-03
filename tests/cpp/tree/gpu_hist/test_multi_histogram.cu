@@ -405,6 +405,7 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads, n_bytes>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
+  // tis: 242.45GB/s
   void BenchPrefetchRead() {
     constexpr std::int32_t kItemsPerThread = 4;
     auto n = page->Size() * page->info.row_stride;
