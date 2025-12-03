@@ -427,6 +427,19 @@ class MicroBenchHist : public ::testing::Test {
     thrust::transform(it, it + page->gidx_buffer.size_bytes(), tmp.data(),
                       [] XGBOOST_DEVICE(common::CompressedByteT b) { return b + 1; });
   }
+
+  void BenchForEachIter() {
+    auto acc = std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {}));
+
+    auto const& iter = page->gidx_buffer.data();
+    auto it = thrust::make_counting_iterator(0ul);
+    thrust::for_each_n(it, page->n_rows * page->info.row_stride, [=] XGBOOST_DEVICE(std::size_t i) {
+      bst_bin_t gidx = acc.gidx_iter[i];
+      if (gidx == -1) {
+        printf("-1\n");
+      }
+    });
+  }
 };
 }  // namespace
 
@@ -543,6 +556,11 @@ TEST_F(MicroBenchHist, ThrustTransform) {
 
 TEST_F(MicroBenchHist, ThrustTransformCntIter) {
   this->BenchThrustTransformCntIter();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, ForEachIter) {
+  this->BenchForEachIter();
   debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
