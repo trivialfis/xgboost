@@ -184,7 +184,8 @@ __global__ void RawReadUnrollKernel(EllpackDeviceAccessor matrix,
   }
 }
 
-// ncu --set full --kernel-name PrefetchReadKernel --launch-skip 0 --launch-count 1 -o pf-tis-%i ./testxgboost --gtest_filter="MicroBenchHist.PrefetchRead"
+// ncu --set full --kernel-name PrefetchReadKernel --launch-skip 0 --launch-count 1 -o pf-tis-%i
+// ./testxgboost --gtest_filter="MicroBenchHist.PrefetchRead"
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
     EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
@@ -382,7 +383,7 @@ class MicroBenchHist : public ::testing::Test {
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), node_hist,
         dh::ToSpan(ridx), dh::ToSpan(quantizers));
   }
-  void BenchReadUnroll(){
+  void BenchReadUnroll() {
     constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads) / 32;
@@ -533,18 +534,6 @@ TEST(GpuMultiHistogram, Large) {
   //       std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   // }
   debug::SyncDevice();
-
-
-  // if (use_single_target) {
-  //   GradientQuantiser q{GradientPairPrecise{1.0f, 1.0f}, GradientPairPrecise{1.0f, 1.0f}};
-  //   histogram.BuildHistogram(ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), fg_acc,
-  //                            gpairs.View(ctx.Device()).Values(), dh::ToSpan(ridx), node_hist, q);
-  // } else {
-  //   auto quantizers = MakeDummyQuantizers(n_targets);
-  //   histogram.BuildHistogram(ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), fg_acc,
-  //                            gpairs.View(ctx.Device()), dh::ToSpan(ridx), node_hist,
-  //                            dh::ToSpan(quantizers));
-  // }
 }
 
 TEST_F(MicroBenchHist, SharedAtomic) {
