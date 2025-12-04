@@ -103,10 +103,9 @@ __global__ void RawReadKernel(EllpackDeviceAccessor matrix, common::Span<std::ui
 // Without the gidx_iter read, this kernel has about 242GB/s throughput, most of the
 // overhead comes from the integer multiplication inside IterIdx.
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
-__global__ void ReadUnrollKernel(EllpackDeviceAccessor matrix,
-                                 common::Span<GradientPairInt64> d_node_hist,
-                                 common::Span<std::uint32_t const> d_ridx,
-                                 common::Span<GradientQuantiser const> roundings) {
+__global__ __launch_bounds__(kBlockThreads) void ReadUnrollKernel(
+    EllpackDeviceAccessor matrix, common::Span<GradientPairInt64> d_node_hist,
+    common::Span<std::uint32_t const> d_ridx, common::Span<GradientQuantiser const> roundings) {
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
   constexpr auto kItemsPerTile = kItemsPerThread * kBlockThreads;
 
