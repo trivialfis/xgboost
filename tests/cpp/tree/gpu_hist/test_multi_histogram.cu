@@ -465,7 +465,8 @@ class MicroBenchHist : public ::testing::Test {
   }
   // tis 388GB/s no prefetch
   // tis 406.28GB/s prefetch
-  // h200 455.48GB/s prefetch
+  // h200 651.99GB/s no prefetch
+  // h200 455.48GB/s prefetch !!!
   // dgx 171.57GB/s no prefetch
   // dgx 180GB/s prefetch
   void BenchPrefetchTile() {
