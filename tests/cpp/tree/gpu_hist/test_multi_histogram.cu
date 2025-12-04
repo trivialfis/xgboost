@@ -465,7 +465,7 @@ class MicroBenchHist : public ::testing::Test {
   }
 
   void BenchPrefetchTile() {
-    constexpr std::int32_t kItemsPerThread = 16;
+    constexpr std::int32_t kItemsPerThread = 8;
     auto n = page->Size() * page->info.row_stride;
     auto n_grids = common::DivRoundUp(n, kBlockThreads * kItemsPerThread);
     auto kernel = PrefetchReadTileKernel<kItemsPerThread, kBlockThreads>;
