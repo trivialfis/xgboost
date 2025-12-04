@@ -9,7 +9,6 @@
 #include "../../common/device_helpers.cuh"  // for LaunchN
 #include "../../common/device_vector.cuh"   // for device_vector
 #include "../../data/ellpack_page.cuh"      // for EllpackDeviceAccessor
-#include "expand_entry.cuh"                 // for GPUExpandEntry
 #include "feature_groups.cuh"               // for FeatureGroupsAccessor
 #include "quantiser.cuh"                    // for GradientQuantiser
 #include "xgboost/base.h"                   // for GradientPair, GradientPairInt64

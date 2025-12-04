@@ -9,6 +9,7 @@
 #include <vector>  // for vector
 
 #include "../common/device_helpers.cuh"        // for MakeTransformIterator
+#include "../common/nvtx_utils.h"              // for xgboost_NVTX_FN_RANGE
 #include "driver.h"                            // for Driver
 #include "gpu_hist/feature_groups.cuh"         // for FeatureGroups
 #include "gpu_hist/histogram.cuh"              // for DeviceHistogramBuilder
@@ -156,6 +157,8 @@ class MultiTargetHistMaker {
   }
 
   [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
+    xgboost_NVTX_FN_RANGE();
+
     auto d_gpair = split_gpair_.View(ctx_->Device());
     auto n_targets = d_gpair.Shape(1);
 
@@ -332,6 +335,8 @@ class MultiTargetHistMaker {
       return;
     }
 
+    xgboost_NVTX_FN_RANGE();
+
     // Perform subtraction for sibling nodes
     auto need_build = this->histogram_.SubtractHist(ctx_, candidates, build_nidx, subtraction_nidx);
     if (need_build.empty()) {
@@ -354,6 +359,9 @@ class MultiTargetHistMaker {
     if (expand_set.empty()) {
       return;
     }
+
+    xgboost_NVTX_FN_RANGE();
+
     CHECK_LE(candidates.size(), expand_set.size());
     // TODO(jiamingy): Implement finalize partition. Avoid using the expand_set.
 
