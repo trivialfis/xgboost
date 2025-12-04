@@ -236,38 +236,40 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadTileKernel(
   std::int32_t const valid_items =
       cuda::std::min(n_elements - offset, static_cast<std::size_t>(kTileSize));
 
-  size_t start_bytes[kItemsPerThread];
-  auto prefetch_tile = [&](auto full_tile) {
-    for (int j = 0; j < kItemsPerThread; ++j) {
-      const int idx = j * kBlockThreads + threadIdx.x;
-      if (full_tile || idx < valid_items) {
-        start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idx);
-      }
-    }
-  };
-  auto process_tile = [&](auto full_tile) {
-    bst_bin_t gidx[kItemsPerThread];
-
+  // size_t start_bytes[kItemsPerThread];
+  // auto prefetch_tile = [&](auto full_tile) {
+  //   for (int j = 0; j < kItemsPerThread; ++j) {
+  //     const int idx = j * kBlockThreads + threadIdx.x;
+  //     if (full_tile || idx < valid_items) {
+  //       start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idx);
+  //     }
+  //   }
+  // };
+  bst_bin_t gidx[kItemsPerThread];
+  auto load_tile = [&](auto full_tile) {
     for (int j = 0; j < kItemsPerThread; ++j) {
       // block strided loop
       const int idx = j * kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
-        gidx[j] = matrix.gidx_iter.Read(start_bytes[j]);
+        gidx[j] = matrix.gidx_iter[offset + idx];
       }
     }
-
+  };
+  auto process_tile = [&](auto full_tile) {
     for (int j = 0; j < kItemsPerThread; ++j) {
       if (gidx[j] == -1) {
-        printf("-1\n");
+        printf("-1");
       }
     }
   };
 
   if (kTileSize == valid_items) {
-    prefetch_tile(::cuda::std::true_type{});
+    // prefetch_tile(::cuda::std::true_type{});
+    load_tile(::cuda::std::true_type{});
     process_tile(::cuda::std::true_type{});
   } else {
-    prefetch_tile(::cuda::std::false_type{});
+    // prefetch_tile(::cuda::std::false_type{});
+    load_tile(::cuda::std::false_type{});
     process_tile(::cuda::std::false_type{});
   }
 }
