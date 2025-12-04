@@ -703,10 +703,10 @@ struct HistPolicy {
   static constexpr std::int32_t kTileSize = kBlockThreadsIn * kItemsPerThreadIn;
 };
 
-template <typename Policy, typename Accessor>
-__global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(Accessor matrix) {
-
-}
+template <typename Policy, typename Accessor, typename RidxIter>
+__global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(Accessor matrix,
+                                                                    RidxIter* d_ridx_iters,
+                                                                    bst_node_t n_nodes) {}
 
 void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAccessor const& matrix,
                                             FeatureGroupsAccessor const& feature_groups,
