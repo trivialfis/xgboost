@@ -226,6 +226,52 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
   }
 }
 
+template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
+__global__ __launch_bounds__(kBlockThreads) void PrefetchReadTileKernel(
+    EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
+  auto n_elements = matrix.row_stride * d_ridx.size();
+
+  std::int32_t constexpr kTileSize = kItemsPerThread * kBlockThreads;
+  std::size_t const offset = blockIdx.x * kTileSize;
+  std::int32_t const valid_items =
+      cuda::std::min(n_elements - offset, static_cast<std::size_t>(kTileSize));
+
+  size_t start_bytes[kItemsPerThread];
+  auto prefetch_tile = [&](auto full_tile) {
+    for (int j = 0; j < kItemsPerThread; ++j) {
+      const int idx = j * kBlockThreads + threadIdx.x;
+      if (full_tile || idx < valid_items) {
+        start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idx);
+      }
+    }
+  };
+  auto process_tile = [&](auto full_tile) {
+    bst_bin_t gidx[kItemsPerThread];
+
+    for (int j = 0; j < kItemsPerThread; ++j) {
+      // block strided loop
+      const int idx = j * kBlockThreads + threadIdx.x;
+      if (full_tile || idx < valid_items) {
+        gidx[j] = matrix.gidx_iter.Read(start_bytes[j]);
+      }
+    }
+
+    for (int j = 0; j < kItemsPerThread; ++j) {
+      if (gidx[j] == -1) {
+        printf("-1\n");
+      }
+    }
+  };
+
+  if (kTileSize == valid_items) {
+    prefetch_tile(::cuda::std::true_type{});
+    process_tile(::cuda::std::true_type{});
+  } else {
+    prefetch_tile(::cuda::std::false_type{});
+    process_tile(::cuda::std::false_type{});
+  }
+}
+
 // rtx4070tis 37.89GB/s 100 occupancy
 template <std::int32_t kItemsPerThread, std::int32_t kBlockThreads>
 __global__ void ReadSharedAddUnrollKernel(EllpackDeviceAccessor matrix,
@@ -417,6 +463,15 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
+
+  void BenchPrefetchTile() {
+    constexpr std::int32_t kItemsPerThread = 4;
+    auto n = page->Size() * page->info.row_stride;
+    auto n_grids = common::DivRoundUp(n, kBlockThreads * kItemsPerThread);
+    auto kernel = PrefetchReadTileKernel<kItemsPerThread, kBlockThreads>;
+    kernel<<<n_grids, kBlockThreads>>>(
+        std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  }
   // H200: 1.02T/s
   // DGX: 108GB/s
   // tis: 314.58GB/s
@@ -552,6 +607,11 @@ TEST_F(MicroBenchHist, RawReadUnroll) {
 
 TEST_F(MicroBenchHist, PrefetchRead) {
   this->BenchPrefetchRead();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, PrefetchTile) {
+  this->BenchPrefetchTile();
   debug::SyncDevice();
 }
 

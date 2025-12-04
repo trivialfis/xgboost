@@ -208,13 +208,29 @@ class CompressedIterator {
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
 
 #if defined(__CUDACC__)
-  __device__ void Prefetch(std::size_t offset) const {
+  __device__ size_t Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
     start_byte_idx += detail::kPadding;
 
     PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
+    return start_byte_idx;
+  }
+
+  __device__ reference Read(std::size_t start_byte_idx) const {
+    const int bits_per_byte = 8;
+    // Read 5 bytes - the maximum we will need
+    uint64_t tmp = static_cast<uint64_t>(buffer_[start_byte_idx - 4]) << 32 |
+                   static_cast<uint64_t>(buffer_[start_byte_idx - 3]) << 24 |
+                   static_cast<uint64_t>(buffer_[start_byte_idx - 2]) << 16 |
+                   static_cast<uint64_t>(buffer_[start_byte_idx - 1]) << 8 |
+                   buffer_[start_byte_idx];
+    int bit_shift = (bits_per_byte - ((offset_ + 1) * symbol_bits_)) % bits_per_byte;
+    tmp >>= bit_shift;
+    // Mask off unneeded bits
+    uint64_t mask = (static_cast<uint64_t>(1) << symbol_bits_) - 1;
+    return static_cast<T>(tmp & mask);
   }
 #endif
 
