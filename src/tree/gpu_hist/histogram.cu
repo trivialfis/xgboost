@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
-#include <cuda/pipeline>
+
 #include "../../collective/aggregator.h"
 #include "../../common/deterministic.cuh"
 #include "../../common/device_helpers.cuh"
@@ -308,8 +308,7 @@ __global__ void __launch_bounds__(kBlockThreads)
   }
 }
 
-// Kernel for vector-leaf with prefetching support using CompressedIterator::Prefetch.
-// Uses prefetching to issue memory reads ahead of time, improving memory throughput.
+// Kernel for vector-leaf, bare minimum for now.
 template <typename Accessor, bool kCompressed, bool kDense, bool use_shared_memory_histograms,
           std::int32_t kBlockThreads, std::int32_t kItemsPerThread>
 __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
@@ -321,40 +320,27 @@ __global__ __launch_bounds__(kBlockThreads) void MultiHistKernel(
   std::int32_t feature_stride = kCompressed ? group.num_features : matrix.row_stride;
   bst_idx_t n_elements = feature_stride * d_ridx.size();
   using Idx = RowPartitioner::RowIndexT;
-  bst_target_t n_targets = roundings.size();
-
-  auto write_bin = [&](Idx ridx, auto fidx, auto compressed_bin) {
+  for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
+    Idx ridx = d_ridx[idx / feature_stride];
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
       if (kCompressed) {
         compressed_bin += matrix.feature_segments[fidx];
       }
+      bst_target_t n_targets = roundings.size();
       compressed_bin *= n_targets;
-      // always false, just to make sure nvcc doesn't optimize it away.
-      if (compressed_bin == std::numeric_limits<decltype(compressed_bin)>::max()) {
-        // TODO(jiamingy): Assign a thread for each target.
-        for (bst_target_t t = 0; t < n_targets; ++t) {
-          auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
-          AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
-        }
+      // TODO(jiamingy): Assign a thread for each target.
+      for (bst_target_t t = 0; t < n_targets; ++t) {
+        auto adjusted = roundings[t].ToFixedPoint(d_gpair(ridx, t));
+        AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
       }
     }
-  };
-
-  std::size_t stride = gridDim.x * blockDim.x;
-
-  for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n_elements)) {
-    Idx ridx = idx / feature_stride;
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    bst_idx_t current_iter_idx = IterIdx(matrix, ridx, fidx);
-
-    // Read current compressed_bin (data may already be prefetched)
-    bst_bin_t compressed_bin = matrix.gidx_iter[current_iter_idx];
-    write_bin(ridx, fidx, compressed_bin);
   }
 }
 
 namespace {
-constexpr std::int32_t kBlockThreads = 512;
+constexpr std::int32_t kBlockThreads = 1024;
 constexpr std::int32_t kItemsPerThread = 8;
 constexpr std::int32_t ItemsPerTile() { return kBlockThreads * kItemsPerThread; }
 template <auto Ker>
