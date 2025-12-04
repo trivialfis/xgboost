@@ -696,6 +696,28 @@ void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAcces
       matrix);
 }
 
+template <std::int32_t kBlockThreadsIn, std::int32_t kItemsPerThreadIn>
+struct HistPolicy {
+  static constexpr std::int32_t kBlockThreads = kBlockThreadsIn;
+  static constexpr std::int32_t kItemsPerThread = kItemsPerThreadIn;
+  static constexpr std::int32_t kTileSize = kBlockThreadsIn * kItemsPerThreadIn;
+};
+
+template <typename Policy, typename Accessor>
+__global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(Accessor matrix) {
+
+}
+
+void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAccessor const& matrix,
+                                            FeatureGroupsAccessor const& feature_groups,
+                                            linalg::MatrixView<GradientPair const> gpair,
+                                            common::Span<common::Span<const std::uint32_t>> ridxs,
+                                            common::Span<common::Span<GradientPairInt64>> hists,
+                                            std::size_t max_node_size,
+                                            common::Span<GradientQuantiser const> roundings) {
+
+}
+
 void DeviceHistogramBuilder::AllReduceHist(Context const* ctx, MetaInfo const& info,
                                            bst_node_t nidx, std::size_t num_histograms) {
   this->monitor_.Start(__func__);
