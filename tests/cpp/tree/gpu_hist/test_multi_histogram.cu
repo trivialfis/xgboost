@@ -463,7 +463,11 @@ class MicroBenchHist : public ::testing::Test {
     kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
   }
-
+  // tis 388GB/s no prefetch
+  // tis 406.28GB/s prefetch
+  // h200 455.48GB/s prefetch
+  // dgx 171.57GB/s no prefetch
+  // dgx 180GB/s prefetch
   void BenchPrefetchTile() {
     constexpr std::int32_t kItemsPerThread = 4;
     auto n = page->Size() * page->info.row_stride;
