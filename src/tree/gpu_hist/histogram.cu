@@ -707,7 +707,9 @@ struct HistPolicy {
 template <typename Policy, typename Accessor, typename RidxIter>
 __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups,
-    common::IterSpan<RidxIter> const* d_ridx_iters, bst_node_t n_nodes) {
+    common::IterSpan<RidxIter> const* d_ridx_iters, bst_node_t n_nodes,
+    linalg::MatrixView<const GradientPair> d_gpair,
+    common::Span<GradientQuantiser const> roundings) {
   auto nidx_in_set = blockIdx.x % n_nodes;
   FeatureGroup group = feature_groups[blockIdx.y];
   auto d_ridx = d_ridx_iters[nidx_in_set];
@@ -719,22 +721,22 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   std::int32_t const valid_items =
       cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
 
+  int idxes[Policy::kItemsPerThread];
   std::size_t start_bytes[Policy::kItemsPerThread];
   bst_bin_t gidxs[Policy::kItemsPerThread];
   auto prefetch_gidx_tile = [&](auto full_tile) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = j * Policy::kBlockThreads + threadIdx.x;
-      Idx ridx = d_ridx[idx / feature_stride];
+      idxes[j] = idx;
       if (full_tile || idx < valid_items) {
-        start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idx);
+        start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idxes[j]);
       }
     }
   };
   auto load_gidx_tile = [&](auto full_tile) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-      const int idx = j * Policy::kBlockThreads + threadIdx.x;
-      if (full_tile || idx < valid_items) {
-        auto fidx = FeatIdx(group, idx, feature_stride);
+      if (full_tile || idxes[j] < valid_items) {
+        auto fidx = FeatIdx(group, idxes[j], feature_stride);
         bst_bin_t compressed_bin = matrix.gidx_iter.Read(start_bytes[j]);
         if (Policy::kCompressed) {
           compressed_bin += matrix.feature_segments[fidx];
@@ -743,9 +745,19 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       }
     }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-      const int idx = j * Policy::kBlockThreads + threadIdx.x;
-      if (full_tile || idx < valid_items) {
+      if (full_tile || idxes[j] < valid_items) {
         if (gidxs[j] == -1) {
+          printf("-1\n");
+        }
+      }
+    }
+  };
+  auto load_gpair_tile = [&](auto full_tile) {
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      if (full_tile || idxes[j] < valid_items) {
+        Idx ridx = d_ridx[idxes[j] / feature_stride];
+        auto g = d_gpair(ridx, 0);
+        if (g.GetHess() == -1) {
           printf("-1");
         }
       }
@@ -755,9 +767,11 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   if (Policy::kTileSize == valid_items) {
     prefetch_gidx_tile(std::true_type{});
     load_gidx_tile(std::true_type{});
+    load_gpair_tile(std::true_type{});
   } else {
     prefetch_gidx_tile(std::false_type{});
     load_gidx_tile(std::false_type{});
+    load_gpair_tile(std::false_type{});
   }
 }
 
@@ -782,7 +796,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   CHECK_EQ(feature_groups.NumGroups(), 1);
 
   kernel<<<n_grids, Policy::kBlockThreads>>>(acc, feature_groups, ridx_iters.data().get(),
-                                             hists.size());
+                                             hists.size(), gpair, roundings);
 }
 
 void DeviceHistogramBuilder::AllReduceHist(Context const* ctx, MetaInfo const& info,
