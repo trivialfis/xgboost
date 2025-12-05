@@ -299,7 +299,7 @@ class DoubleCompressedIter {
       : buf0_{buf0}, buf1_{buf1}, n0_{n0_bytes}, symbol_bits_{detail::SymbolBits(n_symbols)} {}
 
 #if defined(__CUDACC__)
-  __device__ void Prefetch(std::size_t offset) const {
+  __device__ std::size_t Prefetch(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
@@ -317,6 +317,10 @@ class DoubleCompressedIter {
 
       PrefetchGlobalL2(buf + (shifted - 4));
     }
+    return start_byte_idx;
+  }
+  __device__ reference Read(std::size_t) const {
+    return 0;  // fixme
   }
 #endif
 

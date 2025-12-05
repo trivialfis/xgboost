@@ -770,11 +770,11 @@ void DeviceHistogramBuilder::BuildHistogram(
     using Policy = common::GetValueT<decltype(policy)>;
     auto n = n_max_samples * acc.row_stride;
     auto n_grids = common::DivRoundUp(n, Policy::kTileSize);
+    CHECK_EQ(feature_groups.NumGroups(), 1);
     CHECK_GE(roundings.size(), 1);
     dim3 conf(kBlockThreads, feature_groups.NumGroups(), n_nodes);
-    auto shmem_bytes = feature_groups.ShmemSize();
-    kernel<<<n_grids, conf, shmem_bytes, ctx->Stream()>>>(
-        acc, feature_groups, ridx_iters, hists.data(), hists.size(), gpair, roundings);
+    kernel<<<n_grids, conf, 0, ctx->Stream()>>>(acc, feature_groups, ridx_iters, hists.data(),
+                                                hists.size(), gpair, roundings);
   };
 
   std::visit(
