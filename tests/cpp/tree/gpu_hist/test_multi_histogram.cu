@@ -527,6 +527,13 @@ class MicroBenchHist : public ::testing::Test {
                                    this->gpairs.View(this->ctx.Device()), dh::ToSpan(ridxs),
                                    dh::ToSpan(hists), ridx.size(), dh::ToSpan(this->quantizers));
   }
+
+  void BenchStBuild() {
+    GradientQuantiser q{GradientPairPrecise{1.0f, 1.0f}, GradientPairPrecise{1.0f, 1.0f}};
+    this->histogram.BuildHistogram(
+        this->ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}), p_fg->DeviceAccessor(ctx.Device()),
+        this->gpairs.Data()->ConstDeviceSpan(), dh::ToSpan(ridx), this->node_hist, q);
+  }
 };
 }  // namespace
 
@@ -646,6 +653,11 @@ TEST_F(MicroBenchHist, ForEachIter) {
 
 TEST_F(MicroBenchHist, BuildPrefetch) {
   this->BenchBuild();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, StBuild) {
+  this->BenchStBuild();
   debug::SyncDevice();
 }
 }  // namespace xgboost::tree::cuda_impl
