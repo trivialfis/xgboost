@@ -733,26 +733,43 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   __syncthreads();
 
+  auto prefetch_valid_tile = [&](auto idx) {
+    Idx ridx = d_ridx[idx / feature_stride];
+    // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
+  };
+
+  auto process_valid_tile = [&](auto idx) {
+    Idx ridx = d_ridx[idx / feature_stride];
+    // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    if (compressed_bin != matrix.NullValue()) {
+      if (Policy::kCompressed) {
+        compressed_bin += matrix.feature_segments[fidx];
+      }
+      compressed_bin *= n_targets;  // fixme (group.start_bin)
+      // TODO(jiamingy): Assign a thread for each target.
+      for (bst_target_t t = 0; t < n_targets; ++t) {
+        auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
+        AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
+      }
+    }
+  };
+
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
+      Idx ridx = d_ridx[idx / feature_stride];
+      if (full_tile && __shfl_up_sync(0xffffffff, ridx, 1) != ridx) {
+        prefetch_valid_tile(idx);
+      }
+    }
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
-        Idx ridx = d_ridx[idx / feature_stride];
-        // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
-        auto fidx = FeatIdx(group, idx, feature_stride);
-        bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
-        if (compressed_bin != matrix.NullValue()) {
-          if (Policy::kCompressed) {
-            compressed_bin += matrix.feature_segments[fidx];
-          }
-          compressed_bin *= n_targets; // fixme (group.start_bin)
-          // TODO(jiamingy): Assign a thread for each target.
-          for (bst_target_t t = 0; t < n_targets; ++t) {
-            auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-            AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
-            // AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
-          }
-        }
+        process_valid_tile(idx);
       }
     }
   };
