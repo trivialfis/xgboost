@@ -733,11 +733,8 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   __syncthreads();
 
-  auto prefetch_valid_tile = [&](auto idx) {
-    Idx ridx = d_ridx[idx / feature_stride];
-    // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
+  auto prefetch_valid_tile = [&](auto idx, auto ridx) {
+    common::PrefetchGlobalL2(&d_gpair(ridx, 0));
   };
 
   auto process_valid_tile = [&](auto idx) {
@@ -762,8 +759,8 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       Idx ridx = d_ridx[idx / feature_stride];
-      if (full_tile && __shfl_up_sync(0xffffffff, ridx, 1) != ridx) {
-        prefetch_valid_tile(idx);
+      if (full_tile) {
+        prefetch_valid_tile(idx, ridx);
       }
     }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
@@ -821,6 +818,11 @@ void DeviceHistogramBuilder::BuildHistogram(
 
     std::int32_t n_blocks_per_mp = 0;
     auto shmem_bytes = feature_groups.ShmemSize();
+
+    // fixme: blocking call.
+    dh::safe_cuda(
+        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes));
+
     dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_blocks_per_mp, kernel,
                                                                 Policy::kBlockThreads, shmem_bytes));
     CHECK_GE(n_blocks_per_mp, 1);
