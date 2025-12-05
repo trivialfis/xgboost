@@ -719,8 +719,17 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   using Idx = RowPartitioner::RowIndexT;
   bst_target_t const n_targets = roundings.size();
 
+  extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
+  auto node_hist = reinterpret_cast<GradientPairInt64*>(shmem);
+
+  dh::BlockFill(node_hist, group.num_bins, GradientPairInt64{});
 
   auto d_node_hist = node_hists[nidx_in_set].data();
+
+  auto const kStride = Policy::kTileSize * gridDim.x;
+  std::size_t offset = blockIdx.x * Policy::kTileSize;
+
+  __syncthreads();
 
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
@@ -738,15 +747,13 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
           // TODO(jiamingy): Assign a thread for each target.
           for (bst_target_t t = 0; t < n_targets; ++t) {
             auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-            AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
+            AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
+            // AtomicAddGpairGlobal(d_node_hist + compressed_bin + t, adjusted);
           }
         }
       }
     }
   };
-
-  auto const kStride = Policy::kTileSize * gridDim.x;
-  std::size_t offset = blockIdx.x * Policy::kTileSize;
 
   while (offset < n_elements) {
     std::int32_t const valid_items =
@@ -757,6 +764,12 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       process_gpair_tile(std::false_type{}, offset, valid_items);
     }
     offset += kStride;
+  }
+
+  // Write shared memory back to global memory
+  __syncthreads();
+  for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
+    AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
   }
 }
 
@@ -769,7 +782,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   CHECK_EQ(ridxs.size(), hists.size());
   auto n_nodes = hists.size();
 
-  constexpr int kBlockThreads = 512;
+  constexpr int kBlockThreads = 758;
   constexpr int kItemsPerThread = 8;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     using Policy = common::GetValueT<decltype(policy)>;
