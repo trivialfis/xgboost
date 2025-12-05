@@ -125,6 +125,33 @@ class MultiTargetHistMaker {
                               d_ridx, hist, roundings);
   }
 
+  void BuildHist(EllpackPage const& page, std::int32_t k, std::vector<bst_node_t> build_nodes) {
+    xgboost_NVTX_FN_RANGE();
+
+    auto d_gpair = this->split_gpair_.View(this->ctx_->Device());
+    CHECK(!this->partitioners_.Empty());
+
+    auto roundings = this->split_quantizer_->Quantizers();
+    auto acc = page.Impl()->GetDeviceEllpack(this->ctx_, {});
+
+    std::vector<common::Span<GradientPairInt64>> h_hists;
+    std::vector<common::Span<RowIndexT const>> h_ridxs;
+    std::size_t n_total_samples = 0;
+    for (auto nidx : build_nodes) {
+      auto d_ridx = this->partitioners_.At(k)->GetRows(nidx);
+      h_ridxs.push_back(d_ridx);
+      auto d_hist = histogram_.GetNodeHistogram(nidx);
+      h_hists.push_back(d_hist);
+
+      n_total_samples += d_ridx.size();
+    }
+    dh::device_vector<common::Span<GradientPairInt64>> hists{h_hists};
+    dh::device_vector<common::Span<RowIndexT const>> ridxs{h_ridxs};
+    this->histogram_.BuildHistogram(
+        this->ctx_->CUDACtx(), acc, this->feature_groups_->DeviceAccessor(this->ctx_->Device()),
+        d_gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), n_total_samples, roundings);
+  }
+
  public:
   void Reset(linalg::Matrix<GradientPair>* gpair_all, DMatrix* p_fmat) {
     bst_idx_t n_targets = gpair_all->Shape(1);

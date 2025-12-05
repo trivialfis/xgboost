@@ -759,13 +759,14 @@ void DeviceHistogramBuilder::BuildHistogram(
     CUDAContext const* ctx, EllpackAccessor const& matrix,
     FeatureGroupsAccessor const& feature_groups, linalg::MatrixView<GradientPair const> gpair,
     common::Span<common::Span<const std::uint32_t>> /*ridxs*/,
-    common::Span<common::Span<GradientPairInt64>> hists, std::size_t max_node_size,
+    common::Span<common::Span<GradientPairInt64>> hists, std::size_t n_total_samples,
     common::Span<GradientQuantiser const> roundings) {
   using RidxIter = thrust::counting_iterator<cuda_impl::RowIndexT>;
+  // fixme
   dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(
       hists.size(), common::IterSpan{thrust::make_counting_iterator(0u), gpair.Shape(0)});
   constexpr int kBlockThreads = 512;
-  constexpr int kItemsPerThread = 4;
+  constexpr int kItemsPerThread = 8;
 
   std::visit(
       [&](auto&& acc) {
