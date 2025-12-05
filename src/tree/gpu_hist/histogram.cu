@@ -799,7 +799,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   CHECK_EQ(ridxs.size(), hists.size());
   auto n_nodes = hists.size();
 
-  constexpr int kBlockThreads = 758;
+  constexpr int kBlockThreads = 768;
   constexpr int kItemsPerThread = 8;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     // fixme: support global-only.
