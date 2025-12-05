@@ -778,6 +778,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       Idx ridx = d_ridx[idx / feature_stride];
       if (full_tile) {
         prefetch_gpair_tile(idx, ridx);
+        prefetch_gidx_tile(idx, ridx);
       }
     }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
