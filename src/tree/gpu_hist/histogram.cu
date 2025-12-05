@@ -743,7 +743,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
           if (Policy::kCompressed) {
             compressed_bin += matrix.feature_segments[fidx];
           }
-          compressed_bin *= n_targets;
+          compressed_bin *= n_targets; // fixme (group.start_bin)
           // TODO(jiamingy): Assign a thread for each target.
           for (bst_target_t t = 0; t < n_targets; ++t) {
             auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
