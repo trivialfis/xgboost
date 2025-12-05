@@ -400,9 +400,7 @@ class MicroBenchHist : public ::testing::Test {
     this->page = MakeEllpackForTest(&ctx, n_samples, n_features, n_bins);
     this->cuts = page->CutsShared();
 
-    this->p_fg = std::make_unique<FeatureGroups>(
-        *cuts, true,
-        use_single_target ? dh::MaxSharedMemoryOptin(0) : std::numeric_limits<std::size_t>::max());
+    this->p_fg = std::make_unique<FeatureGroups>(*cuts, true, dh::MaxSharedMemory(0));
 
     bst_bin_t n_total_bins = n_targets * n_features * n_bins;
     auto fg_acc = p_fg->DeviceAccessor(ctx.Device());
@@ -522,8 +520,10 @@ class MicroBenchHist : public ::testing::Test {
   void BenchBuild() {
     auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
     auto hists = dh::device_vector<common::Span<GradientPairInt64>>{node_hist};
+    auto fg = p_fg->DeviceAccessor(ctx.Device());
+    std::cout << "fg:" << fg.NumGroups() << std::endl;
     this->histogram.BuildHistogram(this->ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}),
-                                   p_fg->DeviceAccessor(ctx.Device()),
+                                   fg,
                                    this->gpairs.View(this->ctx.Device()), dh::ToSpan(ridxs),
                                    dh::ToSpan(hists), ridx.size(), dh::ToSpan(this->quantizers));
   }
