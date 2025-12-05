@@ -208,12 +208,15 @@ class CompressedIterator {
       : buffer_{buffer}, symbol_bits_{detail::SymbolBits(num_symbols)} {}
 
 #if defined(__CUDACC__)
-  __device__ size_t Prefetch(std::size_t offset) const {
+  XGBOOST_DEV_INLINE std::size_t StartByte(std::size_t offset) const {
     const int bits_per_byte = 8;
     size_t start_bit_idx = ((offset + 1) * symbol_bits_ - 1);
     size_t start_byte_idx = start_bit_idx / bits_per_byte;
     start_byte_idx += detail::kPadding;
-
+    return start_byte_idx;
+  }
+  __device__ std::size_t Prefetch(std::size_t offset) const {
+    auto start_byte_idx = StartByte(offset);
     PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
     return start_byte_idx;
   }

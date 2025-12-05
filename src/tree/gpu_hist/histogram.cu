@@ -696,26 +696,93 @@ void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAcces
       matrix);
 }
 
-template <std::int32_t kBlockThreadsIn, std::int32_t kItemsPerThreadIn>
+template <std::int32_t kBlockThreadsIn, std::int32_t kItemsPerThreadIn, bool kCompressedIn>
 struct HistPolicy {
   static constexpr std::int32_t kBlockThreads = kBlockThreadsIn;
   static constexpr std::int32_t kItemsPerThread = kItemsPerThreadIn;
   static constexpr std::int32_t kTileSize = kBlockThreadsIn * kItemsPerThreadIn;
+  static constexpr bool kCompressed = kCompressedIn;
 };
 
 template <typename Policy, typename Accessor, typename RidxIter>
-__global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(Accessor matrix,
-                                                                    RidxIter* d_ridx_iters,
-                                                                    bst_node_t n_nodes) {}
+__global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
+    Accessor const matrix, FeatureGroupsAccessor const feature_groups,
+    common::IterSpan<RidxIter> const* d_ridx_iters, bst_node_t n_nodes) {
+  auto nidx_in_set = blockIdx.x % n_nodes;
+  FeatureGroup group = feature_groups[blockIdx.y];
+  auto d_ridx = d_ridx_iters[nidx_in_set];
+  std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+  bst_idx_t n_elements = feature_stride * d_ridx_iters[nidx_in_set].size();
+  using Idx = RowPartitioner::RowIndexT;
 
-void DeviceHistogramBuilder::BuildHistogram(CUDAContext const* ctx, EllpackAccessor const& matrix,
-                                            FeatureGroupsAccessor const& feature_groups,
-                                            linalg::MatrixView<GradientPair const> gpair,
-                                            common::Span<common::Span<const std::uint32_t>> ridxs,
-                                            common::Span<common::Span<GradientPairInt64>> hists,
-                                            std::size_t max_node_size,
-                                            common::Span<GradientQuantiser const> roundings) {
+  std::size_t const offset = blockIdx.x * Policy::kTileSize;
+  std::int32_t const valid_items =
+      cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
 
+  std::size_t start_bytes[Policy::kItemsPerThread];
+  bst_bin_t gidxs[Policy::kItemsPerThread];
+  auto prefetch_gidx_tile = [&](auto full_tile) {
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      const int idx = j * Policy::kBlockThreads + threadIdx.x;
+      Idx ridx = d_ridx[idx / feature_stride];
+      if (full_tile || idx < valid_items) {
+        start_bytes[j] = matrix.gidx_iter.Prefetch(offset + idx);
+      }
+    }
+  };
+  auto load_gidx_tile = [&](auto full_tile) {
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      const int idx = j * Policy::kBlockThreads + threadIdx.x;
+      if (full_tile || idx < valid_items) {
+        auto fidx = FeatIdx(group, idx, feature_stride);
+        bst_bin_t compressed_bin = matrix.gidx_iter.Read(start_bytes[j]);
+        if (Policy::kCompressed) {
+          compressed_bin += matrix.feature_segments[fidx];
+        }
+        gidxs[j] = compressed_bin;
+      }
+    }
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      const int idx = j * Policy::kBlockThreads + threadIdx.x;
+      if (full_tile || idx < valid_items) {
+        if (gidxs[j] == -1) {
+          printf("-1");
+        }
+      }
+    }
+  };
+
+  if (Policy::kTileSize == valid_items) {
+    prefetch_gidx_tile(std::true_type{});
+    load_gidx_tile(std::true_type{});
+  } else {
+    prefetch_gidx_tile(std::false_type{});
+    load_gidx_tile(std::false_type{});
+  }
+}
+
+void DeviceHistogramBuilder::BuildHistogram(
+    CUDAContext const* ctx, EllpackAccessor const& matrix,
+    FeatureGroupsAccessor const& feature_groups, linalg::MatrixView<GradientPair const> gpair,
+    common::Span<common::Span<const std::uint32_t>> /*ridxs*/,
+    common::Span<common::Span<GradientPairInt64>> hists, std::size_t max_node_size,
+    common::Span<GradientQuantiser const> roundings) {
+  auto acc = std::get<EllpackDeviceAccessor>(matrix);
+  using RidxIter = thrust::counting_iterator<cuda_impl::RowIndexT>;
+  dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(
+      hists.size(), common::IterSpan{thrust::make_counting_iterator(0u), gpair.Shape(0)});
+  constexpr int kBlockThreads = 512;
+  constexpr int kItemsPerThread = 4;
+  using Policy = HistPolicy<kBlockThreads, kItemsPerThread, true>;
+  auto kernel = HistKernel<Policy, EllpackDeviceAccessor, RidxIter>;
+
+  // fixme: get total rows from ridxs
+  auto n = gpair.Shape(0) * acc.row_stride;
+  auto n_grids = common::DivRoundUp(n, Policy::kTileSize);
+  CHECK_EQ(feature_groups.NumGroups(), 1);
+
+  kernel<<<n_grids, Policy::kBlockThreads>>>(acc, feature_groups, ridx_iters.data().get(),
+                                             hists.size());
 }
 
 void DeviceHistogramBuilder::AllReduceHist(Context const* ctx, MetaInfo const& info,
