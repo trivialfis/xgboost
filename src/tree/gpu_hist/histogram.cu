@@ -726,7 +726,9 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   auto d_node_hist = node_hists[nidx_in_set].data();
 
+  // grid stride loop
   auto const kStride = Policy::kTileSize * gridDim.x;
+  // first grid
   std::size_t offset = blockIdx.x * Policy::kTileSize;
 
   __syncthreads();
@@ -736,7 +738,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
         Idx ridx = d_ridx[idx / feature_stride];
-        common::PrefetchGlobalL2(&d_gpair(ridx, 0));
+        // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
         auto fidx = FeatIdx(group, idx, feature_stride);
         bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
         if (compressed_bin != matrix.NullValue()) {
@@ -769,6 +771,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   // Write shared memory back to global memory
   __syncthreads();
   for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
+    // fixme: n targets, need to handle it in the feature groups as well.
     AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
   }
 }
