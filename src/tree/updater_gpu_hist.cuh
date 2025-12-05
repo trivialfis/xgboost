@@ -136,20 +136,20 @@ class MultiTargetHistMaker {
 
     std::vector<common::Span<GradientPairInt64>> h_hists;
     std::vector<common::Span<RowIndexT const>> h_ridxs;
-    std::size_t n_total_samples = 0;
+    std::size_t n_max_samples = 0;
     for (auto nidx : build_nodes) {
       auto d_ridx = this->partitioners_.At(k)->GetRows(nidx);
       h_ridxs.push_back(d_ridx);
       auto d_hist = histogram_.GetNodeHistogram(nidx);
       h_hists.push_back(d_hist);
 
-      n_total_samples += d_ridx.size();
+      n_max_samples = std::max(d_ridx.size(), n_max_samples);
     }
     dh::device_vector<common::Span<GradientPairInt64>> hists{h_hists};
     dh::device_vector<common::Span<RowIndexT const>> ridxs{h_ridxs};
     this->histogram_.BuildHistogram(
         this->ctx_->CUDACtx(), acc, this->feature_groups_->DeviceAccessor(this->ctx_->Device()),
-        d_gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), n_total_samples, roundings);
+        d_gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), n_max_samples, roundings);
   }
 
  public:

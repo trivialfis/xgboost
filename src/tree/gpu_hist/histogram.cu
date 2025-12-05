@@ -711,7 +711,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
     linalg::MatrixView<GradientPair const> d_gpair,
     common::Span<GradientQuantiser const> roundings) {
   auto d_roundings = roundings.data();
-  auto nidx_in_set = blockIdx.x % n_nodes;  // fixme: maybe binary search
+  auto nidx_in_set = blockIdx.z;
   FeatureGroup group = feature_groups[blockIdx.y];
   auto d_ridx = d_ridx_iters[nidx_in_set];
   std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
@@ -759,21 +759,22 @@ void DeviceHistogramBuilder::BuildHistogram(
     CUDAContext const* ctx, EllpackAccessor const& matrix,
     FeatureGroupsAccessor const& feature_groups, linalg::MatrixView<GradientPair const> gpair,
     common::Span<common::Span<cuda_impl::RowIndexT const>> ridxs,
-    common::Span<common::Span<GradientPairInt64>> hists, std::size_t n_total_samples,
+    common::Span<common::Span<GradientPairInt64>> hists, std::size_t n_max_samples,
     common::Span<GradientQuantiser const> roundings) {
   CHECK_EQ(ridxs.size(), hists.size());
+  auto n_nodes = hists.size();
 
   constexpr int kBlockThreads = 512;
   constexpr int kItemsPerThread = 8;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     using Policy = common::GetValueT<decltype(policy)>;
-    auto n = n_total_samples * acc.row_stride;
+    auto n = n_max_samples * acc.row_stride;
     auto n_grids = common::DivRoundUp(n, Policy::kTileSize);
     CHECK_EQ(feature_groups.NumGroups(), 1);
     CHECK_GE(roundings.size(), 1);
-
-    kernel<<<n_grids, Policy::kBlockThreads, 0, ctx->Stream()>>>(
-        acc, feature_groups, ridx_iters, hists.data(), hists.size(), gpair, roundings);
+    dim3 conf(kBlockThreads, feature_groups.NumGroups(), n_nodes);
+    kernel<<<n_grids, conf, 0, ctx->Stream()>>>(acc, feature_groups, ridx_iters, hists.data(),
+                                                hists.size(), gpair, roundings);
   };
 
   std::visit(
@@ -781,7 +782,7 @@ void DeviceHistogramBuilder::BuildHistogram(
         using AccessorT = common::GetValueT<decltype(acc)>;
         using Policy = HistPolicy<kBlockThreads, kItemsPerThread, true>;
 
-        if (ridxs.size() == 1 && n_total_samples == acc.n_rows) {
+        if (ridxs.size() == 1 && n_max_samples == acc.n_rows) {
           using RidxIter = thrust::counting_iterator<cuda_impl::RowIndexT>;
           dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(
               hists.size(), common::IterSpan{thrust::make_counting_iterator(0u), gpair.Shape(0)});
