@@ -29,7 +29,7 @@ TEST(GpuMultiHistogram, Basic) {
 
   DeviceHistogramBuilder histogram;
   bst_bin_t n_total_bins = n_targets * n_features * n_bins;
-  histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, true);
+  histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, false);
 
   auto gpairs = linalg::Constant(&ctx, GradientPair{1.0f, 1.0f}, n_samples, n_targets);
   dh::device_vector<std::uint32_t> ridx(n_samples);
@@ -404,7 +404,7 @@ class MicroBenchHist : public ::testing::Test {
 
     bst_bin_t n_total_bins = n_targets * n_features * n_bins;
     auto fg_acc = p_fg->DeviceAccessor(ctx.Device());
-    histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, !use_single_target);
+    histogram.Reset(&ctx, /*max_cached_hist_nodes=*/2, fg_acc, n_total_bins, false);
 
     gpairs = linalg::Constant(&ctx, GradientPair{1.0f, 1.0f}, n_samples, n_targets);
 
