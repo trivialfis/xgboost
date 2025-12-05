@@ -217,6 +217,7 @@ class CompressedIterator {
   }
   __device__ std::size_t Prefetch(std::size_t offset) const {
     auto start_byte_idx = StartByte(offset);
+    // [[maybe_unused]] auto _ = buffer_[start_byte_idx - 4];
     PrefetchGlobalL2(buffer_ + (start_byte_idx - 4));
     return start_byte_idx;
   }

@@ -715,7 +715,30 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   FeatureGroup group = feature_groups[blockIdx.y];
   auto d_ridx = d_ridx_iters[nidx_in_set];
   std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+
+  // grid stride loop
+  auto const kStride = Policy::kTileSize * gridDim.x;
+  // first grid
+  std::size_t offset = blockIdx.x * Policy::kTileSize;
+
   bst_idx_t n_elements = feature_stride * d_ridx_iters[nidx_in_set].size();
+
+  auto prefetch_gidx_tile = [&](auto idx, auto ridx) {
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
+  };
+
+  // {
+  //   std::int32_t const valid_items =
+  //       cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
+  //   if (Policy::kTileSize == valid_items) {
+  //     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+  //       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
+  //       prefetch_gidx_tile(idx, valid_items);
+  //     }
+  //   }
+  // }
+
   using Idx = RowPartitioner::RowIndexT;
   bst_target_t const n_targets = roundings.size();
 
@@ -726,20 +749,14 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   auto d_node_hist = node_hists[nidx_in_set].data();
 
-  // grid stride loop
-  auto const kStride = Policy::kTileSize * gridDim.x;
-  // first grid
-  std::size_t offset = blockIdx.x * Policy::kTileSize;
-
   __syncthreads();
 
-  auto prefetch_valid_tile = [&](auto idx, auto ridx) {
+  auto prefetch_gpair_tile = [&](auto idx, auto ridx) {
     common::PrefetchGlobalL2(&d_gpair(ridx, 0));
   };
 
   auto process_valid_tile = [&](auto idx) {
     Idx ridx = d_ridx[idx / feature_stride];
-    // common::PrefetchGlobalL2(&d_gpair(ridx, 0));
     auto fidx = FeatIdx(group, idx, feature_stride);
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
@@ -760,7 +777,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       Idx ridx = d_ridx[idx / feature_stride];
       if (full_tile) {
-        prefetch_valid_tile(idx, ridx);
+        prefetch_gpair_tile(idx, ridx);
       }
     }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
