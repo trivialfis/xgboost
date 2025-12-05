@@ -520,6 +520,8 @@ class MicroBenchHist : public ::testing::Test {
   void BenchBuild() {
     auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
     auto hists = dh::device_vector<common::Span<GradientPairInt64>>{node_hist};
+    std::cout << "gpair size:" << common::HumanMemUnit(this->gpairs.Size() * sizeof(GradientPair))
+              << std::endl;
     this->histogram.BuildHistogram(this->ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}),
                                    p_fg->DeviceAccessor(ctx.Device()),
                                    this->gpairs.View(this->ctx.Device()), dh::ToSpan(ridxs),
