@@ -785,6 +785,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   constexpr int kBlockThreads = 758;
   constexpr int kItemsPerThread = 8;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
+    // fixme: support global-only.
     using Policy = common::GetValueT<decltype(policy)>;
 
     int columns_per_group = common::DivRoundUp(acc.row_stride, feature_groups.NumGroups());
@@ -792,6 +793,7 @@ void DeviceHistogramBuilder::BuildHistogram(
     std::size_t items_per_group = n_max_samples * columns_per_group;
 
     auto n_grids = common::DivRoundUp(items_per_group, Policy::kTileSize);
+    CHECK_GT(n_grids, 0);
 
     std::int32_t num_groups = feature_groups.NumGroups();
     std::int32_t n_mps = 0;
@@ -801,12 +803,15 @@ void DeviceHistogramBuilder::BuildHistogram(
     auto shmem_bytes = feature_groups.ShmemSize();
     dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_blocks_per_mp, kernel,
                                                                 Policy::kBlockThreads, shmem_bytes));
+    CHECK_GE(n_blocks_per_mp, 1);
 
     n_grids = std::min(n_blocks_per_mp * n_mps, static_cast<std::int32_t>(n_grids));
 
     CHECK_GE(roundings.size(), 1);
+    CHECK_GE(feature_groups.NumGroups(), 1);
     dim3 conf(n_grids, feature_groups.NumGroups(), n_nodes);
-    std::cout << "x:" << conf.x << " y:" << conf.y << " z:" << conf.z << " n_grids:" << n_grids << std::endl;
+    std::cout << "x:" << conf.x << " y:" << conf.y << " z:" << conf.z << " n_grids:" << n_grids
+              << ",columns_per_group: " << columns_per_group << std::endl;
     kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->Stream()>>>(
         acc, feature_groups, ridx_iters, hists.data(), hists.size(), gpair, roundings);
     dh::safe_cuda(cudaPeekAtLastError());
