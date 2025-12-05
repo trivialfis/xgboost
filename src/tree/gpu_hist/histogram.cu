@@ -719,19 +719,16 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   using Idx = RowPartitioner::RowIndexT;
   bst_target_t const n_targets = roundings.size();
 
-  std::size_t const offset = blockIdx.x * Policy::kTileSize;
-  std::int32_t const valid_items =
-      cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
 
   auto d_node_hist = node_hists[nidx_in_set].data();
 
-  auto process_gpair_tile = [&](auto full_tile) {
+  auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-      const int idx = j * Policy::kBlockThreads + threadIdx.x;
+      const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
-        Idx ridx = d_ridx[(idx + offset) / feature_stride];
+        Idx ridx = d_ridx[idx / feature_stride];
         common::PrefetchGlobalL2(&d_gpair(ridx, 0));
-        auto fidx = FeatIdx(group, (idx + offset), feature_stride);
+        auto fidx = FeatIdx(group, idx, feature_stride);
         bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
         if (compressed_bin != matrix.NullValue()) {
           if (Policy::kCompressed) {
@@ -748,10 +745,18 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
     }
   };
 
-  if (Policy::kTileSize == valid_items) {
-    process_gpair_tile(std::true_type{});
-  } else {
-    process_gpair_tile(std::false_type{});
+  auto const kStride = Policy::kTileSize * gridDim.x;
+  std::size_t offset = blockIdx.x * Policy::kTileSize;
+
+  while (offset < n_elements) {
+    std::int32_t const valid_items =
+        cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
+    if (Policy::kTileSize == valid_items) {
+      process_gpair_tile(std::true_type{}, offset, valid_items);
+    } else {
+      process_gpair_tile(std::false_type{}, offset, valid_items);
+    }
+    offset += kStride;
   }
 }
 
@@ -768,13 +773,30 @@ void DeviceHistogramBuilder::BuildHistogram(
   constexpr int kItemsPerThread = 8;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     using Policy = common::GetValueT<decltype(policy)>;
-    auto n = n_max_samples * acc.row_stride;
-    auto n_grids = common::DivRoundUp(n, Policy::kTileSize);
-    CHECK_EQ(feature_groups.NumGroups(), 1);
+
+    int columns_per_group = common::DivRoundUp(acc.row_stride, feature_groups.NumGroups());
+    // Average number of matrix elements processed by each group
+    std::size_t items_per_group = n_max_samples * columns_per_group;
+
+    auto n_grids = common::DivRoundUp(items_per_group, Policy::kTileSize);
+
+    std::int32_t num_groups = feature_groups.NumGroups();
+    std::int32_t n_mps = 0;
+    dh::safe_cuda(cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, 0));  // fixme, ordinal
+
+    std::int32_t n_blocks_per_mp = 0;
+    auto shmem_bytes = feature_groups.ShmemSize();
+    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_blocks_per_mp, kernel,
+                                                                Policy::kBlockThreads, shmem_bytes));
+
+    n_grids = std::min(n_blocks_per_mp * n_mps, static_cast<std::int32_t>(n_grids));
+
     CHECK_GE(roundings.size(), 1);
-    dim3 conf(kBlockThreads, feature_groups.NumGroups(), n_nodes);
-    kernel<<<n_grids, conf, 0, ctx->Stream()>>>(acc, feature_groups, ridx_iters, hists.data(),
-                                                hists.size(), gpair, roundings);
+    dim3 conf(n_grids, feature_groups.NumGroups(), n_nodes);
+    std::cout << "x:" << conf.x << " y:" << conf.y << " z:" << conf.z << " n_grids:" << n_grids << std::endl;
+    kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->Stream()>>>(
+        acc, feature_groups, ridx_iters, hists.data(), hists.size(), gpair, roundings);
+    dh::safe_cuda(cudaPeekAtLastError());
   };
 
   std::visit(
