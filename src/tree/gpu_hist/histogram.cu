@@ -775,23 +775,23 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
-    // for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-    //   const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
-    //   Idx ridx = d_ridx[idx / feature_stride];
-    //   if (full_tile) {
-    //     prefetch_gpair_tile(idx, ridx);
-    //     prefetch_gidx_tile(idx, ridx);
-    //   }
-    // }
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      if (full_tile) {
+        const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
+        Idx ridx = d_ridx[idx / feature_stride];
+        prefetch_gpair_tile(idx, ridx);
+        prefetch_gidx_tile(idx, ridx);
+      }
+    }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
-        if (j != Policy::kItemsPerThread - 1) {
-          const int idx = offset + (j + 1) * Policy::kBlockThreads + threadIdx.x;
-          Idx ridx = d_ridx[idx / feature_stride];
-          prefetch_gpair_tile(idx, ridx);
-          prefetch_gidx_tile(idx, ridx);
-        }
+        // if (j != Policy::kItemsPerThread - 1) {
+        //   const int idx = offset + (j + 1) * Policy::kBlockThreads + threadIdx.x;
+        //   Idx ridx = d_ridx[idx / feature_stride];
+        //   prefetch_gpair_tile(idx, ridx);
+        //   prefetch_gidx_tile(idx, ridx);
+        // }
         process_valid_tile(idx);
       }
     }
@@ -826,7 +826,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   auto n_nodes = hists.size();
 
   constexpr int kBlockThreads = 1024;
-  constexpr int kItemsPerThread = 8;
+  constexpr int kItemsPerThread = 4;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     // fixme: support global-only.
     using Policy = common::GetValueT<decltype(policy)>;
