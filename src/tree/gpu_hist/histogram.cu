@@ -775,14 +775,14 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
-    // for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-    //   if (full_tile) {
-    //     const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
-    //     Idx ridx = d_ridx[idx / feature_stride];
-    //     prefetch_gpair_tile(idx, ridx);
-    //     prefetch_gidx_tile(idx, ridx);
-    //   }
-    // }
+    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+      if (full_tile) {
+        const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
+        Idx ridx = d_ridx[idx / feature_stride];
+        prefetch_gpair_tile(idx, ridx);
+        prefetch_gidx_tile(idx, ridx);
+      }
+    }
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
