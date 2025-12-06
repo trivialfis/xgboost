@@ -724,8 +724,10 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   bst_idx_t n_elements = feature_stride * d_ridx_iters[nidx_in_set].size();
 
   auto prefetch_gidx_tile = [&](auto idx, auto ridx) {
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
+    if (__shfl_up_sync(0xFFFFFFFF, ridx, 1) != ridx) {
+      auto fidx = FeatIdx(group, idx, feature_stride);
+      matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
+    }
   };
 
   // {
