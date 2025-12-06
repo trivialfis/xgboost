@@ -760,26 +760,24 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   auto process_valid_tile = [&](auto idx) {
     Idx ridx = d_ridx[idx / feature_stride];
     auto fidx = FeatIdx(group, idx, feature_stride);
-    // bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
-    auto compressed_bin = IterIdx(matrix, ridx, fidx) % group.num_bins;
+    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
-      // if (Policy::kCompressed) {
-      //   compressed_bin += matrix.feature_segments[fidx];
-      // }
-      // compressed_bin *= n_targets;  // fixme (group.start_bin)
+      if (Policy::kCompressed) {
+        compressed_bin += matrix.feature_segments[fidx];
+      }
+      compressed_bin *= n_targets;  // fixme (group.start_bin)
       // TODO(jiamingy): Assign a thread for each target.
       for (bst_target_t t = 0; t < n_targets; ++t) {
         auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-        //  - group.start_bin
-        AtomicAddGpairShared(node_hist + compressed_bin, adjusted);
+        AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
       }
     }
   };
 
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-      const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile) {
+        const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
         Idx ridx = d_ridx[idx / feature_stride];
         prefetch_gpair_tile(idx, ridx);
         prefetch_gidx_tile(idx, ridx);
