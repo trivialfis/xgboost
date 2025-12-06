@@ -769,7 +769,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       // compressed_bin *= n_targets;  // fixme (group.start_bin)
       // TODO(jiamingy): Assign a thread for each target.
       for (bst_target_t t = 0; t < n_targets; ++t) {
-        auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
+        auto adjusted = d_roundings[t].ToFixedPoint(GradientPair{1.0f, 1.0f});
         //  - group.start_bin
         AtomicAddGpairShared(node_hist + compressed_bin, adjusted);
       }
