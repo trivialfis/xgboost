@@ -769,9 +769,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       // TODO(jiamingy): Assign a thread for each target.
       for (bst_target_t t = 0; t < n_targets; ++t) {
         auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-        if (adjusted.GetQuantisedHess() == -1) {
-          AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
-        }
+        AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
       }
     }
   };
@@ -814,7 +812,9 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   __syncthreads();
   for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
     // fixme: n targets, need to handle it in the feature groups as well.
-    AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
+    if (node_hist[i].GetQuantisedHess() == -1) {
+      AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
+    }
   }
 }
 
