@@ -946,10 +946,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   extern __shared__ char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
-                     reinterpret_cast<bst_bin_t*>(shmem) + (kBlockThreads / 2)};
+                     reinterpret_cast<bst_bin_t*>(shmem) + kTileSize};
   // fixme: align
-  GradientPairInt64* node_hist =
-      reinterpret_cast<GradientPairInt64*>(bufs[1] + (kBlockThreads / 2));
+  GradientPairInt64* node_hist = reinterpret_cast<GradientPairInt64*>(bufs[1] + kTileSize);
   // Initialize the shared memory for the partial histogram
   dh::BlockFill(node_hist, group.num_bins, GradientPairInt64{});
 
@@ -962,7 +961,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   // Part ii of the consumer
   auto calc_idx = [&](auto full_tile, auto valid_items, auto offset, bst_bin_t* buf) {
     std::int32_t const idx = offset + threadIdx.x;
-    if (full_tile || idx < valid_items) {
+    if (full_tile || threadIdx.x < valid_items) {
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
       std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
@@ -975,8 +974,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   // The producer
   auto load_gidx = [&](auto full_tile, auto valid_items, bst_bin_t* buf) {
-    if (full_tile || threadIdx.x < valid_items) {
-      buf[threadIdx.x] = matrix.gidx_iter[buf[threadIdx.x]];
+    auto idx = threadIdx.x - kTileSize;
+    if (full_tile || idx < valid_items) {
+      buf[idx] = matrix.gidx_iter[buf[idx]];
     }
   };
 
@@ -988,6 +988,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       calc_idx(std::false_type{}, valid_items, offset, buf);
     }
   };
+
+  auto n_stages = common::DivRoundUp(n_elements, kStride);
 
   auto consumer = [&] {
     // Calculate the index for the first buffer
@@ -1003,7 +1005,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
     std::int32_t stage = 0;
 
-    while (offset < n_elements) {
+    for (std::size_t j = 0; j < n_stages; ++j) {
+      auto offset = j * kStride + blockIdx.x * kTileSize;
+
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
       filled[stage * kProducers + warp_id].arrive_and_wait();
@@ -1013,10 +1017,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         process_gidx(std::false_type{}, bufs[stage]);
       }
 
-      offset += kStride;
-
       // Calculate the idx using the same buffer (stage)
-      if (offset < n_elements) {
+      if (j != (n_stages - 1)) {
+        auto offset = (j + 1) * kStride + blockIdx.x * kTileSize;
         if (kTileSize == valid_items) {
           calc_idx(std::true_type{}, valid_items, offset, bufs[stage]);
         } else {
@@ -1033,7 +1036,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   auto producer = [&] {
     std::int32_t stage = 0;
-    while (offset < n_elements) {
+    for (std::size_t j = 0; j < n_stages; ++j) {
+      auto offset = j * kStride + blockIdx.x * kTileSize;
       std::int32_t const valid_items = calc_valid_items(offset);
 
       // wait for the consumer to consume the data
@@ -1046,7 +1050,6 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       // signal the data is ready for consumption
       [[maybe_unused]] auto token = filled[stage * kProducers + warp_id].arrive();
 
-      offset += kStride;
       stage ^= 1;
     }
   };
@@ -1076,7 +1079,7 @@ void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAcc
 
   auto n_grids = common::DivRoundUp(items_per_group, kTileSize);
   dim3 conf(n_grids, feature_groups.NumGroups(), n_nodes);
-  std::size_t shmem_bytes = feature_groups.ShmemSize() + sizeof(bst_bin_t) * kBlockThreads;
+  std::size_t shmem_bytes = feature_groups.ShmemSize() + sizeof(bst_bin_t) * Policy::kBlockThreads;
 
   using RidxIter = thrust::counting_iterator<cuda_impl::RowIndexT>;
   dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(
