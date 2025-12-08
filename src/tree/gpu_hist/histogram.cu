@@ -908,8 +908,13 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   // 2 buffers for each warp, each buffer requires 2 barrier
   // We use half of the warps as producer
   // in total, we have kWarps * 2 barriers.
-  constexpr std::int32_t kBarriers = kWarps / 2 * 4;
-  __shared__ cuda::barrier<cuda::thread_scope_block> barriers[kBarriers];
+  static_assert(kWarps % 2 == 0);
+  constexpr std::int32_t kProducers = kWarps / 2;
+  constexpr std::int32_t kBuffers = kProducers * 2;
+  constexpr std::int32_t kBarriers = kBuffers * 2;
+
+  using Barrier = cuda::barrier<cuda::thread_scope_block>;
+  __shared__ Barrier barriers[kBarriers];
 
   auto const lane_id = Laneid();
   auto const warp_id = threadIdx.x / kWarpThreads;
@@ -918,6 +923,11 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   if (lane_id < 2) {
     init(barriers + warp_id * 2 + lane_id, kWarpThreads);
   }
+
+  // Consumer signals data has been consumed
+  Barrier* consumed = barriers;
+  // Producer signals data has been produced
+  Barrier* filled = consumed + kBuffers;
 
   auto nidx_in_set = blockIdx.z;
   auto d_ridx = d_ridx_iters[nidx_in_set];
@@ -935,33 +945,49 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   bst_bin_t* buf1 = buf0 + (kBlockThreads / 2);
   // fixme: align
   GradientPairInt64* node_hist = reinterpret_cast<GradientPairInt64*>(buf1 + (kBlockThreads / 2));
-
+  // Initialize the shared memory for the partial histogram
   dh::BlockFill(node_hist, group.num_bins, GradientPairInt64{});
 
   __syncthreads();
 
-  auto calc_idx = [&](auto offset, bst_bin_t* buf) {
-    const int idx = offset + threadIdx.x;
-    cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
-    auto fidx = FeatIdx(group, idx, feature_stride);
-    std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
-    buf[threadIdx.x] = iidx;
+  auto calc_valid_items = [&](auto offset) {
+    return cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
   };
+
+  auto calc_idx = [&](auto full_tile, auto valid_items, auto offset, bst_bin_t* buf) {
+    int const idx = offset + threadIdx.x;
+    if (full_tile || idx < valid_items) {
+      cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
+      auto fidx = FeatIdx(group, idx, feature_stride);
+      std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
+      buf[threadIdx.x] = iidx;
+    }
+  };
+  auto process_gidx = [&]() {
+
+  };
+
   auto load_gidx = [&](bst_bin_t* buf) {
     auto gidx = matrix.gidx_iter[buf[threadIdx.x]];
     buf[threadIdx.x] = gidx;
   };
-  auto process_gidx = []() {
-
-  };
 
   if (!is_producer) {
-    calc_idx(offset, buf0);
+    std::int32_t const valid_items = calc_valid_items(offset);
+    if (Policy::kTileSize == valid_items) {
+      calc_idx(std::true_type{}, valid_items, offset, buf0);
+    } else {
+      calc_idx(std::false_type{}, valid_items, offset, buf0);
+    }
+    // Signal the first buffer is ready for the initial fill
+    [[maybe_unused]] auto token0 = consumed[warp_id].arrive();
+    [[maybe_unused]] auto token1 = consumed[kProducers + warp_id].arrive();
   }
 
+  auto token1 = consumed[kProducers + warp_id].arrive();
+
   while (offset < n_elements) {
-    std::int32_t const valid_items =
-        cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
+    std::int32_t const valid_items = calc_valid_items(offset);
 
     if (Policy::kTileSize == valid_items) {
       if (is_producer) {
