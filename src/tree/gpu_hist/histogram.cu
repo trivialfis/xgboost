@@ -722,7 +722,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   // first grid
   std::size_t offset = blockIdx.x * Policy::kTileSize;
 
-  bst_idx_t n_elements = feature_stride * d_ridx_iters[nidx_in_set].size();
+  bst_idx_t n_elements = feature_stride * d_ridx.size();
 
   auto prefetch_gidx_tile = [&](auto idx, auto ridx) {
     if (__shfl_up_sync(0xFFFFFFFF, ridx, 1) != ridx) {
@@ -917,8 +917,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   auto const lane_id = Laneid();
   auto const warp_id = static_cast<std::int32_t>(threadIdx.x) / kWarpThreads;
-  bool const is_producer = warp_id & 1;   // warp_id %2 == 1
-  bool const is_consumer = !is_producer;  // warp_id %2 == 0
+  bool const is_consumer = !(warp_id & 1);  // warp_id %2 == 0
 
   using Barrier = cuda::barrier<cuda::thread_scope_block>;
   __shared__ Barrier barriers[kBarriers];
@@ -933,11 +932,11 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   }
 
   auto nidx_in_set = blockIdx.z;
-  auto n_targets = d_gpair.Shape(1);
-  auto d_ridx = d_ridx_iters[nidx_in_set];
-  FeatureGroup group = feature_groups[blockIdx.y];
-  std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
-  std::int32_t n_elements = feature_stride * d_ridx.size();
+  auto const n_targets = d_gpair.Shape(1);
+  auto const d_ridx = d_ridx_iters[nidx_in_set];
+  FeatureGroup const group = feature_groups[blockIdx.y];
+  std::int32_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+  std::int32_t const n_elements = feature_stride * d_ridx.size();
 
   // grid stride loop
   std::int32_t const kStride = gridDim.x * kTileSize;
@@ -997,11 +996,10 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   // The producer
   auto load_gidx = [&](auto full_tile, auto valid_items, std::int32_t offset, bst_bin_t* buf) {
+    // the thread index of the corresponding consumer
     std::int32_t tidx = (warp_id - 1) / 2 * kWarpThreads + lane_id;
     std::int32_t const idx = offset + tidx;
-    // auto idx = threadIdx.x - kWarpThreads;  // the thread index of the corresponding consumer
     if (full_tile || idx < valid_items) {
-      // SPAN_LT(buf[cidx], matrix.row_stride * matrix.n_rows);
       buf[tidx] = matrix.gidx_iter[buf[tidx]];
     }
   };
