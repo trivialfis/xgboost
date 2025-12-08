@@ -919,6 +919,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   auto const lane_id = Laneid();
   auto const warp_id = threadIdx.x / kWarpThreads;
   bool const is_producer = warp_id & 1;
+  bool const is_consumer = !is_producer;
 
   if (lane_id < 2) {
     init(barriers + warp_id * 2 + lane_id, kWarpThreads);
@@ -941,10 +942,11 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   std::size_t offset = blockIdx.x;
 
   extern __shared__ char shmem[];
-  bst_bin_t* buf0 = reinterpret_cast<bst_bin_t*>(shmem);
-  bst_bin_t* buf1 = buf0 + (kBlockThreads / 2);
+  bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
+                     reinterpret_cast<bst_bin_t*>(shmem) + (kBlockThreads / 2)};
   // fixme: align
-  GradientPairInt64* node_hist = reinterpret_cast<GradientPairInt64*>(buf1 + (kBlockThreads / 2));
+  GradientPairInt64* node_hist =
+      reinterpret_cast<GradientPairInt64*>(bufs[1] + (kBlockThreads / 2));
   // Initialize the shared memory for the partial histogram
   dh::BlockFill(node_hist, group.num_bins, GradientPairInt64{});
 
@@ -954,6 +956,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     return cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
   };
 
+  // Part ii of the consumer
   auto calc_idx = [&](auto full_tile, auto valid_items, auto offset, bst_bin_t* buf) {
     int const idx = offset + threadIdx.x;
     if (full_tile || idx < valid_items) {
@@ -963,39 +966,86 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       buf[threadIdx.x] = iidx;
     }
   };
-  auto process_gidx = [&]() {
-
+  // Part i of the consumer
+  auto process_gidx = [&](auto full_tile, bst_bin_t const* buf) {
   };
 
-  auto load_gidx = [&](bst_bin_t* buf) {
-    auto gidx = matrix.gidx_iter[buf[threadIdx.x]];
-    buf[threadIdx.x] = gidx;
+  // The producer
+  auto load_gidx = [&](auto full_tile, bst_bin_t* buf) {
+    buf[threadIdx.x] = matrix.gidx_iter[buf[threadIdx.x]];
   };
 
-  if (!is_producer) {
+  auto initial_consume = [&](auto offset, bst_bin_t* buf) {
     std::int32_t const valid_items = calc_valid_items(offset);
     if (Policy::kTileSize == valid_items) {
-      calc_idx(std::true_type{}, valid_items, offset, buf0);
+      calc_idx(std::true_type{}, valid_items, offset, buf);
     } else {
-      calc_idx(std::false_type{}, valid_items, offset, buf0);
+      calc_idx(std::false_type{}, valid_items, offset, buf);
     }
+  };
+
+  if (is_consumer) {
+    // Calculate the index for the first buffer
+    initial_consume(offset, bufs[0]);
     // Signal the first buffer is ready for the initial fill
     [[maybe_unused]] auto token0 = consumed[warp_id].arrive();
+
+    if (offset + kStride < n_elements) {
+      initial_consume(offset + kStride, bufs[1]);
+    }
     [[maybe_unused]] auto token1 = consumed[kProducers + warp_id].arrive();
+  } else {
+    consumed[warp_id].arrive_and_wait();
+    load_gidx(std::true_type{}, bufs[0]);
+    consumed[kProducers + warp_id].arrive_and_wait();
+    load_gidx(std::true_type{}, bufs[1]);
   }
 
-  auto token1 = consumed[kProducers + warp_id].arrive();
-
-  while (offset < n_elements) {
-    std::int32_t const valid_items = calc_valid_items(offset);
-
-    if (Policy::kTileSize == valid_items) {
-      if (is_producer) {
+  auto consumer = [&] {
+    std::int32_t stage = 0;
+    while (offset < n_elements) {
+      std::int32_t const valid_items = calc_valid_items(offset);
+      // wait for buffer to be ready to use.
+      filled[stage * kProducers + warp_id].arrive_and_wait();
+      if (Policy::kTileSize == valid_items) {
+        process_gidx(std::true_type{}, bufs[stage]);
+        calc_idx(std::true_type{}, valid_items, offset + kStride, bufs[stage]);
       } else {
+        process_gidx(std::false_type{}, bufs[stage]);
+        calc_idx(std::false_type{}, valid_items, offset + kStride, bufs[stage]);
       }
-    }
+      // signal buffer is used, ready for filling.
+      auto token = consumed[stage * kProducers + warp_id].arrive();
 
-    offset += kStride;
+      offset += kStride;
+      stage ^= 1;
+    }
+  };
+
+  auto producer = [&] {
+    std::int32_t stage = 0;
+    while (offset < n_elements) {
+      std::int32_t const valid_items = calc_valid_items(offset);
+
+      // wait for the consumer to consume the data
+      consumed[stage * kProducers + warp_id].arrive_and_wait();
+      if (Policy::kTileSize == valid_items) {
+        load_gidx(std::true_type{}, bufs[stage]);
+      } else {
+        load_gidx(std::false_type{}, bufs[stage]);
+      }
+      // signal the data is ready for consumption
+      [[maybe_unused]] auto token = filled[stage * kProducers + warp_id].arrive();
+
+      offset += kStride;
+      stage ^= 1;
+    }
+  };
+
+  if (is_consumer) {
+    consumer();
+  } else {
+    producer();
   }
 }
 
