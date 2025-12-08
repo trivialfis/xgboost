@@ -933,6 +933,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   }
 
   auto nidx_in_set = blockIdx.z;
+  auto n_targets = d_gpair.Shape(1);
   auto d_ridx = d_ridx_iters[nidx_in_set];
   auto n_elements = matrix.row_stride * d_ridx.size();
   FeatureGroup group = feature_groups[blockIdx.y];
@@ -946,6 +947,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   extern __shared__ __align__(16) char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
                      reinterpret_cast<bst_bin_t*>(shmem) + kTileSize};
+
+  auto d_roundings = roundings.data();
   // fixme: align
   GradientPairInt64* node_hist = reinterpret_cast<GradientPairInt64*>(bufs[1] + kTileSize);
   // Initialize the shared memory for the partial histogram
@@ -969,7 +972,27 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     }
   };
   // Part i of the consumer
-  auto process_gidx = [&](auto full_tile, bst_bin_t const* buf) {
+  auto process_gidx = [&](auto full_tile, auto valid_items, bst_bin_t const* buf) {
+    std::int32_t const idx = offset + threadIdx.x;
+
+    if (full_tile || threadIdx.x < valid_items) {
+      auto cidx = threadIdx.x - (warp_id / 2) * kWarpThreads;
+      auto compressed_bin = buf[cidx];
+      if (compressed_bin != matrix.NullValue()) {
+        if (Policy::kCompressed) {
+          auto fidx = FeatIdx(group, idx, feature_stride);
+          compressed_bin += matrix.feature_segments[fidx];
+        }
+        cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
+        compressed_bin *= n_targets;  // fixme (group.start_bin)
+        // TODO(jiamingy): Assign a thread for each target.
+        for (bst_target_t t = 0; t < n_targets; ++t) {
+          auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
+          AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
+        }
+      }
+    }
+
   };
 
   // The producer
@@ -1015,9 +1038,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       // wait for buffer to be ready to use.
       filled[warp_id + stage].arrive_and_wait();
       if (kTileSize == valid_items) {
-        process_gidx(std::true_type{}, bufs[stage]);
+        process_gidx(std::true_type{}, valid_items, bufs[stage]);
       } else {
-        process_gidx(std::false_type{}, bufs[stage]);
+        process_gidx(std::false_type{}, valid_items, bufs[stage]);
       }
 
       // Calculate the idx using the same buffer (stage)
