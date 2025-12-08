@@ -984,14 +984,6 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     }
   };
 
-  if (is_consumer) {
-  } else {
-    consumed[warp_id].arrive_and_wait();
-    load_gidx(std::true_type{}, bufs[0]);
-    consumed[kProducers + warp_id].arrive_and_wait();
-    load_gidx(std::true_type{}, bufs[1]);
-  }
-
   auto consumer = [&] {
     // Calculate the index for the first buffer
     initial_consume(offset, bufs[0]);
@@ -999,6 +991,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     [[maybe_unused]] auto token0 = consumed[warp_id].arrive();
     // Calculate the index for the second buffer
     if (offset + kStride < n_elements) {
+      // This is the only place we need to loop ahead. Afterward, the barrier takes care
+      // of it.
       initial_consume(offset + kStride, bufs[1]);
     }
     // Signal the second buffer is ready for the initial fill
@@ -1018,7 +1012,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         calc_idx(std::false_type{}, valid_items, offset + kStride, bufs[stage]);
       }
       // signal buffer is used, ready for filling.
-      auto token = consumed[stage * kProducers + warp_id].arrive();
+      [[maybe_unused]] auto token = consumed[stage * kProducers + warp_id].arrive();
 
       offset += kStride;
       stage ^= 1;
