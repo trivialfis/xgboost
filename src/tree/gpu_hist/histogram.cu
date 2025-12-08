@@ -1088,6 +1088,18 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   } else {
     producer();
   }
+
+  // Write shared memory back to global memory
+  __syncthreads();
+
+  auto d_node_hist = node_hists[nidx_in_set].data();
+
+  for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
+    // fixme: n targets, need to handle it in the feature groups as well.
+    if (node_hist[i].GetQuantisedHess() == -1) {
+      AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
+    }
+  }
 }
 
 void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAccessor const& matrix,
