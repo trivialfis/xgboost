@@ -889,7 +889,7 @@ void DeviceHistogramBuilder::BuildHistogram(
       matrix);
 }
 
-__device__ unsigned int Laneid() {
+__device__ std::int32_t Laneid() {
   unsigned int laneid;
   asm("mov.u32 %0, %%laneid;" : "=r"(laneid));
   return laneid;
@@ -916,7 +916,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   constexpr std::int32_t kBarriers = kBuffers * 2;
 
   auto const lane_id = Laneid();
-  auto const warp_id = threadIdx.x / kWarpThreads;
+  auto const warp_id = static_cast<std::int32_t>(threadIdx.x) / kWarpThreads;
   bool const is_producer = warp_id & 1;   // warp_id %2 == 1
   bool const is_consumer = !is_producer;  // warp_id %2 == 0
 
@@ -935,14 +935,14 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   auto nidx_in_set = blockIdx.z;
   auto n_targets = d_gpair.Shape(1);
   auto d_ridx = d_ridx_iters[nidx_in_set];
-  auto n_elements = matrix.row_stride * d_ridx.size();
   FeatureGroup group = feature_groups[blockIdx.y];
   std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+  auto n_elements = feature_stride * d_ridx.size();
 
   // grid stride loop
-  auto const kStride = gridDim.x * kTileSize;
+  std::int32_t const kStride = gridDim.x * kTileSize;
   // first grid
-  std::size_t offset = blockIdx.x * kTileSize;
+  std::int32_t offset = blockIdx.x * kTileSize;
 
   extern __shared__ __align__(16) char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
@@ -956,28 +956,32 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   __syncthreads();
 
-  auto calc_valid_items = [&](auto offset) {
-    return cuda::std::min(n_elements - offset, static_cast<std::size_t>(kTileSize));
+  auto calc_valid_items = [&](std::int32_t offset) {
+    return cuda::std::min(static_cast<std::int32_t>(n_elements) - offset,
+                          static_cast<std::int32_t>(kTileSize));
   };
 
   // Part ii of the consumer
-  auto calc_idx = [&](auto full_tile, auto valid_items, auto offset, bst_bin_t* buf) {
-    std::int32_t const idx = offset + threadIdx.x;
-    if (full_tile || threadIdx.x < valid_items) {
+  auto calc_idx = [&](auto full_tile, std::int32_t valid_items, std::int32_t offset,
+                      bst_bin_t* buf) {
+    std::int32_t tidx = warp_id / 2 * kWarpThreads + lane_id;
+    std::int32_t const idx = offset + tidx;
+    if (full_tile || tidx < valid_items) {
+      SPAN_LT(idx, matrix.row_stride * matrix.n_rows);
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
       std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
-      auto cidx = threadIdx.x - (warp_id / 2) * kWarpThreads;
-      buf[cidx] = iidx;
+      buf[tidx] = iidx;
     }
   };
   // Part i of the consumer
-  auto process_gidx = [&](auto full_tile, auto valid_items, bst_bin_t const* buf) {
-    std::int32_t const idx = offset + threadIdx.x;
+  auto process_gidx = [&](auto full_tile, auto valid_items, std::int32_t offset,
+                          bst_bin_t const* buf) {
+    std::int32_t tidx = warp_id / 2 * kWarpThreads + lane_id;
+    std::int32_t const idx = offset + tidx;
 
-    if (full_tile || threadIdx.x < valid_items) {
-      auto cidx = threadIdx.x - (warp_id / 2) * kWarpThreads;
-      auto compressed_bin = buf[cidx];
+    if (full_tile || tidx < valid_items) {
+      auto compressed_bin = buf[tidx];
       if (compressed_bin != matrix.NullValue()) {
         if (Policy::kCompressed) {
           auto fidx = FeatIdx(group, idx, feature_stride);
@@ -992,15 +996,16 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         }
       }
     }
-
   };
 
   // The producer
-  auto load_gidx = [&](auto full_tile, auto valid_items, bst_bin_t* buf) {
-    auto idx = threadIdx.x - kWarpThreads;  // the thread index of the corresponding consumer
+  auto load_gidx = [&](auto full_tile, auto valid_items, std::int32_t offset, bst_bin_t* buf) {
+    std::int32_t tidx = (warp_id - 1) / 2 * kWarpThreads + lane_id;
+    std::int32_t const idx = offset + tidx;
+    // auto idx = threadIdx.x - kWarpThreads;  // the thread index of the corresponding consumer
     if (full_tile || idx < valid_items) {
-      auto cidx = idx - (warp_id / 2) * kWarpThreads;
-      buf[cidx] = matrix.gidx_iter[buf[cidx]];
+      // SPAN_LT(buf[cidx], matrix.row_stride * matrix.n_rows);
+      buf[tidx] = matrix.gidx_iter[buf[tidx]];
     }
   };
 
@@ -1013,7 +1018,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     }
   };
 
-  auto n_stages = common::DivRoundUp(n_elements, kStride);
+  std::int32_t n_stages = common::DivRoundUp(n_elements, kStride);
 
   auto consumer = [&] {
     // Calculate the index for the first buffer
@@ -1031,16 +1036,16 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
     std::int32_t stage = 0;
 
-    for (std::size_t j = 0; j < n_stages; ++j) {
+    for (std::int32_t j = 0; j < n_stages; ++j) {
       auto offset = j * kStride + blockIdx.x * kTileSize;
 
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
       filled[warp_id + stage].arrive_and_wait();
       if (kTileSize == valid_items) {
-        process_gidx(std::true_type{}, valid_items, bufs[stage]);
+        process_gidx(std::true_type{}, valid_items, offset, bufs[stage]);
       } else {
-        process_gidx(std::false_type{}, valid_items, bufs[stage]);
+        process_gidx(std::false_type{}, valid_items, offset, bufs[stage]);
       }
 
       // Calculate the idx using the same buffer (stage)
@@ -1062,7 +1067,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   auto producer = [&] {
     std::int32_t stage = 0;
-    for (std::size_t j = 0; j < n_stages; ++j) {
+    for (std::int32_t j = 0; j < n_stages; ++j) {
       auto offset = j * kStride + blockIdx.x * kTileSize;
       std::int32_t const valid_items = calc_valid_items(offset);
 
@@ -1072,9 +1077,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         __syncthreads();
       }
       if (kTileSize == valid_items) {
-        load_gidx(std::true_type{}, valid_items, bufs[stage]);
+        load_gidx(std::true_type{}, valid_items, offset, bufs[stage]);
       } else {
-        load_gidx(std::false_type{}, valid_items, bufs[stage]);
+        load_gidx(std::false_type{}, valid_items, offset, bufs[stage]);
       }
       // signal the data is ready for consumption
       [[maybe_unused]] auto token = filled[stage + warp_id - 1].arrive();
@@ -1115,6 +1120,7 @@ void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAcc
   auto n_nodes = hists.size();
 
   auto acc = std::get<EllpackDeviceAccessor>(matrix);
+  std::cout << "n_groups:" << feature_groups.NumGroups() << std::endl;
   int columns_per_group = common::DivRoundUp(acc.row_stride, feature_groups.NumGroups());
   std::size_t items_per_group = n_max_samples * columns_per_group;
 
