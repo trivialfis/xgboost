@@ -918,8 +918,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   auto const lane_id = Laneid();
   auto const warp_id = threadIdx.x / kWarpThreads;
-  bool const is_producer = warp_id & 1;
-  bool const is_consumer = !is_producer;
+
+  bool const is_consumer = warp_id < kProducers;
+  bool const is_producer = !is_consumer;
 
   if (lane_id < 2) {
     init(barriers + warp_id * 2 + lane_id, kWarpThreads);
@@ -971,8 +972,10 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   };
 
   // The producer
-  auto load_gidx = [&](auto full_tile, bst_bin_t* buf) {
-    buf[threadIdx.x] = matrix.gidx_iter[buf[threadIdx.x]];
+  auto load_gidx = [&](auto full_tile, auto valid_items, bst_bin_t* buf) {
+    if (full_tile || threadIdx.x < valid_items) {
+      buf[threadIdx.x] = matrix.gidx_iter[buf[threadIdx.x]];
+    }
   };
 
   auto initial_consume = [&](auto offset, bst_bin_t* buf) {
@@ -1027,9 +1030,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       // wait for the consumer to consume the data
       consumed[stage * kProducers + warp_id].arrive_and_wait();
       if (Policy::kTileSize == valid_items) {
-        load_gidx(std::true_type{}, bufs[stage]);
+        load_gidx(std::true_type{}, valid_items, bufs[stage]);
       } else {
-        load_gidx(std::false_type{}, bufs[stage]);
+        load_gidx(std::false_type{}, valid_items, bufs[stage]);
       }
       // signal the data is ready for consumption
       [[maybe_unused]] auto token = filled[stage * kProducers + warp_id].arrive();
