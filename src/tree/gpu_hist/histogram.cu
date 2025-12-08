@@ -904,7 +904,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   constexpr std::int32_t kWarpThreads = 32;
   static_assert(Policy::kBlockThreads % kWarpThreads == 0);
   constexpr std::int32_t kWarps = Policy::kBlockThreads / kWarpThreads;
-
+  static_assert(Policy::kBlockThreads % 2 == 0);
+  // half of the warps(threads) are used as consumer.
+  constexpr std::int32_t kTileSize = Policy::kBlockThreads / 2;
   // 2 buffers for each warp, each buffer requires 2 barrier
   // We use half of the warps as producer
   // in total, we have kWarps * 2 barriers.
@@ -938,9 +940,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
 
   // grid stride loop
-  auto const kStride = gridDim.x;
+  auto const kStride = gridDim.x * kTileSize;
   // first grid
-  std::size_t offset = blockIdx.x;
+  std::size_t offset = blockIdx.x * kTileSize;
 
   extern __shared__ char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
@@ -954,12 +956,12 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   __syncthreads();
 
   auto calc_valid_items = [&](auto offset) {
-    return cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
+    return cuda::std::min(n_elements - offset, static_cast<std::size_t>(kTileSize));
   };
 
   // Part ii of the consumer
   auto calc_idx = [&](auto full_tile, auto valid_items, auto offset, bst_bin_t* buf) {
-    int const idx = offset + threadIdx.x;
+    std::int32_t const idx = offset + threadIdx.x;
     if (full_tile || idx < valid_items) {
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
@@ -980,7 +982,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   auto initial_consume = [&](auto offset, bst_bin_t* buf) {
     std::int32_t const valid_items = calc_valid_items(offset);
-    if (Policy::kTileSize == valid_items) {
+    if (kTileSize == valid_items) {
       calc_idx(std::true_type{}, valid_items, offset, buf);
     } else {
       calc_idx(std::false_type{}, valid_items, offset, buf);
@@ -1007,7 +1009,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
       filled[stage * kProducers + warp_id].arrive_and_wait();
-      if (Policy::kTileSize == valid_items) {
+      if (kTileSize == valid_items) {
         process_gidx(std::true_type{}, bufs[stage]);
         calc_idx(std::true_type{}, valid_items, offset + kStride, bufs[stage]);
       } else {
@@ -1029,7 +1031,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
       // wait for the consumer to consume the data
       consumed[stage * kProducers + warp_id].arrive_and_wait();
-      if (Policy::kTileSize == valid_items) {
+      if (kTileSize == valid_items) {
         load_gidx(std::true_type{}, valid_items, bufs[stage]);
       } else {
         load_gidx(std::false_type{}, valid_items, bufs[stage]);
@@ -1057,6 +1059,7 @@ void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAcc
                                               std::size_t n_max_samples,
                                               common::Span<GradientQuantiser const> roundings) {
   using Policy = HistPolicy<kBlockThreads, 1, true>;
+  constexpr std::int32_t kTileSize = kBlockThreads / 2;
 
   auto n_nodes = hists.size();
 
@@ -1064,7 +1067,7 @@ void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAcc
   int columns_per_group = common::DivRoundUp(acc.row_stride, feature_groups.NumGroups());
   std::size_t items_per_group = n_max_samples * columns_per_group;
 
-  auto n_grids = common::DivRoundUp(items_per_group, Policy::kTileSize);
+  auto n_grids = common::DivRoundUp(items_per_group, kTileSize);
   dim3 conf(n_grids, feature_groups.NumGroups(), n_nodes);
   std::size_t shmem_bytes = feature_groups.ShmemSize() + sizeof(bst_bin_t) * kBlockThreads;
 
