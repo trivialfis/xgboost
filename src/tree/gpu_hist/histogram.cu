@@ -937,12 +937,11 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   auto d_ridx = d_ridx_iters[nidx_in_set];
   FeatureGroup group = feature_groups[blockIdx.y];
   std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
-  auto n_elements = feature_stride * d_ridx.size();
+  std::int32_t n_elements = feature_stride * d_ridx.size();
 
   // grid stride loop
   std::int32_t const kStride = gridDim.x * kTileSize;
   // first grid
-  std::int32_t offset = blockIdx.x * kTileSize;
 
   extern __shared__ __align__(16) char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
@@ -957,8 +956,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   __syncthreads();
 
   auto calc_valid_items = [&](std::int32_t offset) {
-    return cuda::std::min(static_cast<std::int32_t>(n_elements) - offset,
-                          static_cast<std::int32_t>(kTileSize));
+    return cuda::std::min(n_elements - offset, kTileSize);
   };
 
   // Part ii of the consumer
@@ -967,7 +965,6 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     std::int32_t tidx = warp_id / 2 * kWarpThreads + lane_id;
     std::int32_t const idx = offset + tidx;
     if (full_tile || tidx < valid_items) {
-      SPAN_LT(idx, matrix.row_stride * matrix.n_rows);
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
       std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
@@ -1021,6 +1018,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   std::int32_t n_stages = common::DivRoundUp(n_elements, kStride);
 
   auto consumer = [&] {
+    std::int32_t offset = blockIdx.x * kTileSize;
     // Calculate the index for the first buffer
     initial_consume(offset, bufs[0]);
     // Signal the first buffer is ready for the initial fill
