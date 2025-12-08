@@ -895,6 +895,13 @@ __device__ std::int32_t Laneid() {
   return laneid;
 }
 
+namespace {
+template <typename T>
+XGBOOST_DEVICE auto RoundUp(T new_sz, T chunk_sz) {
+  return ((new_sz + chunk_sz - 1) / chunk_sz);
+}
+}  // namespace
+
 template <typename Policy, typename RidxIterSpan>
 __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     EllpackDeviceAccessor const matrix, FeatureGroupsAccessor const feature_groups,
@@ -1013,7 +1020,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     }
   };
 
-  std::int32_t n_stages = common::DivRoundUp(n_elements, kStride);
+  std::int32_t n_stages = RoundUp(n_elements, kStride);
 
   auto consumer = [&] {
     std::int32_t offset = blockIdx.x * kTileSize;
