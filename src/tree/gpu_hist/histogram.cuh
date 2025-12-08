@@ -180,6 +180,13 @@ class DeviceHistogramBuilder {
                       std::size_t n_max_samples,
                       common::Span<GradientQuantiser const> roundings);
 
+  void BuildHistogramPC(CUDAContext const* ctx, EllpackAccessor const& matrix,
+                        FeatureGroupsAccessor const& feature_groups,
+                        linalg::MatrixView<GradientPair const> gpair,
+                        common::Span<common::Span<const std::uint32_t>> ridxs,
+                        common::Span<common::Span<GradientPairInt64>> hists,
+                        std::size_t n_max_samples, common::Span<GradientQuantiser const> roundings);
+
   [[nodiscard]] auto GetNodeHistogram(bst_node_t nidx) { return hist_.GetNodeHistogram(nidx); }
 
   // num histograms is the number of contiguous histograms in memory to reduce over

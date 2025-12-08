@@ -232,8 +232,6 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
     EllpackDeviceAccessor matrix, common::Span<std::uint32_t const> d_ridx) {
   bst_idx_t n_elements = matrix.row_stride * d_ridx.size();
 
-  constexpr std::int32_t kPrefetch = 4;
-
   constexpr auto kItemsPerTile = kBlockThreads;
   std::size_t offset = blockIdx.x * kItemsPerTile;
   auto stride = kItemsPerTile * gridDim.x;
@@ -246,19 +244,19 @@ __global__ __launch_bounds__(kBlockThreads) void PrefetchReadKernel(
       matrix.gidx_iter.Prefetch(idx);
     }
   };
-  auto load = [&](std::size_t offset, std::int32_t k) {
+  auto load = [&](std::size_t offset, std::int32_t k) -> bst_bin_t {
     auto idx = offset + (k * stride) + threadIdx.x;
     if (idx < n_elements) {
       return matrix.gidx_iter[idx];
     }
-    return 0u;
+    return 0;
   };
 
   while (offset + kItemsPerTile < n_elements) {
 #pragma unroll kItemsPerThread
     for (std::int32_t k = 0; k < kItemsPerThread; ++k) {
       prefetch(offset, k);
-      auto compressed_bin = load(offset, k);
+      bst_bin_t compressed_bin = load(offset, k);
       if (compressed_bin == -1) {
         printf("-1\n");
       }
@@ -443,7 +441,7 @@ class MicroBenchHist : public ::testing::Test {
     this->cuts = page->CutsShared();
 
     this->p_fg = std::make_unique<FeatureGroups>(
-        *cuts, true, std::min(dh::MaxSharedMemoryOptin(0), 64 * 1024ul));
+        *cuts, true, std::min(dh::MaxSharedMemoryOptin(0), 40 * 1024ul));
 
     bst_bin_t n_total_bins = n_targets * n_features * n_bins;
     auto fg_acc = p_fg->DeviceAccessor(ctx.Device());
@@ -517,6 +515,14 @@ class MicroBenchHist : public ::testing::Test {
     auto kernel = PrefetchReadTileKernel<kItemsPerThread, kBlockThreads>;
     kernel<<<n_grids, kBlockThreads>>>(
         std::get<EllpackDeviceAccessor>(page->GetDeviceEllpack(&ctx, {})), dh::ToSpan(ridx));
+  }
+  void BenchProducerConsumer() {
+    auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
+    auto hists = dh::device_vector<common::Span<GradientPairInt64>>{node_hist};
+    this->histogram.BuildHistogramPC(this->ctx.CUDACtx(), page->GetDeviceEllpack(&ctx, {}),
+                                     p_fg->DeviceAccessor(ctx.Device()),
+                                     this->gpairs.View(this->ctx.Device()), dh::ToSpan(ridxs),
+                                     dh::ToSpan(hists), ridx.size(), dh::ToSpan(this->quantizers));
   }
   // H200: 1.02T/s
   // DGX: 108GB/s
@@ -611,7 +617,7 @@ TEST(GpuMultiHistogram, Large) {
   auto node_hist = histogram.GetNodeHistogram(0);
 
   auto quantizers = MakeDummyQuantizers(n_targets);
-  constexpr std::uint32_t kBlockThreads = 512;
+  // constexpr std::uint32_t kBlockThreads = 512;
   // {
   //   auto n = page->Size() * page->info.row_stride;
   //   auto n_grids = common::DivRoundUp(n, kBlockThreads);
@@ -676,6 +682,11 @@ TEST_F(MicroBenchHist, PrefetchRead) {
 
 TEST_F(MicroBenchHist, PrefetchTile) {
   this->BenchPrefetchTile();
+  debug::SyncDevice();
+}
+
+TEST_F(MicroBenchHist, ProducerConsumer) {
+  this->BenchProducerConsumer();
   debug::SyncDevice();
 }
 

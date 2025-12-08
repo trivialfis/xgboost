@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>  // uint32_t, int32_t
+#include <cuda/barrier>
 
 #include "../../collective/aggregator.h"
 #include "../../common/deterministic.cuh"
@@ -842,7 +843,8 @@ void DeviceHistogramBuilder::BuildHistogram(
 
     std::int32_t num_groups = feature_groups.NumGroups();
     std::int32_t n_mps = 0;
-    dh::safe_cuda(cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, 0));  // fixme, ordinal
+    dh::safe_cuda(
+        cudaDeviceGetAttribute(&n_mps, cudaDevAttrMultiProcessorCount, 0));  // fixme, ordinal
 
     std::int32_t n_blocks_per_mp = 0;
     auto shmem_bytes = feature_groups.ShmemSize();
@@ -851,8 +853,8 @@ void DeviceHistogramBuilder::BuildHistogram(
     dh::safe_cuda(
         cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes));
 
-    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_blocks_per_mp, kernel,
-                                                                Policy::kBlockThreads, shmem_bytes));
+    dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &n_blocks_per_mp, kernel, Policy::kBlockThreads, shmem_bytes));
     CHECK_GE(n_blocks_per_mp, 1);
 
     n_grids = std::min(n_blocks_per_mp * n_mps, static_cast<std::int32_t>(n_grids));
@@ -885,6 +887,119 @@ void DeviceHistogramBuilder::BuildHistogram(
         }
       },
       matrix);
+}
+
+__device__ unsigned int Laneid() {
+  unsigned int laneid;
+  asm("mov.u32 %0, %%laneid;" : "=r"(laneid));
+  return laneid;
+}
+
+template <typename Policy, typename RidxIterSpan>
+__global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
+    EllpackDeviceAccessor const matrix, FeatureGroupsAccessor const feature_groups,
+    RidxIterSpan* d_ridx_iters, common::Span<GradientPairInt64>* node_hists, bst_node_t n_nodes,
+    linalg::MatrixView<GradientPair const> d_gpair,
+    common::Span<GradientQuantiser const> roundings) {
+  constexpr std::int32_t kWarpThreads = 32;
+  static_assert(Policy::kBlockThreads % kWarpThreads == 0);
+  constexpr std::int32_t kWarps = Policy::kBlockThreads / kWarpThreads;
+
+  // 2 buffers for each warp, each buffer requires 2 barrier
+  // We use half of the warps as producer
+  // in total, we have kWarps * 2 barriers.
+  constexpr std::int32_t kBarriers = kWarps / 2 * 4;
+  __shared__ cuda::barrier<cuda::thread_scope_block> barriers[kBarriers];
+
+  auto const lane_id = Laneid();
+  auto const warp_id = threadIdx.x / kWarpThreads;
+  bool const is_producer = warp_id & 1;
+
+  if (lane_id < 2) {
+    init(barriers + warp_id * 2 + lane_id, kWarpThreads);
+  }
+
+  auto nidx_in_set = blockIdx.z;
+  auto d_ridx = d_ridx_iters[nidx_in_set];
+  auto n_elements = matrix.row_stride * d_ridx.size();
+  FeatureGroup group = feature_groups[blockIdx.y];
+  std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+
+  // grid stride loop
+  auto const kStride = gridDim.x;
+  // first grid
+  std::size_t offset = blockIdx.x;
+
+  extern __shared__ char shmem[];
+  bst_bin_t* buf0 = reinterpret_cast<bst_bin_t*>(shmem);
+  bst_bin_t* buf1 = buf0 + (kBlockThreads / 2);
+  // fixme: align
+  GradientPairInt64* node_hist = reinterpret_cast<GradientPairInt64*>(buf1 + (kBlockThreads / 2));
+
+  dh::BlockFill(node_hist, group.num_bins, GradientPairInt64{});
+
+  __syncthreads();
+
+  auto calc_idx = [&](auto offset, bst_bin_t* buf) {
+    const int idx = offset + threadIdx.x;
+    cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
+    auto fidx = FeatIdx(group, idx, feature_stride);
+    std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
+    buf[threadIdx.x] = iidx;
+  };
+  auto load_gidx = [&](bst_bin_t* buf) {
+    auto gidx = matrix.gidx_iter[buf[threadIdx.x]];
+    buf[threadIdx.x] = gidx;
+  };
+  auto process_gidx = []() {
+
+  };
+
+  if (!is_producer) {
+    calc_idx(offset, buf0);
+  }
+
+  while (offset < n_elements) {
+    std::int32_t const valid_items =
+        cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
+
+    if (Policy::kTileSize == valid_items) {
+      if (is_producer) {
+      } else {
+      }
+    }
+
+    offset += kStride;
+  }
+}
+
+void DeviceHistogramBuilder::BuildHistogramPC(CUDAContext const* ctx, EllpackAccessor const& matrix,
+                                              FeatureGroupsAccessor const& feature_groups,
+                                              linalg::MatrixView<GradientPair const> gpair,
+                                              common::Span<common::Span<const std::uint32_t>> ridxs,
+                                              common::Span<common::Span<GradientPairInt64>> hists,
+                                              std::size_t n_max_samples,
+                                              common::Span<GradientQuantiser const> roundings) {
+  using Policy = HistPolicy<kBlockThreads, 1, true>;
+
+  auto n_nodes = hists.size();
+
+  auto acc = std::get<EllpackDeviceAccessor>(matrix);
+  int columns_per_group = common::DivRoundUp(acc.row_stride, feature_groups.NumGroups());
+  std::size_t items_per_group = n_max_samples * columns_per_group;
+
+  auto n_grids = common::DivRoundUp(items_per_group, Policy::kTileSize);
+  dim3 conf(n_grids, feature_groups.NumGroups(), n_nodes);
+  std::size_t shmem_bytes = feature_groups.ShmemSize() + sizeof(bst_bin_t) * kBlockThreads;
+
+  using RidxIter = thrust::counting_iterator<cuda_impl::RowIndexT>;
+  dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(
+      hists.size(), common::IterSpan{thrust::make_counting_iterator(0u), gpair.Shape(0)});
+
+  auto kernel = ProducerConsumerKernel<Policy, common::IterSpan<RidxIter>>;
+  kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->Stream()>>>(
+      acc, feature_groups, ridx_iters.data().get(), hists.data(), hists.size(), gpair, roundings);
+  dh::safe_cuda(cudaPeekAtLastError());
 }
 
 void DeviceHistogramBuilder::AllReduceHist(Context const* ctx, MetaInfo const& info,
