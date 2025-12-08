@@ -915,14 +915,13 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   constexpr std::int32_t kBuffers = kProducers * 2;
   constexpr std::int32_t kBarriers = kBuffers * 2;
 
-  using Barrier = cuda::barrier<cuda::thread_scope_block>;
-  __shared__ Barrier barriers[kBarriers];
-
   auto const lane_id = Laneid();
   auto const warp_id = threadIdx.x / kWarpThreads;
-
   bool const is_producer = warp_id & 1;   // warp_id %2 == 1
   bool const is_consumer = !is_producer;  // warp_id %2 == 0
+
+  using Barrier = cuda::barrier<cuda::thread_scope_block>;
+  __shared__ Barrier barriers[kBarriers];
 
   // Consumer signals data has been consumed
   Barrier* consumed = barriers;
@@ -944,7 +943,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   // first grid
   std::size_t offset = blockIdx.x * kTileSize;
 
-  extern __shared__ char shmem[];
+  extern __shared__ __align__(16) char shmem[];
   bst_bin_t* bufs[2]{reinterpret_cast<bst_bin_t*>(shmem),
                      reinterpret_cast<bst_bin_t*>(shmem) + kTileSize};
   // fixme: align
@@ -965,7 +964,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
       std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
-      buf[threadIdx.x - (warp_id / 2) * kWarpThreads] = iidx;
+      auto cidx = threadIdx.x - (warp_id / 2) * kWarpThreads;
+      buf[cidx] = iidx;
     }
   };
   // Part i of the consumer
@@ -997,12 +997,14 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     initial_consume(offset, bufs[0]);
     // Signal the first buffer is ready for the initial fill
     [[maybe_unused]] auto token0 = consumed[warp_id].arrive();
+    __syncthreads();
+
     // Calculate the index for the second buffer
     if (offset + kStride < n_elements) {
       initial_consume(offset + kStride, bufs[1]);
     }
     // Signal the second buffer is ready for the initial fill
-    [[maybe_unused]] auto token1 = consumed[kProducers + warp_id].arrive();
+    [[maybe_unused]] auto token1 = consumed[warp_id + 1].arrive();
 
     std::int32_t stage = 0;
 
@@ -1011,7 +1013,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
-      filled[stage * kProducers + warp_id].arrive_and_wait();
+      filled[warp_id + stage].arrive_and_wait();
       if (kTileSize == valid_items) {
         process_gidx(std::true_type{}, bufs[stage]);
       } else {
@@ -1029,7 +1031,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       }
 
       // signal buffer is used, ready for filling.
-      [[maybe_unused]] auto token = consumed[stage * kProducers + warp_id].arrive();
+      [[maybe_unused]] auto token = consumed[warp_id + stage].arrive();
 
       stage ^= 1;
     }
@@ -1042,14 +1044,17 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       std::int32_t const valid_items = calc_valid_items(offset);
 
       // wait for the consumer to consume the data
-      consumed[stage * kProducers + warp_id].arrive_and_wait();
+      consumed[stage + warp_id - 1].arrive_and_wait();
+      if (j == 0) {
+        __syncthreads();
+      }
       if (kTileSize == valid_items) {
         load_gidx(std::true_type{}, valid_items, bufs[stage]);
       } else {
         load_gidx(std::false_type{}, valid_items, bufs[stage]);
       }
       // signal the data is ready for consumption
-      [[maybe_unused]] auto token = filled[stage * kProducers + warp_id].arrive();
+      [[maybe_unused]] auto token = filled[stage + warp_id - 1].arrive();
 
       stage ^= 1;
     }
