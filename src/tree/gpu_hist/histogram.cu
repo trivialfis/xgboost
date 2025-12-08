@@ -921,11 +921,11 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   auto const lane_id = Laneid();
   auto const warp_id = threadIdx.x / kWarpThreads;
 
-  bool const is_consumer = warp_id < kProducers;
-  bool const is_producer = !is_consumer;
+  bool const is_producer = warp_id & 1;   // warp_id %2 == 1
+  bool const is_consumer = !is_producer;  // warp_id %2 == 0
 
   if (lane_id < 2) {
-    init(barriers + warp_id * 2 + lane_id, kWarpThreads);
+    init(barriers + warp_id * 2 + lane_id, kWarpThreads * 2);
   }
 
   // Consumer signals data has been consumed
@@ -965,7 +965,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
       auto fidx = FeatIdx(group, idx, feature_stride);
       std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
-      buf[threadIdx.x] = iidx;
+      buf[threadIdx.x - (warp_id / 2) * kWarpThreads] = iidx;
     }
   };
   // Part i of the consumer
@@ -974,9 +974,10 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   // The producer
   auto load_gidx = [&](auto full_tile, auto valid_items, bst_bin_t* buf) {
-    auto idx = threadIdx.x - kTileSize;
+    auto idx = threadIdx.x - kWarpThreads;  // the thread index of the corresponding consumer
     if (full_tile || idx < valid_items) {
-      buf[idx] = matrix.gidx_iter[buf[idx]];
+      auto cidx = idx - (warp_id / 2) * kWarpThreads;
+      buf[cidx] = matrix.gidx_iter[buf[cidx]];
     }
   };
 
