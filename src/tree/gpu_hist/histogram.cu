@@ -1104,9 +1104,7 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
   for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
     // fixme: n targets, need to handle it in the feature groups as well.
-    if (node_hist[i].GetQuantisedHess() == -1) {
-      AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
-    }
+    AtomicAddGpairGlobal(d_node_hist + group.start_bin + i, node_hist[i]);
   }
 }
 
