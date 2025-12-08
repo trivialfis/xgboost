@@ -924,14 +924,14 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
   bool const is_producer = warp_id & 1;   // warp_id %2 == 1
   bool const is_consumer = !is_producer;  // warp_id %2 == 0
 
-  if (lane_id < 2) {
-    init(barriers + warp_id * 2 + lane_id, kWarpThreads * 2);
-  }
-
   // Consumer signals data has been consumed
   Barrier* consumed = barriers;
   // Producer signals data has been produced
   Barrier* filled = consumed + kBuffers;
+
+  if (threadIdx.x < kBarriers) {
+    init(barriers + threadIdx.x, kWarpThreads * 2);
+  }
 
   auto nidx_in_set = blockIdx.z;
   auto d_ridx = d_ridx_iters[nidx_in_set];
