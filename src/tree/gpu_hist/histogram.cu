@@ -724,24 +724,6 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   bst_idx_t n_elements = feature_stride * d_ridx.size();
 
-  auto prefetch_gidx_tile = [&](auto idx, auto ridx) {
-    if (__shfl_up_sync(0xFFFFFFFF, ridx, 1) != ridx) {
-      auto fidx = FeatIdx(group, idx, feature_stride);
-      matrix.gidx_iter.Prefetch(IterIdx(matrix, ridx, fidx));
-    }
-  };
-
-  // {
-  //   std::int32_t const valid_items =
-  //       cuda::std::min(n_elements - offset, static_cast<std::size_t>(Policy::kTileSize));
-  //   if (Policy::kTileSize == valid_items) {
-  //     for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-  //       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
-  //       prefetch_gidx_tile(idx, valid_items);
-  //     }
-  //   }
-  // }
-
   using Idx = RowPartitioner::RowIndexT;
   bst_target_t const n_targets = roundings.size();
 
@@ -752,15 +734,15 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   auto d_node_hist = node_hists[nidx_in_set].data();
 
-  __syncthreads();
-
-  auto prefetch_gpair_tile = [&](auto idx, auto ridx) {
-    common::PrefetchGlobalL2(&d_gpair(ridx, 0));
+  auto get_fidx = [&](auto ridx, auto idx) {
+    return group.start_feature + idx - ridx * feature_stride;
   };
+
+  __syncthreads();
 
   auto process_valid_tile = [&](auto idx) {
     Idx ridx = d_ridx[idx / feature_stride];
-    auto fidx = FeatIdx(group, idx, feature_stride);
+    auto fidx = get_fidx(ridx, idx);
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (compressed_bin != matrix.NullValue()) {
       if (Policy::kCompressed) {
@@ -776,23 +758,10 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_gpair_tile = [&](auto full_tile, auto offset, auto valid_items) {
-    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
-      if (full_tile) {
-        const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
-        Idx ridx = d_ridx[idx / feature_stride];
-        prefetch_gpair_tile(idx, ridx);
-        prefetch_gidx_tile(idx, ridx);
-      }
-    }
-    for (int j = 0; j < Policy::kItemsPerThread; ++j) {
+#pragma unroll 1
+    for (std::int32_t j = 0; j < Policy::kItemsPerThread; ++j) {
       const int idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < valid_items) {
-        // if (j != Policy::kItemsPerThread - 1) {
-        //   const int idx = offset + (j + 1) * Policy::kBlockThreads + threadIdx.x;
-        //   Idx ridx = d_ridx[idx / feature_stride];
-        //   prefetch_gpair_tile(idx, ridx);
-        //   prefetch_gidx_tile(idx, ridx);
-        // }
         process_valid_tile(idx);
       }
     }
@@ -811,6 +780,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   // Write shared memory back to global memory
   __syncthreads();
+
   for (auto i : dh::BlockStrideRange(0, group.num_bins)) {
     // fixme: n targets, need to handle it in the feature groups as well.
     if (node_hist[i].GetQuantisedHess() == -1) {
@@ -828,7 +798,7 @@ void DeviceHistogramBuilder::BuildHistogram(
   CHECK_EQ(ridxs.size(), hists.size());
   auto n_nodes = hists.size();
 
-  constexpr int kBlockThreads = 1024;
+  constexpr int kBlockThreads = 768;
   constexpr int kItemsPerThread = 4;
   auto launch = [&](auto policy, auto kernel, auto acc, auto ridx_iters) {
     // fixme: support global-only.
