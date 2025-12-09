@@ -941,10 +941,10 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     std::int32_t tidx = warp_id / 2 * kWarpThreads + lane_id;
     std::int32_t const idx = offset + tidx;
     if (full_tile || tidx < valid_items) {
-      cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
-      auto fidx = FeatIdx(group, idx, feature_stride);
-      std::int32_t iidx = IterIdx(matrix, ridx, fidx);  // fixme, u64 int
-      buf[tidx] = iidx;
+      if (tidx < 0){
+        printf("impossible\n");
+        buf[tidx] = idx;
+      }
     }
   };
   // Part i of the consumer
@@ -954,21 +954,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     std::int32_t const idx = offset + tidx;
 
     if (full_tile || tidx < valid_items) {
-      auto compressed_bin = buf[tidx];
-      if (compressed_bin != matrix.NullValue()) {
-        if (Policy::kCompressed) {
-          auto fidx = FeatIdx(group, idx, feature_stride);
-          compressed_bin += matrix.feature_segments[fidx];
-        }
-        cuda_impl::RowIndexT ridx = d_ridx[idx / feature_stride];
-        compressed_bin *= n_targets;  // fixme (group.start_bin)
-        // TODO(jiamingy): Assign a thread for each target.
-        for (bst_target_t t = 0; t < n_targets; ++t) {
-          auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-          if (adjusted.GetQuantisedHess() == -1) {
-            AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
-          }
-        }
+      if (idx < 0) {
+        printf("idx<0\n");
       }
     }
   };
@@ -979,7 +966,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     std::int32_t tidx = (warp_id - 1) / 2 * kWarpThreads + lane_id;
     std::int32_t const idx = offset + tidx;
     if (full_tile || idx < valid_items) {
-      buf[tidx] = matrix.gidx_iter[buf[tidx]];
+      if (tidx < 0) {
+        printf("tidx<0\n");
+      }
     }
   };
 
