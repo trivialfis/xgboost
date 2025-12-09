@@ -995,7 +995,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         // TODO(jiamingy): Assign a thread for each target.
         for (bst_target_t t = 0; t < n_targets; ++t) {
           auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-          AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
+          if (adjusted.GetQuantisedHess() == -1) {
+            AtomicAddGpairShared(node_hist + compressed_bin - group.start_bin, adjusted);
+          }
         }
       }
     }
@@ -1044,7 +1046,12 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
 
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
-      filled[stage].arrive_and_wait();
+      auto token_0 = cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(filled[stage]));
+      while (!cuda::ptx::mbarrier_try_wait(cuda::device::barrier_native_handle(filled[stage]),
+                                           token_0)) {
+      }
+      // filled[stage].arrive_and_wait();
+
       if (kTileSize == valid_items) {
         process_gidx(std::true_type{}, valid_items, offset, bufs[stage]);
       } else {
@@ -1062,7 +1069,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       }
 
       // signal buffer is used, ready for filling.
-      [[maybe_unused]] auto token = consumed[stage].arrive();
+      [[maybe_unused]] auto token_1 = cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(consumed[stage]));
+      // [[maybe_unused]] auto token = consumed[stage].arrive();
 
       stage ^= 1;
     }
@@ -1075,7 +1083,13 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       std::int32_t const valid_items = calc_valid_items(offset);
 
       // wait for the consumer to consume the data
-      consumed[stage].arrive_and_wait();
+      // consumed[stage].arrive_and_wait();
+      auto token_0 =
+          cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(consumed[stage]));
+      while (!cuda::ptx::mbarrier_try_wait(cuda::device::barrier_native_handle(consumed[stage]),
+                                           token_0)) {
+      }
+
       if (j == 0) {
         __syncthreads();
       }
@@ -1085,7 +1099,9 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
         load_gidx(std::false_type{}, valid_items, offset, bufs[stage]);
       }
       // signal the data is ready for consumption
-      [[maybe_unused]] auto token = filled[stage].arrive();
+      [[maybe_unused]] auto token_1 =
+          cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(filled[stage]));
+      // [[maybe_unused]] auto token = filled[stage].arrive();
 
       stage ^= 1;
     }
