@@ -988,7 +988,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
     // Calculate the index for the first buffer
     initial_consume(offset, bufs[0]);
     // Signal the first buffer is ready for the initial fill
-    [[maybe_unused]] auto token0 = consumed[0].arrive();
+    [[maybe_unused]] auto token_0 =
+        cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(consumed[0]));
     __syncthreads();
 
     // Calculate the index for the second buffer
@@ -996,7 +997,8 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       initial_consume(offset + kStride, bufs[1]);
     }
     // Signal the second buffer is ready for the initial fill
-    [[maybe_unused]] auto token1 = consumed[1].arrive();
+    [[maybe_unused]] auto token_1 =
+        cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(consumed[1]));
 
     std::int32_t stage = 0;
 
