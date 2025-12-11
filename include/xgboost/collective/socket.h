@@ -45,11 +45,13 @@ using ssize_t = int;
 
 #if defined(__sun) || defined(sun)
 #include <sys/sockio.h>
-#endif                            // defined(__sun) || defined(sun)
+#endif  // defined(__sun) || defined(sun)
 
-#endif                            // defined(_WIN32)
+#endif  // defined(_WIN32)
 
-#include "xgboost/base.h"               // XGBOOST_EXPECT
+#include <xgboost/base.h>               // XGBOOST_EXPECT
+#include <xgboost/collective/domain.h>  // for SockDomain
+
 #include "xgboost/collective/result.h"  // for Result
 #include "xgboost/logging.h"            // LOG
 #include "xgboost/string_view.h"        // StringView
@@ -180,8 +182,6 @@ using ::inet_ntop;
 
 namespace collective {
 class SockAddress;
-
-enum class SockDomain : std::int32_t { kV4 = AF_INET, kV6 = AF_INET6 };
 
 /**
  * \brief Parse host address and return a SockAddress instance. Supports IPv4 and IPv6
@@ -546,7 +546,7 @@ class TCPSocket {
   /**
    * @brief Bind socket to INADDR_ANY, return the port selected by the OS.
    */
-  [[nodiscard]] Result BindHost(std::int32_t* p_out) {
+  [[nodiscard]] Result BindHost(std::int32_t *p_out) {
     // Use int32 instead of in_port_t for consistency. We take port as parameter from
     // users using other languages, the port is usually stored and passed around as int.
     if (Domain() == SockDomain::kV6) {

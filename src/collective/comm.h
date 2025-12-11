@@ -13,12 +13,13 @@
 
 #include "loop.h"                       // for Loop
 #include "protocol.h"                   // for PeerInfo
+#include "xgboost/collective/domain.h"  // for SockDomain
 #include "xgboost/collective/result.h"  // for Result
-#include "xgboost/collective/socket.h"  // for TCPSocket, GetHostName
 #include "xgboost/context.h"            // for Context
 #include "xgboost/span.h"               // for Span
 
 namespace xgboost::collective {
+class TCPSocket;
 
 inline constexpr std::int64_t DefaultTimeoutSec() { return 60 * 30; }  // 30min
 inline constexpr std::int32_t DefaultRetry() { return 3; }
@@ -108,10 +109,7 @@ class Comm : public std::enable_shared_from_this<Comm> {
   /**
    * @brief Get a string ID for the current process.
    */
-  [[nodiscard]] virtual Result ProcessorName(std::string* out) const {
-    auto rc = GetHostName(out);
-    return rc;
-  }
+  [[nodiscard]] virtual Result ProcessorName(std::string* out) const;
   [[nodiscard]] virtual Result Shutdown() = 0;
 };
 
@@ -181,7 +179,7 @@ class Channel {
     return this->RecvAll(data.data(), data.size_bytes());
   }
 
-  [[nodiscard]] auto Socket() const { return sock_; }
+  [[nodiscard]] std::shared_ptr<TCPSocket> Socket() const;
   [[nodiscard]] virtual Result Block() { return comm_.Block(); }
 };
 

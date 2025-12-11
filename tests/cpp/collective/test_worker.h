@@ -3,6 +3,7 @@
  */
 #pragma once
 #include <gtest/gtest.h>
+#include <xgboost/collective/socket.h>
 #include <xgboost/global_config.h>  // for InitNewThread
 
 #include <chrono>   // for seconds

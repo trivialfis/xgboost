@@ -16,9 +16,9 @@
 
 #include "../common/timer.h"            // for Monitor
 #include "xgboost/collective/result.h"  // for Result
-#include "xgboost/collective/socket.h"  // for TCPSocket
 
 namespace xgboost::collective {
+class TCPSocket;
 class Loop {
  public:
   struct Op {

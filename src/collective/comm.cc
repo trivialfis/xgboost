@@ -17,7 +17,7 @@
 #include "allgather.h"                  // for RingAllgather
 #include "protocol.h"                   // for kMagic
 #include "xgboost/base.h"               // for XGBOOST_STRICT_R_MODE
-#include "xgboost/collective/socket.h"  // for TCPSocket
+#include "xgboost/collective/socket.h"  // for TCPSocket, GetHostName
 #include "xgboost/global_config.h"      // for InitNewThread
 #include "xgboost/json.h"               // for Json, Object
 #include "xgboost/string_view.h"        // for StringView
@@ -26,6 +26,8 @@ namespace xgboost::collective {
 Comm::Comm(std::string const& host, std::int32_t port, std::chrono::seconds timeout,
            std::int32_t retry, std::string task_id)
     : timeout_{timeout}, retry_{retry}, tracker_{host, port, -1}, task_id_{std::move(task_id)} {}
+
+[[nodiscard]] Result Comm::ProcessorName(std::string* out) const { return GetHostName(out); }
 
 Result ConnectTrackerImpl(proto::PeerInfo info, std::chrono::seconds timeout, std::int32_t retry,
                           std::string const& task_id, TCPSocket* out, std::int32_t rank,
@@ -430,4 +432,6 @@ RabitComm::~RabitComm() noexcept(false) {
     return proto::ErrorCMD{}.WorkerSend(&tracker, res);
   };
 }
+
+[[nodiscard]] std::shared_ptr<TCPSocket> Channel::Socket() const { return sock_; };
 }  // namespace xgboost::collective

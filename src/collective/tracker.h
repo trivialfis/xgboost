@@ -11,10 +11,12 @@
 
 #include "protocol.h"
 #include "xgboost/collective/result.h"  // for Result
-#include "xgboost/collective/socket.h"  // for TCPSocket
 #include "xgboost/json.h"               // for Json
 
 namespace xgboost::collective {
+class TCPSocket;
+class SockAddress;
+
 inline bool HasTimeout(std::chrono::seconds timeout) { return timeout.count() > 0; }
 /**
  *
@@ -80,7 +82,7 @@ class Tracker {
 class RabitTracker : public Tracker {
   // a wrapper for connected worker socket.
   class WorkerProxy {
-    TCPSocket sock_;
+    std::shared_ptr<TCPSocket> sock_;
     proto::PeerInfo info_;
     std::int32_t eport_{0};
     std::int32_t world_{-1};
@@ -92,7 +94,8 @@ class RabitTracker : public Tracker {
     Result rc_;
 
    public:
-    explicit WorkerProxy(std::int32_t world, TCPSocket sock, SockAddress addr);
+    explicit WorkerProxy(std::int32_t world, std::shared_ptr<TCPSocket> sock,
+                         SockAddress const& addr);
     WorkerProxy(WorkerProxy const& that) = delete;
     WorkerProxy(WorkerProxy&& that) = default;
     WorkerProxy& operator=(WorkerProxy const&) = delete;
@@ -110,7 +113,7 @@ class RabitTracker : public Tracker {
     [[nodiscard]] Result const& Status() const { return rc_; }
     [[nodiscard]] Result& Status() { return rc_; }
 
-    void Send(StringView value) { this->sock_.Send(value); }
+    void Send(StringView value);
   };
   // Provide an ordering for workers, this helps us get deterministic topology.
   struct WorkerCmp {
@@ -133,7 +136,7 @@ class RabitTracker : public Tracker {
   // record for how to reach out to workers if error happens.
   std::vector<std::pair<std::string, std::int32_t>> worker_error_handles_;
   // listening socket for incoming workers.
-  TCPSocket listener_;
+  std::shared_ptr<TCPSocket> listener_;
   // mutex for protecting the listener, used to prevent race when it's listening while
   // another thread tries to shut it down.
   std::mutex listener_mu_;

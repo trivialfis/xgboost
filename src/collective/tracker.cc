@@ -11,8 +11,12 @@
 // Guard the include
 #include <xgboost/windefs.h>
 // Socket API
-#include <winsock2.h>
-#include <ws2tcpip.h>
+
+// These are imported from the collective/socket.h file. We don't import them here to avoid header
+// ordering issues with mingw.
+
+// #include <winsock2.h>
+// #include <ws2tcpip.h>
 #endif  // defined(_WIN32)
 
 #include <algorithm>  // for sort
@@ -68,7 +72,8 @@ Result Tracker::WaitUntilReady() const {
   return Success();
 }
 
-RabitTracker::WorkerProxy::WorkerProxy(std::int32_t world, TCPSocket sock, SockAddress addr)
+RabitTracker::WorkerProxy::WorkerProxy(std::int32_t world, std::shared_ptr<TCPSocket> sock,
+                                       SockAddress const& addr)
     : sock_{std::move(sock)} {
   LOG(DEBUG) << "[tracker]: Connected by the worker: "
              << (addr.IsV4() ? addr.V4().Addr() : addr.V6().Addr());
@@ -77,12 +82,12 @@ RabitTracker::WorkerProxy::WorkerProxy(std::int32_t world, TCPSocket sock, SockA
   std::int32_t port{0};
 
   rc_ = Success() << [&] {
-    return proto::Magic{}.Verify(&sock_);
+    return proto::Magic{}.Verify(sock_.get());
   } << [&] {
-    return proto::Connect{}.TrackerRecv(&sock_, &world_, &rank, &task_id_);
+    return proto::Connect{}.TrackerRecv(sock_.get(), &world_, &rank, &task_id_);
   } << [&] {
     std::string cmd;
-    auto rc = sock_.Recv(&cmd);
+    auto rc = sock_->Recv(&cmd);
     if (!rc.OK()) {
       return rc;
     }
@@ -92,7 +97,7 @@ RabitTracker::WorkerProxy::WorkerProxy(std::int32_t world, TCPSocket sock, SockA
   } << [&] {
     if (cmd_ == proto::CMD::kStart) {
       proto::Start start;
-      return start.TrackerHandle(jcmd, &world_, world, &port, &sock_, &eport_);
+      return start.TrackerHandle(jcmd, &world_, world, &port, sock_.get(), &eport_);
     } else if (cmd_ == proto::CMD::kPrint) {
       proto::Print print;
       return print.TrackerHandle(jcmd, &msg_);
@@ -113,6 +118,8 @@ RabitTracker::WorkerProxy::WorkerProxy(std::int32_t world, TCPSocket sock, SockA
   };
 }
 
+void RabitTracker::WorkerProxy::Send(StringView value) { this->sock_->Send(value); }
+
 RabitTracker::RabitTracker(Json const& config) : Tracker{config} {
   auto rc = Success() << [&] {
     host_.clear();
@@ -123,11 +130,12 @@ RabitTracker::RabitTracker(Json const& config) : Tracker{config} {
     return Success();
   } << [&] {
     auto addr = MakeSockAddress(xgboost::StringView{host_}, 0);
-    listener_ = TCPSocket::Create(addr.IsV4() ? SockDomain::kV4 : SockDomain::kV6);
-    return listener_.Bind(host_, &this->port_);
+    listener_ = std::shared_ptr<TCPSocket>{
+        TCPSocket::CreatePtr(addr.IsV4() ? SockDomain::kV4 : SockDomain::kV6)};
+    return listener_->Bind(host_, &this->port_);
   } << [&] {
     CHECK_GT(this->n_workers_, 0);
-    return listener_.Listen(this->n_workers_);
+    return listener_->Listen(this->n_workers_);
   };
   SafeColl(rc);
 }
@@ -266,11 +274,11 @@ Result RabitTracker::Bootstrap(std::vector<WorkerProxy>* p_workers) {
       rabit::utils::PollHelper poll;
       auto rc = Success() << [&] {
         std::lock_guard lock{listener_mu_};
-        return listener_.NonBlocking(true);
+        return listener_->NonBlocking(true);
       } << [&] {
         {
           std::lock_guard lock{listener_mu_};
-          poll.WatchRead(listener_);
+          poll.WatchRead(*listener_);
         }
         if (state.running) {
           // Don't timeout if the communicator group is up and running.
@@ -282,16 +290,16 @@ Result RabitTracker::Bootstrap(std::vector<WorkerProxy>* p_workers) {
       } << [&] {
         // this->Stop() closes the socket with a lock. Therefore, when the accept returns
         // due to shutdown, the state is still valid (closed).
-        return listener_.Accept(sock, addr);
+        return listener_->Accept(sock, addr);
       };
       return rc;
     };
 
     while (state.ShouldContinue()) {
-      TCPSocket sock;
+      std::shared_ptr<TCPSocket> sock = std::make_shared<TCPSocket>();
       SockAddress addr;
       this->ready_ = true;
-      auto rc = select_accept(&sock, &addr);
+      auto rc = select_accept(sock.get(), &addr);
       if (!rc.OK()) {
         return Fail("Failed to accept connection.", this->Stop() + std::move(rc));
       }
@@ -371,15 +379,15 @@ Result RabitTracker::Bootstrap(std::vector<WorkerProxy>* p_workers) {
 
   ready_ = false;
   std::lock_guard lock{listener_mu_};
-  if (this->listener_.IsClosed()) {
+  if (this->listener_->IsClosed()) {
     return Success();
   }
 
   return Success() << [&] {
     // This should have the effect of stopping the `accept` call.
-    return this->listener_.Shutdown();
+    return this->listener_->Shutdown();
   } << [&] {
-    return listener_.Close();
+    return listener_->Close();
   };
 }
 
