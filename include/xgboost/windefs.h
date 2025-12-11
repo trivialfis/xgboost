@@ -24,9 +24,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif  // !defined(WIN32_LEAN_AND_MEAN)
 // Stop windows.h from including winsock.h
-#if !defined(_WINSOCKAPI_)
-#define _WINSOCKAPI_
-#endif  // !defined(_WINSOCKAPI_)
+/* #if !defined(_WINSOCKAPI_) */
+/* #define _WINSOCKAPI_ */
+/* #endif  // !defined(_WINSOCKAPI_) */
 
 #if !defined(xgboost_IS_MINGW)
 

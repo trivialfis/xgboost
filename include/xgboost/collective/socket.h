@@ -20,6 +20,10 @@
 // Guard the include.
 #include <xgboost/windefs.h>
 // Socket API
+#if defined(_WINSOCKAPI_)
+// #error "windows.h is included"
+#define _WINSOCKAPI_ "kidding"
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 

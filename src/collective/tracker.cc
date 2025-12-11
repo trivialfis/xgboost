@@ -446,9 +446,15 @@ Result RabitTracker::Bootstrap(std::vector<WorkerProxy>* p_workers) {
   // Create an UDP socket to prob the public IP address, it's fine even if it's
   // unreachable.
   auto sock = socket(AF_INET, SOCK_DGRAM, 0);
+#if defined(_WIN32)
+  if (sock == INVALID_SOCKET) {
+    return Fail("Failed to create socket.");
+  }
+#else
   if (sock == -1) {
     return Fail("Failed to create socket.");
   }
+#endif
 
   auto paddr = MakeSockAddress(StringView{"10.255.255.255"}, 1);
   sockaddr const* addr_handle = reinterpret_cast<const sockaddr*>(&paddr.V4().Handle());
