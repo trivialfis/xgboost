@@ -1,0 +1,36 @@
+[workspace]
+authors = ["Jiaming Yuan <jm.yuan@outlook.com>"]
+channels = ["conda-forge", "rapidsai", "nvidia"]
+name = "xgboost"
+platforms = ["linux-64"]
+preview = ["pixi-build"]
+
+[tasks]
+
+[dependencies]
+libxgboost = { path = "." }
+
+[package]
+name = "xgboost"
+version = "3.1.0"
+
+[package.build]
+backend = { name = "pixi-build-cmake", version = "*" }
+
+[package.build.config]
+extra-args = ["-DUSE_CUDA=ON", "-DGOOGLE_TEST=ON", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
+
+
+[package.build-dependencies]
+cuda-version = "13.0*"
+cuda-cudart-dev = "*"
+cuda-nvcc = "*"
+gcc="13.*"
+gtest = "*"
+
+[package.host-dependencies]
+cuda-version = "13.0*"
+cuda-cudart-dev = "*"
+cuda-nvcc = "*"
+gcc="13.*"
+gtest = "*"

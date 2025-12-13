@@ -165,3 +165,6 @@ Rplots.pdf
 # nsys
 *.nsys-rep
 rmm_log.dev*
+# pixi environments
+.pixi/*
+!.pixi/config.toml

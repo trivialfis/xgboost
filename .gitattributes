@@ -16,3 +16,5 @@
 *.rst text eol=lf
 *.md  text eol=lf
 *.csv text eol=lf
+# SCM syntax highlighting & preventing 3-way merges
+pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
