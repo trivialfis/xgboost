@@ -892,6 +892,23 @@ void RegTree::ExpandNode(bst_node_t nidx, bst_feature_t split_index, float split
   this->param_.num_nodes = this->p_mt_tree_->Size();
 }
 
+void RegTree::ExpandNodeBatch(Context const* ctx,
+                              common::Span<MultiTargetTree::ExpandEntry const> entries,
+                              linalg::MatrixView<float const> base_weight,
+                              linalg::MatrixView<float const> left_weight,
+                              linalg::MatrixView<float const> right_weight) {
+  if (ctx->IsCPU()) {
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+      auto const& e = entries[i];
+      auto base_w = base_weight.Slice(i, linalg::All());
+      auto left_w = left_weight.Slice(i, linalg::All());
+      auto right_w = right_weight.Slice(i, linalg::All());
+      this->ExpandNode(e.nidx, e.split_index, e.split_cond, e.default_left, base_w, left_w,
+                       right_w);
+    }
+  }
+}
+
 void RegTree::SetLeaves(std::vector<bst_node_t> leaves, common::Span<float const> weights) {
   CHECK(IsMultiTarget());
   this->p_mt_tree_->SetLeaves(std::move(leaves), weights);

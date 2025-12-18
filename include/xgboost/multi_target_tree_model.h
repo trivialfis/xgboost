@@ -91,6 +91,18 @@ class MultiTargetTree : public Model {
               linalg::VectorView<float const> base_weight,
               linalg::VectorView<float const> left_weight,
               linalg::VectorView<float const> right_weight);
+  // Collect the node info for array-of-structs construction.
+  struct ExpandEntry {
+    bst_node_t nidx;
+    bst_feature_t split_index;
+    float split_cond;
+    bool default_left;
+  };
+  /** @see RegTree::ExpandNodeBatch */
+  void ExpandBatched(Context const* ctx, common::Span<ExpandEntry const> entries,
+                     linalg::MatrixView<float const> base_weight,
+                     linalg::MatrixView<float const> left_weight,
+                     linalg::MatrixView<float const> right_weight);
   /** @see RegTree::SetLeaves */
   void SetLeaves(std::vector<bst_node_t> leaves, common::Span<float const> weights);
   /** @brief Copy base weight into leaf weight for a non-reduced multi-target tree. */

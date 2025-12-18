@@ -136,6 +136,20 @@ void MultiTargetTree::Expand(bst_node_t nidx, bst_feature_t split_idx, float spl
   }
 }
 
+void MultiTargetTree::ExpandBatched(Context const* ctx, common::Span<ExpandEntry const> entries,
+                                    linalg::MatrixView<float const> base_weight,
+                                    linalg::MatrixView<float const> left_weight,
+                                    linalg::MatrixView<float const> right_weight) {
+  CHECK(ctx->IsCUDA());
+  std::size_t n = param_->num_nodes + 2 * entries.size();
+  left_.SetDevice(ctx->Device()), right_.SetDevice(ctx->Device()), parent_.SetDevice(ctx->Device());
+
+  auto orig_size = left_.Size();
+  left_.Resize(n, InvalidNodeId());
+  right_.Resize(n, InvalidNodeId());
+  parent_.Resize(n, InvalidNodeId());
+}
+
 void MultiTargetTree::SetLeaves(std::vector<bst_node_t> leaves, common::Span<float const> weights) {
   CHECK_EQ(this->NumLeaves(), 0);
   auto n_targets = this->NumTargets();

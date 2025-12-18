@@ -327,6 +327,20 @@ class RegTree : public Model {
                   linalg::VectorView<float const> base_weight,
                   linalg::VectorView<float const> left_weight,
                   linalg::VectorView<float const> right_weight);
+
+  /**
+   * @brief Same as `ExpandNode`, with batched inputs.
+   *
+   * @param entries      Split node info.
+   * @param base_weight  Weight before applying learning rate, with:
+   *                      `shape = (n_entries, n_split_targets)`.
+   * @param left_weight  Left child weight, with applied learning rate. Same shape as base weight.
+   * @param right_weight Right child weight.
+   */
+  void ExpandNodeBatch(Context const* ctx, common::Span<MultiTargetTree::ExpandEntry const> entries,
+                       linalg::MatrixView<float const> base_weight,
+                       linalg::MatrixView<float const> left_weight,
+                       linalg::MatrixView<float const> right_weight);
   /**
    * @brief Set all leaf weights for a multi-target tree.
    *
