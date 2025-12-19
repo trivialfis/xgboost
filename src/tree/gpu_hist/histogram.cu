@@ -329,12 +329,11 @@ template <typename Policy, typename Accessor, typename RidxIterSpan>
 __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups, RidxIterSpan* d_ridx_iters,
     common::Span<std::uint32_t const> blk_ptr, common::Span<GradientPairInt64>* node_hists,
-    linalg::MatrixView<GradientPair const> d_gpair,
-    common::Span<GradientQuantiser const> roundings) {
-  auto d_roundings = roundings.data();
+    linalg::MatrixView<GradientPair const> d_gpair, GradientQuantiser const* roundings) {
+  auto d_roundings = roundings;
 
   FeatureGroup group = feature_groups[blockIdx.y];
-  std::int32_t feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+  std::uint32_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
 
   // Find the node for this block.
   auto nidx_in_set = dh::SegmentId(blk_ptr.data(), blk_ptr.data() + blk_ptr.size(), blockIdx.x);
@@ -346,12 +345,12 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
 
   using Idx = RowPartitioner::RowIndexT;
 
-  Idx ridx_size = d_ridx_iters[nidx_in_set].size();
-  auto d_ridx = d_ridx_iters[nidx_in_set].data();
+  Idx const ridx_size = d_ridx_iters[nidx_in_set].size();
+  auto const d_ridx = d_ridx_iters[nidx_in_set].data();
+  auto const* __restrict__ d_feature_segments = matrix.feature_segments;
 
-  bst_target_t const n_targets = roundings.size();
-  bst_idx_t n_elements = feature_stride * ridx_size * n_targets;
-
+  bst_target_t const n_targets = d_gpair.Shape(1);
+  bst_idx_t const n_elements = feature_stride * ridx_size * n_targets;
 
   extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
   // Privatized histogram
@@ -373,15 +372,27 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_valid_tile = [&](auto idx) {
-    auto [ridx_in_node, fidx_in_set, target_idx] =
-        linalg::UnravelIndex(idx, ridx_size, feature_stride, n_targets);
-    Idx ridx = d_ridx[ridx_in_node];
+    // Following is the unrolled version of unravel to reduce register usage:
+    // auto [ridx_in_node, fidx_in_set, target_idx] =
+    //     linalg::UnravelIndex(idx, ridx_size, feature_stride, n_targets);
+    bst_idx_t _tmp = idx / n_targets;
+    Idx target_idx = idx - _tmp * n_targets;
+    idx = _tmp;
+
+    _tmp = idx / feature_stride;
+    Idx fidx_in_set = idx - _tmp * feature_stride;
+    idx = _tmp;
+
+    Idx ridx_in_set = idx;
+    // End unravel.
+
+    Idx ridx = d_ridx[ridx_in_set];
     auto fidx = fidx_in_set + group.start_feature;
 
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
       if constexpr (Policy::kCompressed) {
-        compressed_bin += matrix.feature_segments[fidx];
+        compressed_bin += d_feature_segments[fidx];
       }
       if constexpr (Policy::kSharedMem) {
         // Handle privatized histogram indexing.
@@ -399,7 +410,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   auto process_gpair_tile = [&](auto full_tile, auto offset) {
 #pragma unroll 1
     for (std::int32_t j = 0; j < Policy::kItemsPerThread; ++j) {
-      std::int32_t const idx = offset + j * Policy::kBlockThreads + threadIdx.x;
+      bst_idx_t const idx = offset + j * Policy::kBlockThreads + threadIdx.x;
       if (full_tile || idx < n_elements) {
         process_valid_tile(idx);
       }
@@ -608,7 +619,7 @@ struct MtHistKernel {
       dim3 conf(n_blocks, feature_groups.NumGroups());
 
       kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream()>>>(
-          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), gpair, roundings);
+          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), gpair, roundings.data());
       dh::safe_cuda(cudaPeekAtLastError());
     };
 
