@@ -313,6 +313,19 @@ struct HistPolicy {
   static constexpr bool kSharedMem = kSharedMemIn;
 };
 
+template <typename I, typename U, std::int32_t D>
+__device__ void UnravelImpl(I idx, U const (&shape)[D], U (&index)[D]) {
+  static_assert(std::is_signed_v<decltype(D)>,
+                "Don't change the type without changing the for loop.");
+  for (std::int32_t dim = D; --dim > 0;) {
+    auto s = static_cast<std::remove_const_t<std::remove_reference_t<I>>>(shape[dim]);
+    auto t = idx / s;
+    index[dim] = idx - t * s;
+    idx = t;
+  }
+  index[0] = idx;
+}
+
 /**
  * @brief Kernel for multi-target histogram.
  *
@@ -372,19 +385,9 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_valid_tile = [&](auto idx) {
-    // Following is the unrolled version of unravel to reduce register usage:
-    // auto [ridx_in_node, fidx_in_set, target_idx] =
-    //     linalg::UnravelIndex(idx, ridx_size, feature_stride, n_targets);
-    bst_idx_t _tmp = idx / n_targets;
-    Idx target_idx = idx - _tmp * n_targets;
-    idx = _tmp;
-
-    _tmp = idx / feature_stride;
-    Idx fidx_in_set = idx - _tmp * feature_stride;
-    idx = _tmp;
-
-    Idx ridx_in_set = idx;
-    // End unravel.
+    Idx idxes[3];
+    UnravelImpl(idx, {ridx_size, feature_stride, n_targets}, idxes);
+    auto [ridx_in_set, fidx_in_set, target_idx] = idxes;
 
     Idx ridx = d_ridx[ridx_in_set];
     auto fidx = fidx_in_set + group.start_feature;
