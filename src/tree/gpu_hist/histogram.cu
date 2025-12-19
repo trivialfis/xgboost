@@ -401,7 +401,7 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       // TODO(jiamingy): When the number of targets is non-trivial, we need to split up
       // the histograms due to shared memory size.
       auto adjusted = d_roundings[target_idx].ToFixedPoint(d_gpair(ridx, target_idx));
-      atomic_add(compressed_bin + t, adjusted);
+      atomic_add(compressed_bin + target_idx, adjusted);
       // for (bst_target_t t = 0; t < n_targets; ++t) {
 
       // }
