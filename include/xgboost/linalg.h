@@ -211,6 +211,21 @@ LINALG_HD auto UnravelImpl(I idx, common::Span<size_t const, D> shape) {
   return ArrToTuple(index);
 }
 
+// Register-friendly version of unravel. Removes the branching operation and doesn't
+// create a tuple.
+template <typename I, typename U, std::int32_t D>
+LINALG_HD void UnravelImpl(I idx, U const (&shape)[D], U (&index)[D]) {
+  static_assert(std::is_signed_v<decltype(D)>,
+                "Don't change the type without changing the for loop.");
+  for (std::int32_t dim = D; --dim > 0;) {
+    auto s = static_cast<std::remove_const_t<std::remove_reference_t<I>>>(shape[dim]);
+    auto t = idx / s;
+    index[dim] = idx - t * s;
+    idx = t;
+  }
+  index[0] = idx;
+}
+
 template <size_t dim, typename I, int32_t D>
 void ReshapeImpl(size_t (&out_shape)[D], I s) {
   static_assert(dim < D);
