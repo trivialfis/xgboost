@@ -349,13 +349,13 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   // Offset of the first grid
   std::size_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
 
-  auto d_ridx = d_ridx_iters[nidx_in_set];
-  auto p_ridx = d_ridx_iters[nidx_in_set].data();
+  auto ridx_size = d_ridx_iters[nidx_in_set].size();
+  auto d_ridx = d_ridx_iters[nidx_in_set].data();
 
-  bst_idx_t n_elements = feature_stride * d_ridx.size();
+  bst_target_t const n_targets = roundings.size();
+  bst_idx_t n_elements = feature_stride * ridx_size * n_targets;
 
   using Idx = RowPartitioner::RowIndexT;
-  bst_target_t const n_targets = roundings.size();
 
   extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
   // Privatized histogram
@@ -377,9 +377,13 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
   };
 
   auto process_valid_tile = [&](auto idx) {
-    auto ridx_in_node = idx / feature_stride;
-    Idx ridx = p_ridx[ridx_in_node];
-    auto fidx = FeatIdx(group, idx, ridx_in_node, feature_stride);
+    auto [ridx_in_node, fidx_in_set, target_idx] =
+        linalg::UnravelIndex(idx, ridx_size, feature_stride, n_targets);
+    // auto ridx_in_node = idx / feature_stride;
+    Idx ridx = d_ridx[ridx_in_node];
+    // auto fidx = FeatIdx(group, idx, ridx_in_node, feature_stride);
+    auto fidx = fidx_in_set + group.start_feature;
+
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
       if constexpr (Policy::kCompressed) {
@@ -396,10 +400,11 @@ __global__ __launch_bounds__(Policy::kBlockThreads) void HistKernel(
       //
       // TODO(jiamingy): When the number of targets is non-trivial, we need to split up
       // the histograms due to shared memory size.
-      for (bst_target_t t = 0; t < n_targets; ++t) {
-        auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, t));
-        atomic_add(compressed_bin + t, adjusted);
-      }
+      auto adjusted = d_roundings[t].ToFixedPoint(d_gpair(ridx, target_idx));
+      atomic_add(compressed_bin + t, adjusted);
+      // for (bst_target_t t = 0; t < n_targets; ++t) {
+
+      // }
     }
   };
 
