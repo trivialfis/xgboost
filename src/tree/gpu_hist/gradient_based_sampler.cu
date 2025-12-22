@@ -146,22 +146,23 @@ class PoissonSampling {
   CombineGradientPair combine_;
 };
 
-GradientBasedSample NoSampling::Sample(Context const*, common::Span<GradientPair> gpair,
+GradientBasedSample NoSampling::Sample(Context const*, linalg::MatrixView<GradientPair> gpair,
                                        DMatrix* p_fmat) {
-  return {p_fmat, gpair};
+  return {gpair};
 }
 
 UniformSampling::UniformSampling(BatchParam batch_param, float subsample)
     : batch_param_{std::move(batch_param)}, subsample_{subsample} {}
 
-GradientBasedSample UniformSampling::Sample(Context const* ctx, common::Span<GradientPair> gpair,
+GradientBasedSample UniformSampling::Sample(Context const* ctx,
+                                            linalg::MatrixView<GradientPair> gpair,
                                             DMatrix* p_fmat) {
   // Set gradient pair to 0 with p = 1 - subsample
   auto cuctx = ctx->CUDACtx();
   thrust::replace_if(cuctx->CTP(), dh::tbegin(gpair), dh::tend(gpair),
                      thrust::counting_iterator<std::size_t>(0),
                      BernoulliTrial(common::GlobalRandom()(), subsample_), GradientPair());
-  return {p_fmat, gpair};
+  return {gpair};
 }
 
 GradientBasedSampling::GradientBasedSampling(std::size_t n_rows, BatchParam batch_param,
@@ -172,19 +173,19 @@ GradientBasedSampling::GradientBasedSampling(std::size_t n_rows, BatchParam batc
       grad_sum_(n_rows, 0.0f) {}
 
 GradientBasedSample GradientBasedSampling::Sample(Context const* ctx,
-                                                  common::Span<GradientPair> gpair,
+                                                  linalg::MatrixView<GradientPair> gpair,
                                                   DMatrix* p_fmat) {
   auto cuctx = ctx->CUDACtx();
-  size_t n_rows = p_fmat->Info().num_row_;
+  auto n_samples = this->grad_sum_.size();
   size_t threshold_index = GradientBasedSampler::CalculateThresholdIndex(
-      ctx, gpair, dh::ToSpan(threshold_), dh::ToSpan(grad_sum_), n_rows * subsample_);
+      ctx, gpair, dh::ToSpan(threshold_), dh::ToSpan(grad_sum_), n_samples * subsample_);
 
   // Perform Poisson sampling in place.
   thrust::transform(cuctx->CTP(), dh::tbegin(gpair), dh::tend(gpair),
                     thrust::counting_iterator<size_t>(0), dh::tbegin(gpair),
                     PoissonSampling(dh::ToSpan(threshold_), threshold_index,
                                     RandomWeight(common::GlobalRandom()())));
-  return {p_fmat, gpair};
+  return {gpair};
 }
 
 GradientBasedSampler::GradientBasedSampler(Context const* /*ctx*/, size_t n_rows,
@@ -216,7 +217,8 @@ GradientBasedSampler::GradientBasedSampler(Context const* /*ctx*/, size_t n_rows
 
 // Sample a DMatrix based on the given gradient pairs.
 GradientBasedSample GradientBasedSampler::Sample(Context const* ctx,
-                                                 common::Span<GradientPair> gpair, DMatrix* dmat) {
+                                                 linalg::MatrixView<GradientPair> gpair,
+                                                 DMatrix* dmat) {
   monitor_.Start(__func__);
   GradientBasedSample sample = strategy_->Sample(ctx, gpair, dmat);
   monitor_.Stop(__func__);

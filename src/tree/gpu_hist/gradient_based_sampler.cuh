@@ -12,17 +12,14 @@
 
 namespace xgboost::tree {
 struct GradientBasedSample {
-  /** @brief Sampled rows in ELLPACK format. */
-  DMatrix* p_fmat;
   /** @brief Gradient pairs for the sampled rows. */
-  common::Span<GradientPair const> gpair;
+  linalg::MatrixView<GradientPair const> gpair;
 };
 
 class SamplingStrategy {
  public:
   /** @brief Sample from a DMatrix based on the given gradient pairs. */
-  virtual GradientBasedSample Sample(Context const* ctx, common::Span<GradientPair> gpair,
-                                     DMatrix* dmat) = 0;
+  virtual GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair) = 0;
   virtual ~SamplingStrategy() = default;
 };
 
@@ -31,8 +28,7 @@ class SamplingStrategy {
  */
 class NoSampling : public SamplingStrategy {
  public:
-  GradientBasedSample Sample(Context const* ctx, common::Span<GradientPair> gpair,
-                             DMatrix* dmat) override;
+  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair) override;
 };
 
 /**
@@ -41,8 +37,7 @@ class NoSampling : public SamplingStrategy {
 class UniformSampling : public SamplingStrategy {
  public:
   UniformSampling(BatchParam batch_param, float subsample);
-  GradientBasedSample Sample(Context const* ctx, common::Span<GradientPair> gpair,
-                             DMatrix* dmat) override;
+  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair) override;
 
  private:
   BatchParam batch_param_;
@@ -53,8 +48,7 @@ class UniformSampling : public SamplingStrategy {
 class GradientBasedSampling : public SamplingStrategy {
  public:
   GradientBasedSampling(std::size_t n_rows, BatchParam batch_param, float subsample);
-  GradientBasedSample Sample(Context const* ctx, common::Span<GradientPair> gpair,
-                             DMatrix* dmat) override;
+  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair) override;
 
  private:
   BatchParam batch_param_;
@@ -79,8 +73,8 @@ class GradientBasedSampler {
   GradientBasedSampler(Context const* ctx, size_t n_rows, const BatchParam& batch_param,
                        float subsample, int sampling_method);
 
-  /*! \brief Sample from a DMatrix based on the given gradient pairs. */
-  GradientBasedSample Sample(Context const* ctx, common::Span<GradientPair> gpair, DMatrix* dmat);
+  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair,
+                             DMatrix* dmat);
 
   /*! \brief Calculate the threshold used to normalize sampling probabilities. */
   static size_t CalculateThresholdIndex(Context const* ctx, common::Span<GradientPair> gpair,
