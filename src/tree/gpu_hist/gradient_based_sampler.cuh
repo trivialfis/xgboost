@@ -73,11 +73,10 @@ class GradientBasedSampler {
   GradientBasedSampler(Context const* ctx, size_t n_rows, const BatchParam& batch_param,
                        float subsample, int sampling_method);
 
-  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair,
-                             DMatrix* dmat);
+  GradientBasedSample Sample(Context const* ctx, linalg::MatrixView<GradientPair> gpair);
 
   /*! \brief Calculate the threshold used to normalize sampling probabilities. */
-  static size_t CalculateThresholdIndex(Context const* ctx, common::Span<GradientPair> gpair,
+  static size_t CalculateThresholdIndex(Context const* ctx, linalg::MatrixView<GradientPair> gpair,
                                         common::Span<float> threshold, common::Span<float> grad_sum,
                                         size_t sample_rows);
 

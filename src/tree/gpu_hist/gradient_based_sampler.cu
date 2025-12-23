@@ -39,9 +39,7 @@ class BernoulliTrial {
  public:
   BernoulliTrial(size_t seed, float p) : rnd_(seed), p_(p) {}
 
-  XGBOOST_DEVICE bool operator()(size_t i) const {
-    return rnd_(i) > p_;
-  }
+  XGBOOST_DEVICE bool operator()(size_t i) const { return rnd_(i) > p_; }
 
  private:
   RandomWeight rnd_;
@@ -146,8 +144,7 @@ class PoissonSampling {
   CombineGradientPair combine_;
 };
 
-GradientBasedSample NoSampling::Sample(Context const*, linalg::MatrixView<GradientPair> gpair,
-                                       DMatrix* p_fmat) {
+GradientBasedSample NoSampling::Sample(Context const*, linalg::MatrixView<GradientPair> gpair) {
   return {gpair};
 }
 
@@ -155,8 +152,7 @@ UniformSampling::UniformSampling(BatchParam batch_param, float subsample)
     : batch_param_{std::move(batch_param)}, subsample_{subsample} {}
 
 GradientBasedSample UniformSampling::Sample(Context const* ctx,
-                                            linalg::MatrixView<GradientPair> gpair,
-                                            DMatrix* p_fmat) {
+                                            linalg::MatrixView<GradientPair> gpair) {
   // Set gradient pair to 0 with p = 1 - subsample
   auto cuctx = ctx->CUDACtx();
   thrust::replace_if(cuctx->CTP(), dh::tbegin(gpair), dh::tend(gpair),
@@ -173,8 +169,7 @@ GradientBasedSampling::GradientBasedSampling(std::size_t n_rows, BatchParam batc
       grad_sum_(n_rows, 0.0f) {}
 
 GradientBasedSample GradientBasedSampling::Sample(Context const* ctx,
-                                                  linalg::MatrixView<GradientPair> gpair,
-                                                  DMatrix* p_fmat) {
+                                                  linalg::MatrixView<GradientPair> gpair) {
   auto cuctx = ctx->CUDACtx();
   auto n_samples = this->grad_sum_.size();
   size_t threshold_index = GradientBasedSampler::CalculateThresholdIndex(
@@ -217,16 +212,15 @@ GradientBasedSampler::GradientBasedSampler(Context const* /*ctx*/, size_t n_rows
 
 // Sample a DMatrix based on the given gradient pairs.
 GradientBasedSample GradientBasedSampler::Sample(Context const* ctx,
-                                                 linalg::MatrixView<GradientPair> gpair,
-                                                 DMatrix* dmat) {
+                                                 linalg::MatrixView<GradientPair> gpair) {
   monitor_.Start(__func__);
-  GradientBasedSample sample = strategy_->Sample(ctx, gpair, dmat);
+  GradientBasedSample sample = strategy_->Sample(ctx, gpair);
   monitor_.Stop(__func__);
   return sample;
 }
 
 size_t GradientBasedSampler::CalculateThresholdIndex(Context const* ctx,
-                                                     common::Span<GradientPair> gpair,
+                                                     linalg::MatrixView<GradientPair> gpair,
                                                      common::Span<float> threshold,
                                                      common::Span<float> grad_sum,
                                                      size_t sample_rows) {

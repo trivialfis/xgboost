@@ -183,9 +183,9 @@ struct GPUHistMakerDevice {
      * Sampling
      */
     dh::CopyTo(dh_gpair->ConstDeviceSpan(), &this->d_gpair, ctx_->CUDACtx()->Stream());
-    auto sample = this->sampler->Sample(ctx_, dh::ToSpan(d_gpair), p_fmat);
-    this->gpair = sample.gpair;
-    p_fmat = sample.p_fmat;
+    auto sample = this->sampler->Sample(
+        ctx_, linalg::MatrixView{dh::ToSpan(d_gpair), {d_gpair.size(), 1ul}, ctx_->Device()});
+    this->gpair = sample.gpair.Values();
     p_fmat->Info().feature_types.SetDevice(ctx_->Device());
 
     /**
