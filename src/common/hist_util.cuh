@@ -52,7 +52,7 @@ __global__ void GetColumnSizeSharedMemKernel(IterSpan<BatchIt> batch_iter,
   for (auto idx : dh::GridStrideRange(static_cast<std::size_t>(0), n)) {
     auto e = batch_iter[idx];
     if (is_valid(e)) {
-      atomicAdd(&smem_cs_ptr[e.column_idx], static_cast<CounterT>(1));
+      atomicInc(&smem_cs_ptr[e.column_idx]);
     }
   }
 
