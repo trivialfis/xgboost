@@ -15,6 +15,7 @@
 #include "thrust/shuffle.h"  // for shuffle
 #include "xgboost/context.h"
 #include "xgboost/linalg.h"
+#include <cuda/functional>
 
 namespace xgboost::linalg {
 namespace {
@@ -157,4 +158,13 @@ void TestGpuDispatch() {
 }
 }  // namespace
 TEST(Linalg, GpuDispatch) { TestGpuDispatch(); }
+
+TEST(Linalg, Transform) {
+  std::size_t n = 1 << 28;
+  dh::device_vector<float> vec(n);
+  auto ctx = MakeCUDACtx(0);
+  auto op = cuda::proclaim_copyable_arguments([=] XGBOOST_DEVICE(float v) { return v + 1; });
+  thrust::transform(ctx.CUDACtx()->CTP(), vec.data(), vec.data() + vec.size(),
+                    thrust::make_discard_iterator(), op);
+}
 }  // namespace xgboost::linalg
