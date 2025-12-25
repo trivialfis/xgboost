@@ -159,7 +159,7 @@ void TestGpuDispatch() {
 }  // namespace
 TEST(Linalg, GpuDispatch) { TestGpuDispatch(); }
 
-TEST(Linalg, Transform) {
+void WarTransform() {
   std::size_t n = 1 << 28;
   dh::device_vector<float> vec(n);
   auto ctx = MakeCUDACtx(0);
@@ -167,4 +167,6 @@ TEST(Linalg, Transform) {
   thrust::transform(ctx.CUDACtx()->CTP(), vec.data(), vec.data() + vec.size(),
                     thrust::make_discard_iterator(), op);
 }
+
+TEST(Linalg, Transform) { WarTransform(); }
 }  // namespace xgboost::linalg
