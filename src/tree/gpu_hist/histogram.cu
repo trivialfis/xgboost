@@ -500,6 +500,7 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
   auto const kStride = Policy::kTileSize * (p_blk_ptr[nidx_in_set + 1] - starting_blk);
   // Offset of the first grid
   bst_idx_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
+  auto const n_elements_in_group = static_cast<bst_idx_t>(ridx_size) * feature_stride;
 
   while (offset < n_elements) {
     std::int32_t const valid_items =
@@ -507,11 +508,9 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
 
     if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
                                   common::DoubleCompressedIter<std::uint32_t>>) {
-      auto n_elements_in_group = static_cast<bst_idx_t>(ridx_size) * feature_stride;
       std::int32_t const valid_items =
           cuda::std::min(n_elements_in_group - offset, static_cast<bst_idx_t>(Policy::kTileSize));
-      bst_idx_t const idx_in_grp = offset + threadIdx.x;
-      auto off_global = d_group_ptr[blockIdx.y] + idx_in_grp;
+      auto off_global = d_group_ptr[blockIdx.y] + offset;
       PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + off_global, valid_items);
       Idx ridx_in_set = (offset / n_targets) / feature_stride;
       PrefetchTile<Policy::kBlockThreads>(d_gpair + ridx_in_set, valid_items / feature_stride);
