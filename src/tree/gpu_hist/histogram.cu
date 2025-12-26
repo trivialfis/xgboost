@@ -364,13 +364,26 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   }
 }
 
+#if __CUDA_ARCH__ >= 900
+XGBOOST_DEV_INLINE void PrefetchGlobalL2(void const* addr) {
+  asm volatile("cp.async.bulk.prefetch.L2.global [%0], 128;" ::"l"(__cvta_generic_to_global(addr)));
+}
+#else
 template <typename T>
-XGBOOST_DEV_INLINE void Prefetch(const T* addr) {
+XGBOOST_DEV_INLINE void PrefetchGlobalL2(const T* addr) {
   asm volatile("prefetch.global.L2 [%0];" : : "l"(__cvta_generic_to_global(addr)) : "memory");
+}
+#endif
+
+template <typename T>
+XGBOOST_DEV_INLINE const T* AlignDown(const T* ptr, unsigned alignment) {
+  return reinterpret_cast<const T*>(reinterpret_cast<::cuda::std::uintptr_t>(ptr) &
+                                    ~::cuda::std::uintptr_t{alignment - 1});
 }
 
 template <std::int32_t kBlockThreads, typename It>
 XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
+  begin = AlignDown(begin, 16);
   constexpr int kPrefetchByteStride = 128;
   const int items_bytes = common::SizeBytes<It>(items);
   static_assert(sizeof(It) == 1);
@@ -378,7 +391,7 @@ XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
 #pragma unroll 1
   for (std::uint32_t offset = threadIdx.x * kPrefetchByteStride; offset < items_bytes;
        offset += kBlockThreads * kPrefetchByteStride) {
-    Prefetch(reinterpret_cast<const char*>(cuda::std::to_address(begin)) + offset);
+    PrefetchGlobalL2(reinterpret_cast<const char*>(cuda::std::to_address(begin)) + offset);
   }
 }
 }  // namespace
@@ -478,12 +491,12 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
     }
   };
 
-  {
+  if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
+                                common::DoubleCompressedIter<std::uint32_t>>) {
     bst_idx_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
-    if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
-                                  common::DoubleCompressedIter<std::uint32_t>>) {
-      PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + offset, Policy::kTileSize);
-    }
+    std::int32_t const valid_items =
+        cuda::std::min(n_elements - offset, static_cast<bst_idx_t>(Policy::kTileSize));
+    PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + offset, valid_items);
   }
 
   // Grid-strided loop
