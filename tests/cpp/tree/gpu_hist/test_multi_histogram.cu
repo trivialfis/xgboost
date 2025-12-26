@@ -392,7 +392,7 @@ __global__ void TestGlobalAtomicKernel(EllpackDeviceAccessor matrix,
 }
 
 // rtx4070tis 181GB/s
-// dgx 131GB/s, shared memory IO is about 70% sustained peak.
+// dgx 131GB/s, shared memory IO is about 70% sustained peak, occ 100%.
 __global__ void TestSharedAtomicKernel(EllpackDeviceAccessor matrix,
                                        common::Span<GradientPairInt64> d_node_hist,
                                        common::Span<std::uint32_t> d_ridx,
