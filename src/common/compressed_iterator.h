@@ -206,6 +206,7 @@ class CompressedIterator {
     std::uint64_t mask = (static_cast<std::uint64_t>(1) << symbol_bits_) - 1;
     return static_cast<T>(tmp & mask);
   }
+  XGBOOST_DEVICE CompressedByteT const *Data() const { return buffer_; }
 };
 
 /**

@@ -363,6 +363,37 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
     fn(HistSm75{});
   }
 }
+
+#if __CUDA_ARCH__ >= 900
+XGBOOST_DEV_INLINE void PrefetchGlobalL2(void const* addr) {
+  asm volatile("cp.async.bulk.prefetch.L2.global [%0], 128;" ::"l"(__cvta_generic_to_global(addr)));
+}
+#else
+template <typename T>
+XGBOOST_DEV_INLINE void PrefetchGlobalL2(const T* addr) {
+  asm volatile("prefetch.global.L2 [%0];" : : "l"(__cvta_generic_to_global(addr)) : "memory");
+}
+#endif
+
+template <typename T>
+XGBOOST_DEV_INLINE const T* AlignDown(const T* ptr, unsigned alignment) {
+  return reinterpret_cast<const T*>(reinterpret_cast<::cuda::std::uintptr_t>(ptr) &
+                                    ~::cuda::std::uintptr_t{alignment - 1});
+}
+
+template <std::int32_t kBlockThreads, typename It>
+XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
+  begin = AlignDown(begin, 16);
+  constexpr int kPrefetchByteStride = 128;
+  const int items_bytes = common::SizeBytes<It>(items);
+  static_assert(sizeof(It) == 1);
+
+#pragma unroll 1
+  for (std::uint32_t offset = threadIdx.x * kPrefetchByteStride; offset < items_bytes;
+       offset += kBlockThreads * kPrefetchByteStride) {
+    PrefetchGlobalL2(reinterpret_cast<const char*>(cuda::std::to_address(begin)) + offset);
+  }
+}
 }  // namespace
 
 /**
@@ -469,6 +500,15 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
   auto const kStride = Policy::kTileSize * (p_blk_ptr[nidx_in_set + 1] - starting_blk);
   // Offset of the first grid
   bst_idx_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
+
+  if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
+                                common::DoubleCompressedIter<std::uint32_t>>) {
+    auto n_elements_in_group = static_cast<bst_idx_t>(ridx_size) * feature_stride;
+    std::int32_t const valid_items = n_elements_in_group - offset;
+    bst_idx_t const idx_in_grp = offset + threadIdx.x;
+    auto off_global = d_group_ptr[blockIdx.y] + idx_in_grp;
+    PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + off_global, valid_items);
+  }
 
   while (offset < n_elements) {
     std::int32_t const valid_items =
