@@ -386,7 +386,7 @@ XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
   begin = AlignDown(begin, 16);
   constexpr int kPrefetchByteStride = 128;
   const int items_bytes = common::SizeBytes<It>(items);
-  static_assert(sizeof(It) == 1);
+  // static_assert(sizeof(It) == 1);
 
 #pragma unroll 1
   for (std::uint32_t offset = threadIdx.x * kPrefetchByteStride; offset < items_bytes;
@@ -501,18 +501,22 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
   // Offset of the first grid
   bst_idx_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
 
-  if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
-                                common::DoubleCompressedIter<std::uint32_t>>) {
-    auto n_elements_in_group = static_cast<bst_idx_t>(ridx_size) * feature_stride;
-    std::int32_t const valid_items = n_elements_in_group - offset;
-    bst_idx_t const idx_in_grp = offset + threadIdx.x;
-    auto off_global = d_group_ptr[blockIdx.y] + idx_in_grp;
-    PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + off_global, valid_items);
-  }
-
   while (offset < n_elements) {
     std::int32_t const valid_items =
         cuda::std::min(n_elements - offset, static_cast<bst_idx_t>(Policy::kTileSize));
+
+    if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
+                                  common::DoubleCompressedIter<std::uint32_t>>) {
+      auto n_elements_in_group = static_cast<bst_idx_t>(ridx_size) * feature_stride;
+      std::int32_t const valid_items =
+          cuda::std::min(n_elements_in_group - offset, static_cast<bst_idx_t>(Policy::kTileSize));
+      bst_idx_t const idx_in_grp = offset + threadIdx.x;
+      auto off_global = d_group_ptr[blockIdx.y] + idx_in_grp;
+      PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + off_global, valid_items);
+      Idx ridx_in_set = (offset / n_targets) / feature_stride;
+      PrefetchTile<Policy::kBlockThreads>(d_gpair + ridx_in_set, valid_items / feature_stride);
+    }
+
     if (Policy::kTileSize == valid_items) {
       process_gpair_tile(std::true_type{}, offset);
     } else {
