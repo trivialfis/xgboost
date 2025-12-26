@@ -135,8 +135,8 @@ INSTANTIATE_TEST_SUITE_P(Basic, MultiHistTest,
                          TestName);
 
 INSTANTIATE_TEST_SUITE_P(Large, MultiHistTest,
-                         ::testing::Combine(::testing::Values<bst_idx_t>((1ul << 21)),
-                                            ::testing::Values(2), ::testing::Values(2),
+                         ::testing::Combine(::testing::Values<bst_idx_t>((1ul << 26)),
+                                            ::testing::Values(12), ::testing::Values(1),
                                             ::testing::Bool()),
                          TestName);
 }  // namespace xgboost::tree::cuda_impl

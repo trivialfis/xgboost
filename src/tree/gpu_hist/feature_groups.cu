@@ -45,6 +45,11 @@ FeatureGroups::FeatureGroups(common::HistogramCuts const& cuts, bst_target_t n_t
   bin_segments_h.push_back(cut_ptrs.back());
   max_group_bins =
       std::max(max_group_bins, bin_segments_h.back() - bin_segments_h[bin_segments_h.size() - 2]);
+  std::cout << "feature_segs:"<< feature_segments_h.size() << std::endl;
+  for (auto v : feature_segments_h) {
+    std::cout << v << ", ";
+  }
+  std::cout << std::endl;
 }
 
 void FeatureGroups::InitSingle(common::HistogramCuts const& cuts) {

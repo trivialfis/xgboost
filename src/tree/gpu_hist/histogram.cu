@@ -363,6 +363,24 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
     fn(HistSm75{});
   }
 }
+
+template <typename T>
+XGBOOST_DEV_INLINE void Prefetch(const T* addr) {
+  asm volatile("prefetch.global.L2 [%0];" : : "l"(__cvta_generic_to_global(addr)) : "memory");
+}
+
+template <std::int32_t kBlockThreads, typename It>
+XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
+  constexpr int kPrefetchByteStride = 128;
+  const int items_bytes = common::SizeBytes<It>(items);
+  static_assert(sizeof(It) == 1);
+
+#pragma unroll 1
+  for (std::uint32_t offset = threadIdx.x * kPrefetchByteStride; offset < items_bytes;
+       offset += kBlockThreads * kPrefetchByteStride) {
+    Prefetch(reinterpret_cast<const char*>(cuda::std::to_address(begin)) + offset);
+  }
+}
 }  // namespace
 
 /**
@@ -459,6 +477,14 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
       }
     }
   };
+
+  {
+    bst_idx_t offset = (blockIdx.x - starting_blk) * Policy::kTileSize;
+    if constexpr (!std::is_same_v<decltype(matrix.gidx_iter),
+                                  common::DoubleCompressedIter<std::uint32_t>>) {
+      PrefetchTile<Policy::kBlockThreads>(matrix.gidx_iter.Data() + offset, Policy::kTileSize);
+    }
+  }
 
   // Grid-strided loop
   auto const kStride = Policy::kTileSize * (p_blk_ptr[nidx_in_set + 1] - starting_blk);
