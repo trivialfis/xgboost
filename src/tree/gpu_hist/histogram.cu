@@ -394,6 +394,7 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
 
   Idx const ridx_size = d_ridx_iters[nidx_in_set].size();
   auto const d_ridx = d_ridx_iters[nidx_in_set].data();
+  auto const* d_group_ptr = matrix.group_ptr.data();
 
   extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
   // Privatized histogram
@@ -426,11 +427,17 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
     Idx ridx_in_set = (idx / n_targets) / feature_stride;
 
     Idx ridx = d_ridx[ridx_in_set];
-    auto fidx = fidx_in_set + group.start_feature;
 
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    // fixme: idx_in_grp is the same as idx when n_targets == 1
+    auto idx_in_grp = (ridx - matrix.base_rowid) * feature_stride + fidx_in_set;
+    auto it_idx = idx_in_grp + d_group_ptr[blockIdx.y];
+
+    bst_bin_t compressed_bin = matrix.gidx_iter[it_idx];
+    // printf("idx: %d, idx_in_grp: %d, it_idx: %d, ridx: %d, fidx_in_set: %d, grp: %d\n", int(idx),
+    //        int(idx_in_grp), int(it_idx), int(ridx), int(fidx_in_set), int(blockIdx.y));
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
       if constexpr (Policy::kCompressed) {
+        auto fidx = fidx_in_set + group.start_feature;
         compressed_bin += matrix.feature_segments[fidx];
       }
       if constexpr (Policy::kSharedMem) {

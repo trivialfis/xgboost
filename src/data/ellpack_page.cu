@@ -12,20 +12,22 @@
 #include <utility>            // for move
 #include <vector>             // for vector
 
-#include "../common/algorithm.cuh"          // for InclusiveScan
-#include "../common/categorical.h"          // for IsCat
-#include "../common/cuda_context.cuh"       // for CUDAContext
-#include "../common/cuda_rt_utils.h"        // for SetDevice
-#include "../common/cuda_stream.h"          // for DefaultStream
-#include "../common/hist_util.cuh"          // for HistogramCuts
-#include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
-#include "../common/transform_iterator.h"   // for MakeIndexTransformIter
-#include "device_adapter.cuh"               // for NoInfInData
-#include "ellpack_page.cuh"                 // for EllpackPageImpl
-#include "ellpack_page.h"                   // for EllpackPage
-#include "gradient_index.h"                 // for GHistIndexMatrix
-#include "xgboost/context.h"                // for Context
-#include "xgboost/data.h"                   // for DMatrix
+#include "../common/algorithm.cuh"              // for InclusiveScan
+#include "../common/categorical.h"              // for IsCat
+#include "../common/cuda_context.cuh"           // for CUDAContext
+#include "../common/cuda_rt_utils.h"            // for SetDevice
+#include "../common/cuda_stream.h"              // for DefaultStream
+#include "../common/hist_util.cuh"              // for HistogramCuts
+#include "../common/ref_resource_view.cuh"      // for MakeFixedVecWithCudaMalloc
+#include "../common/transform_iterator.h"       // for MakeIndexTransformIter
+#include "../tree/gpu_hist/feature_groups.cuh"  // for FeatureGroups
+#include "../tree/gpu_hist/histogram.cuh"       // for DftHistSharedMemoryBytes
+#include "device_adapter.cuh"                   // for NoInfInData
+#include "ellpack_page.cuh"                     // for EllpackPageImpl
+#include "ellpack_page.h"                       // for EllpackPage
+#include "gradient_index.h"                     // for GHistIndexMatrix
+#include "xgboost/context.h"                    // for Context
+#include "xgboost/data.h"                       // for DMatrix
 
 namespace xgboost {
 EllpackPage::EllpackPage() : impl_{new EllpackPageImpl{}} {}
@@ -237,13 +239,17 @@ struct WriteCompressedEllpackFunctor {
                                 const common::CompressedBufferWriter& writer, AdapterBatchT batch,
                                 EllpackAccessorImpl<IterT> accessor,
                                 common::Span<FeatureType const> feature_types,
-                                const data::IsValidFunctor& is_valid)
+                                const data::IsValidFunctor& is_valid,
+                                common::Span<bst_idx_t const> d_group_ptr,
+                                common::Span<bst_feature_t const> d_group_feat_ptr)
       : d_buffer(buffer),
         writer(writer),
         batch(std::move(batch)),
         accessor(std::move(accessor)),
         feature_types(std::move(feature_types)),
-        is_valid(is_valid) {}
+        is_valid(is_valid),
+        group_ptr{d_group_ptr},
+        group_feat_ptr{d_group_feat_ptr} {}
 
   common::CompressedByteT* d_buffer;
   common::CompressedBufferWriter writer;
@@ -251,6 +257,8 @@ struct WriteCompressedEllpackFunctor {
   EllpackAccessorImpl<IterT> accessor;
   common::Span<FeatureType const> feature_types;
   data::IsValidFunctor is_valid;
+  common::Span<bst_idx_t const> group_ptr;
+  common::Span<bst_feature_t const> group_feat_ptr;
 
   // Tuple[0] = The row index of the input, used as a key to define segments
   // Tuple[1] = Scanned flags of valid elements for each row
@@ -268,7 +276,14 @@ struct WriteCompressedEllpackFunctor {
     if constexpr (kIsDenseCompressed) {
       bin_idx -= accessor.feature_segments[e.column_idx];
     }
-    writer.AtomicWriteSymbol(d_buffer, bin_idx, out_position);
+
+    auto [ridx, fidx] = linalg::UnravelIndex(out_position, batch.NumRows(), batch.NumCols());
+    auto group_idx = dh::SegmentId(group_feat_ptr, fidx);
+    auto fidx_in_grp = fidx - group_feat_ptr[group_idx];
+    auto pos = ridx * (group_feat_ptr[group_idx + 1] - group_feat_ptr[group_idx]) + fidx_in_grp +
+               group_ptr[group_idx];
+
+    writer.AtomicWriteSymbol(d_buffer, bin_idx, pos);
   }
   // Used for dense or as dense data.
   __device__ void operator()(bst_idx_t i) {
@@ -309,7 +324,8 @@ struct TupleScanOp {
 template <bool kIsDenseCompressed, typename AdapterBatchT>
 void CopyDataToEllpack(Context const* ctx, const AdapterBatchT& batch,
                        common::Span<FeatureType const> feature_types, EllpackPageImpl* dst,
-                       float missing) {
+                       float missing, common::Span<bst_idx_t const> d_group_ptr,
+                       common::Span<bst_feature_t const> d_group_feat_ptr) {
   data::IsValidFunctor is_valid(missing);
   bool valid = data::NoInfInData(ctx, batch, is_valid);
   CHECK(valid) << error::InfInData();
@@ -331,7 +347,8 @@ void CopyDataToEllpack(Context const* ctx, const AdapterBatchT& batch,
     using Tuple = typename WriteCompressedEllpackFunctor<AdapterBatchT, IterT>::Tuple;
     dh::TypedDiscard<Tuple> discard;
     WriteCompressedEllpackFunctor<AdapterBatchT, IterT> functor{
-        d_compressed_buffer, writer, batch, device_accessor, feature_types, is_valid};
+        d_compressed_buffer, writer,   batch,       device_accessor,
+        feature_types,       is_valid, d_group_ptr, d_group_feat_ptr};
     // For dense compressed data, we can simply copy the data with the input position.
     if (kIsDenseCompressed) {
       CHECK(batch.NumRows() == 0 || batch.NumCols() == dst->info.row_stride);
@@ -383,9 +400,29 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, AdapterBatch batch, float m
   curt::SetDevice(ctx->Ordinal());
 
   if (this->IsDenseCompressed()) {
-    CopyDataToEllpack<true>(ctx, batch, feature_types, this, missing);
+    bst_target_t n_targets = 1;  // fixme
+    bool dense_compressed = true;
+    auto p_fg = std::make_unique<tree::FeatureGroups>(
+        *cuts_, n_targets, dense_compressed, tree::DftHistSharedMemoryBytes(ctx->Ordinal()));
+    auto f_segments = p_fg->feature_segments.ConstHostSpan();
+    std::vector<bst_idx_t>& h_group_elements = this->group_ptr_.HostVector();
+    h_group_elements.clear();  // fixme
+    h_group_elements.resize(f_segments.size(), 0);
+    for (std::size_t i = 1; i < h_group_elements.size(); ++i) {
+      auto n_features = f_segments[i] - f_segments[i - 1];
+      std::cout << "grp:" << (i - 1) << " feat:" << n_features << std::endl;
+      auto n_elements_in_grp = n_features * static_cast<bst_idx_t>(n_rows);
+      h_group_elements[i] = n_elements_in_grp;
+    }
+    std::partial_sum(h_group_elements.cbegin(), h_group_elements.cend(), h_group_elements.begin());
+    this->group_ptr_.SetDevice(ctx->Device());
+    p_fg->feature_segments.SetDevice(ctx->Device());
+    CopyDataToEllpack<true>(ctx, batch, feature_types, this, missing,
+                            this->group_ptr_.ConstDeviceSpan(),
+                            p_fg->feature_segments.ConstDeviceSpan());
   } else {
-    CopyDataToEllpack<false>(ctx, batch, feature_types, this, missing);
+    // fixme: group segments
+    CopyDataToEllpack<false>(ctx, batch, feature_types, this, missing, {}, {});
     WriteNullValues(ctx, this, row_counts);
   }
 }
@@ -544,65 +581,6 @@ bst_idx_t EllpackPageImpl::Copy(Context const* ctx, EllpackPageImpl const* page,
   return n_elements;
 }
 
-// A functor that compacts the rows from one EllpackPage into another.
-template <typename IterT>
-struct CompactPage {
-  common::CompressedBufferWriter cbw;
-  common::CompressedByteT* dst_data_d;
-  IterT src_iterator_d;
-  /**
-   * @brief An array that maps the rows from the full DMatrix to the compacted page.
-   *
-   * The total size is the number of rows in the original, uncompacted DMatrix.
-   * Elements are the row ids in the compacted page. Rows not needed are set to
-   * SIZE_MAX.
-   *
-   * An example compacting 16 rows to 8 rows:
-   * [SIZE_MAX, 0, 1, SIZE_MAX, SIZE_MAX, 2, SIZE_MAX, 3, 4, 5, SIZE_MAX, 6,
-   * SIZE_MAX, 7, SIZE_MAX, SIZE_MAX]
-   */
-  common::Span<size_t> row_indexes;
-  size_t base_rowid;
-  size_t row_stride;
-
-  CompactPage(EllpackPageImpl* dst, EllpackAccessorImpl<IterT> src,
-              common::Span<size_t> row_indexes)
-      : cbw{dst->NumSymbols()},
-        dst_data_d{dst->gidx_buffer.data()},
-        src_iterator_d{src.gidx_iter},
-        row_indexes(row_indexes),
-        base_rowid{src.base_rowid},
-        row_stride{src.row_stride} {}
-
-  __device__ void operator()(bst_idx_t row_id) {
-    size_t src_row = base_rowid + row_id;
-    size_t dst_row = row_indexes[src_row];
-    if (dst_row == SIZE_MAX) {
-      return;
-    }
-    size_t dst_offset = dst_row * row_stride;
-    size_t src_offset = row_id * row_stride;
-    for (size_t j = 0; j < row_stride; j++) {
-      cbw.AtomicWriteSymbol(dst_data_d, src_iterator_d[src_offset + j], dst_offset + j);
-    }
-  }
-};
-
-// Compacts the data from the given EllpackPage into the current page.
-void EllpackPageImpl::Compact(Context const* ctx, EllpackPageImpl const* page,
-                              common::Span<size_t> row_indexes) {
-  monitor_.Start(__func__);
-  CHECK_EQ(this->info.row_stride, page->info.row_stride);
-  CHECK_EQ(this->NumSymbols(), page->NumSymbols());
-  CHECK_LE(page->base_rowid + page->n_rows, row_indexes.size());
-  auto cuctx = ctx->CUDACtx();
-  page->Visit(ctx, {}, [&](auto&& src) {
-    dh::LaunchN(page->n_rows, cuctx->Stream(), CompactPage{this, src, row_indexes});
-  });
-
-  monitor_.Stop(__func__);
-}
-
 void EllpackPageImpl::SetCuts(std::shared_ptr<common::HistogramCuts const> cuts) {
   cuts_ = std::move(cuts);
 }
@@ -711,17 +689,19 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
   // guarantee that.
   CHECK_GE(this->gidx_buffer.size_bytes() + this->d_gidx_buffer.size_bytes(), 5);
   auto null = this->NullValue();
+  this->group_ptr_.SetDevice(ctx->Device());
+  auto d_group_ptr = this->group_ptr_.ConstDeviceSpan();
   if (d_gidx_buffer.empty()) {
     auto iter = common::CompressedIterator<std::uint32_t>{gidx_buffer.data(), this->NumSymbols()};
     return EllpackDeviceAccessor{
         ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        iter, null,        this->IsDense(),       d_group_ptr,      feature_types};
   } else {
     auto iter = common::DoubleCompressedIter<std::uint32_t>{
         gidx_buffer.data(), gidx_buffer.size_bytes(), d_gidx_buffer.data(), this->NumSymbols()};
     return DoubleEllpackAccessor{
         ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        iter, null,        this->IsDense(),       d_group_ptr,      feature_types};
   }
 }
 
@@ -737,7 +717,7 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
                                   this->gidx_buffer.size_bytes(), cudaMemcpyDefault,
                                   ctx->CUDACtx()->Stream()));
   }
-
+  auto h_group_ptr = this->group_ptr_.ConstHostSpan();
   if (!d_gidx_buffer.empty()) {
     auto dst = h_gidx_buffer->data() + this->gidx_buffer.size_bytes();
     auto src = d_gidx_buffer.data();
@@ -748,7 +728,7 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
         h_gidx_buffer->data(), gidx_buffer.size_bytes(), dst, this->NumSymbols()};
     return DoubleEllpackAccessor{
         ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        iter, null,        this->IsDense(),       h_group_ptr,      feature_types};
   }
 
   auto iter = common::CompressedIterator<std::uint32_t>{h_gidx_buffer->data(), this->NumSymbols()};
@@ -756,7 +736,7 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
   auto sctx = ctx->IsCPU() ? ctx : &cpu_ctx;
   return EllpackDeviceAccessor{
       sctx, this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-      iter, null,        this->IsDense(),       feature_types};
+      iter, null,        this->IsDense(),       h_group_ptr,      feature_types};
 }
 
 namespace {

@@ -64,6 +64,15 @@ class MultiHistTest
     auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
     auto hists = dh::device_vector<common::Span<GradientPairInt64>>{node_hist};
     auto sizes_cum = std::vector<std::size_t>{0, ridx.size()};
+
+
+    // this->page->VisitOnHost(&this->ctx, [](auto&& acc) {
+    //   for (std::size_t i = 0; i < acc.row_stride * acc.NumFeatures(); ++i) {
+    //     std::cout << acc.gidx_iter[i] << ", ";
+    //   }
+    //   std::cout << std::endl;
+    // });
+
     this->histogram.BuildHistogram(&this->ctx, page->GetDeviceEllpack(&ctx, {}),
                                    p_fg->DeviceAccessor(ctx.Device()),
                                    this->gpairs.View(this->ctx.Device()), dh::ToSpan(ridxs),
@@ -135,8 +144,8 @@ INSTANTIATE_TEST_SUITE_P(Basic, MultiHistTest,
                          TestName);
 
 INSTANTIATE_TEST_SUITE_P(Large, MultiHistTest,
-                         ::testing::Combine(::testing::Values<bst_idx_t>((1ul << 21)),
-                                            ::testing::Values(2), ::testing::Values(2),
+                         ::testing::Combine(::testing::Values<bst_idx_t>((1ul << 22)),
+                                            ::testing::Values(512), ::testing::Values(1),
                                             ::testing::Bool()),
                          TestName);
 }  // namespace xgboost::tree::cuda_impl
