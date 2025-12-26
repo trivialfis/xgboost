@@ -433,9 +433,8 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
     auto it_idx = idx_in_grp + d_group_ptr[blockIdx.y];
 
     bst_bin_t compressed_bin = matrix.gidx_iter[it_idx];
-    // printf("idx: %d, idx_in_grp: %d, it_idx: %d, ridx: %d, fidx_in_set: %d, grp: %d\n", int(idx),
-    //        int(idx_in_grp), int(it_idx), int(ridx), int(fidx_in_set), int(blockIdx.y));
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
+      auto g = d_gpair[static_cast<std::size_t>(ridx) * n_targets + target_idx];
       if constexpr (Policy::kCompressed) {
         auto fidx = fidx_in_set + group.start_feature;
         compressed_bin += matrix.feature_segments[fidx];
@@ -448,8 +447,7 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
       }
       // TODO(jiamingy): When the number of targets is non-trivial, we need to split up
       // the histograms due to shared memory size.
-      auto adjusted = d_roundings[target_idx].ToFixedPoint(
-          d_gpair[static_cast<std::size_t>(ridx) * n_targets + target_idx]);
+      auto adjusted = d_roundings[target_idx].ToFixedPoint(g);
       atomic_add(compressed_bin + target_idx, adjusted);
     }
   };
