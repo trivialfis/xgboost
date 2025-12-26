@@ -394,6 +394,53 @@ XGBOOST_DEV_INLINE void PrefetchTile(It const* begin, std::uint32_t items) {
     PrefetchGlobalL2(reinterpret_cast<const char*>(cuda::std::to_address(begin)) + offset);
   }
 }
+
+struct ShmHist {
+  GradientPairInt64* smem_arr;
+
+  static constexpr int kBanks = 32;
+
+  static __device__ void Add64as32(std::uint32_t* dst, std::int64_t src) {
+    std::uint32_t* y_low = dst;
+    std::uint32_t* y_high = y_low + kBanks;
+
+    auto cast_src = reinterpret_cast<uint64_t*>(&src);
+
+    std::uint32_t const x_low = static_cast<uint32_t>(src);
+    std::uint32_t const x_high = (*cast_src) >> 32;
+
+    auto const old = atomicAdd(y_low, x_low);
+    std::uint32_t const carry = old > (std::numeric_limits<uint32_t>::max() - x_low) ? 1 : 0;
+    std::uint32_t const sig = x_high + carry;
+    atomicAdd(y_high, sig);
+  }
+
+  __device__ std::uint32_t* ShmemFstAddr(bst_bin_t bin_idx_in_feat_grp) const {
+    // The number of words taken by a single bin.
+    constexpr std::int32_t kWordsOfGrad = sizeof(GradientPairInt64) / sizeof(std::int32_t);
+    static_assert(kWordsOfGrad == 4);
+    // The size of each segument in words.
+    constexpr std::int32_t kSegSize = kBanks * kWordsOfGrad;
+    // The segment index of the current bin.
+    std::int32_t seg_idx = bin_idx_in_feat_grp / kBanks;
+    // Bin index within a segment.
+    std::int32_t bin_in_seg = bin_idx_in_feat_grp % kBanks;
+    // The starting word address of the current segment.
+    std::int32_t seg_st_addr = seg_idx * kSegSize;
+
+    auto dst_ptr = reinterpret_cast<std::uint32_t*>(smem_arr) + seg_st_addr + bin_in_seg;
+    return dst_ptr;
+  }
+
+  __device__ void AtomicAddGpair(bst_bin_t bin_idx, GradientPairInt64 const& adjusted) {
+    auto dst_ptr = this->ShmemFstAddr(bin_idx);
+
+    auto g = adjusted.GetQuantisedGrad();
+    Add64as32(dst_ptr, g);
+    auto h = adjusted.GetQuantisedHess();
+    Add64as32(dst_ptr + 2 * kBanks, h);
+  }
+};
 }  // namespace
 
 /**
@@ -428,11 +475,11 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
 
   extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
   // Privatized histogram
-  auto smem_hist = reinterpret_cast<GradientPairInt64*>(shmem);
+  auto smem_hist = ShmHist{reinterpret_cast<GradientPairInt64*>(shmem)};
 
   bst_bin_t const n_target_bins = group.num_bins * n_targets;
   if constexpr (Policy::kSharedMem) {
-    dh::BlockFill(smem_hist, n_target_bins, GradientPairInt64{});
+    dh::BlockFill(smem_hist.smem_arr, n_target_bins, GradientPairInt64{});
     __syncthreads();
   }
 
@@ -440,7 +487,7 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
 
   auto atomic_add = [&](auto bin_idx, auto const& adjusted) {
     if constexpr (Policy::kSharedMem) {
-      AtomicAddGpairShared(smem_hist + bin_idx, adjusted);
+      smem_hist.AtomicAddGpair(bin_idx, adjusted);
     } else {
       AtomicAddGpairGlobal(gmem_hist + bin_idx, adjusted);
     }
@@ -524,7 +571,20 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
 
   auto start_bin = group.start_bin * n_targets;
   for (auto i : dh::BlockStrideRange(0, n_target_bins)) {
-    AtomicAddGpairGlobal(gmem_hist + start_bin + i, smem_hist[i]);
+    auto src_ptr = smem_hist.ShmemFstAddr(i);
+    auto dst_ptr = reinterpret_cast<std::uint64_t*>(gmem_hist + start_bin + i);
+
+    std::int64_t g[2];
+    auto g_ptr = reinterpret_cast<std::uint32_t*>(&g);
+#pragma unroll
+    for (int k = 0; k < 4; ++k) {
+      g_ptr[k] = src_ptr[k * ShmHist::kBanks];
+    }
+#pragma unroll
+    for (int k = 0; k < 2; ++k) {
+      atomicAdd(dst_ptr + k, *reinterpret_cast<uint64_t*>(&g[k]));
+    }
+    // AtomicAddGpairGlobal(gmem_hist + start_bin + i, smem_hist[i]);
   }
 }
 
