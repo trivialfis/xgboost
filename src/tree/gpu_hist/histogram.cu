@@ -1017,10 +1017,13 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       std::int32_t const valid_items = calc_valid_items(offset);
       // wait for buffer to be ready to use.
       auto token_0 = cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(filled[stage]));
+#if __CUDA_ARCH__ >= 90
       while (!cuda::ptx::mbarrier_try_wait(cuda::device::barrier_native_handle(filled[stage]),
                                            token_0)) {
       }
+#else
       // filled[stage].arrive_and_wait();
+#endif
 
       if (kTileSize == valid_items) {
         process_gidx(std::true_type{}, valid_items, offset, bufs[stage]);
@@ -1053,13 +1056,15 @@ __global__ __launch_bounds__(kBlockThreads) void ProducerConsumerKernel(
       std::int32_t const valid_items = calc_valid_items(offset);
 
       // wait for the consumer to consume the data
-      // consumed[stage].arrive_and_wait();
       auto token_0 =
           cuda::ptx::mbarrier_arrive(cuda::device::barrier_native_handle(consumed[stage]));
+#if __CUDA_ARCH__ >= 90
       while (!cuda::ptx::mbarrier_try_wait(cuda::device::barrier_native_handle(consumed[stage]),
                                            token_0)) {
       }
-
+#else
+      // consumed[stage].arrive_and_wait();
+#endif
       if (j == 0) {
         __syncthreads();
       }
