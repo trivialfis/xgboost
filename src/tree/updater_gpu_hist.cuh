@@ -657,6 +657,19 @@ class MultiTargetHistMaker {
             std::make_unique<FeatureInteractionConstraintDevice>(param, cuts_->NumFeatures())},
         batch_ptr_{std::move(batch_ptr)} {
     xgboost_NVTX_FN_RANGE();
+    CHECK(param_.monotone_constraints.empty()) << "Monotone constraint" << MTNotImplemented();
+    CHECK(param_.interaction_constraints.empty()) << "Interaction constraint" << MTNotImplemented();
   }
 };
+// fixme:
+// - min_split_loss: need test
+//     Implemented in the expand entry.
+// - min_child_weight: x
+//     Part of the evaluator and the weight function.
+// - reg_lambda: x.
+//     Part of the gain calculation.
+// - reg_alpha: need test
+//     Part of the gain calculation.
+// - max_delta_step: x
+//     Part of the weight function to box the leaf weight.
 }  // namespace xgboost::tree::cuda_impl
