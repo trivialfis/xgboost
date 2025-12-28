@@ -53,7 +53,7 @@ struct EllpackAccessorImpl {
   /** @brief Histogram cut values. Size equals to (bins per feature * number of features). */
   common::Span<const float> gidx_fvalue_map;
   common::Span<bst_idx_t const> group_ptr;
-  common::Span<bst_feature_t> group_feat_ptr;
+  common::Span<bst_feature_t const> group_feat_ptr;
   /** @brief Type of each feature, categorical or numerical. */
   common::Span<const FeatureType> feature_types;
 
@@ -62,6 +62,7 @@ struct EllpackAccessorImpl {
                       bst_idx_t row_stride, bst_idx_t base_rowid, bst_idx_t n_rows,
                       IterType gidx_iter, bst_idx_t null_value, bool is_dense,
                       common::Span<bst_idx_t const> d_group_ptr,
+                      common::Span<bst_feature_t const> d_group_feat_ptr,
                       common::Span<FeatureType const> feature_types)
       : null_value_{null_value},
         row_stride{row_stride},
@@ -69,6 +70,7 @@ struct EllpackAccessorImpl {
         n_rows{n_rows},
         gidx_iter{gidx_iter},
         group_ptr{d_group_ptr},
+        group_feat_ptr{d_group_feat_ptr},
         feature_types{feature_types} {
     if (ctx->IsCUDA()) {
       cuts->cut_values_.SetDevice(ctx->Device());
@@ -88,6 +90,7 @@ struct EllpackAccessorImpl {
       CHECK(!IsDense());
       this->null_value_ |= (Ind() << NullShift());
     }
+    CHECK(!group_feat_ptr.empty());
   }
 
   [[nodiscard]] XGBOOST_HOST_DEV_INLINE bool IsDense() const {
@@ -406,6 +409,8 @@ class EllpackPageImpl {
  private:
   common::Monitor monitor_;
   HostDeviceVector<bst_idx_t> group_ptr_;
+  // fixme: store feature groups here.
+  HostDeviceVector<bst_feature_t> group_feat_ptr_;
 };
 
 [[nodiscard]] inline bst_idx_t GetRowStride(DMatrix* dmat) {

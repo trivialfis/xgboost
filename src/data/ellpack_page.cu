@@ -415,9 +415,16 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, AdapterBatch batch, float m
     std::partial_sum(h_group_elements.cbegin(), h_group_elements.cend(), h_group_elements.begin());
     this->group_ptr_.SetDevice(ctx->Device());
     p_fg->feature_segments.SetDevice(ctx->Device());
+
+    this->group_feat_ptr_.SetDevice(ctx->Device());
+    this->group_feat_ptr_.Resize(p_fg->feature_segments.Size());
+    this->group_feat_ptr_.Copy(p_fg->feature_segments);
+    CHECK(!this->group_feat_ptr_.Empty());
+
     CopyDataToEllpack<true>(ctx, batch, feature_types, this, missing,
                             this->group_ptr_.ConstDeviceSpan(),
                             p_fg->feature_segments.ConstDeviceSpan());
+    std::cout << "after copy:" << this->group_feat_ptr_.Size() << std::endl;
   } else {
     // fixme: group segments
     CopyDataToEllpack<false>(ctx, batch, feature_types, this, missing, {}, {});
@@ -575,6 +582,21 @@ bst_idx_t EllpackPageImpl::Copy(Context const* ctx, EllpackPageImpl const* page,
     thrust::for_each_n(ctx->CUDACtx()->CTP(), thrust::make_counting_iterator(0ul), n_elements,
                        CopyPage{this, src, offset});
   });
+
+  CHECK_EQ(offset, 0);  // fixme
+  if (this->group_feat_ptr_.Empty()) {
+    this->group_feat_ptr_.SetDevice(ctx->Device());
+    this->group_feat_ptr_.Resize(page->group_feat_ptr_.Size());
+    page->group_feat_ptr_.SetDevice(ctx->Device());
+    this->group_feat_ptr_.Copy(page->group_feat_ptr_);
+  }
+  if (this->group_ptr_.Empty()) {
+    this->group_ptr_.SetDevice(ctx->Device());
+    this->group_ptr_.Resize(page->group_ptr_.Size());
+    page->group_ptr_.SetDevice(ctx->Device());
+    this->group_ptr_.Copy(page->group_ptr_);
+  }
+
   monitor_.Stop(__func__);
   return n_elements;
 }
@@ -689,17 +711,20 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
   auto null = this->NullValue();
   this->group_ptr_.SetDevice(ctx->Device());
   auto d_group_ptr = this->group_ptr_.ConstDeviceSpan();
+  this->group_feat_ptr_.SetDevice(ctx->Device());
+  auto d_group_feat_ptr = this->group_feat_ptr_.ConstDeviceSpan();
+  CHECK(!this->group_feat_ptr_.Empty());
   if (d_gidx_buffer.empty()) {
     auto iter = common::CompressedIterator<std::uint32_t>{gidx_buffer.data(), this->NumSymbols()};
     return EllpackDeviceAccessor{
-        ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       d_group_ptr,      feature_types};
+        ctx,  this->cuts_,     this->info.row_stride, this->base_rowid, this->n_rows, iter,
+        null, this->IsDense(), d_group_ptr,           d_group_feat_ptr, feature_types};
   } else {
     auto iter = common::DoubleCompressedIter<std::uint32_t>{
         gidx_buffer.data(), gidx_buffer.size_bytes(), d_gidx_buffer.data(), this->NumSymbols()};
     return DoubleEllpackAccessor{
-        ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       d_group_ptr,      feature_types};
+        ctx,  this->cuts_,     this->info.row_stride, this->base_rowid, this->n_rows, iter,
+        null, this->IsDense(), d_group_ptr,           d_group_feat_ptr, feature_types};
   }
 }
 
@@ -716,6 +741,7 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
                                   ctx->CUDACtx()->Stream()));
   }
   auto h_group_ptr = this->group_ptr_.ConstHostSpan();
+  auto h_group_feat_ptr = this->group_feat_ptr_.ConstHostSpan();
   if (!d_gidx_buffer.empty()) {
     auto dst = h_gidx_buffer->data() + this->gidx_buffer.size_bytes();
     auto src = d_gidx_buffer.data();
@@ -725,16 +751,16 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
     auto iter = common::DoubleCompressedIter<std::uint32_t>{
         h_gidx_buffer->data(), gidx_buffer.size_bytes(), dst, this->NumSymbols()};
     return DoubleEllpackAccessor{
-        ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       h_group_ptr,      feature_types};
+        ctx,  this->cuts_,     this->info.row_stride, this->base_rowid, this->n_rows, iter,
+        null, this->IsDense(), h_group_ptr,           h_group_feat_ptr, feature_types};
   }
 
   auto iter = common::CompressedIterator<std::uint32_t>{h_gidx_buffer->data(), this->NumSymbols()};
   Context cpu_ctx;
   auto sctx = ctx->IsCPU() ? ctx : &cpu_ctx;
   return EllpackDeviceAccessor{
-      sctx, this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-      iter, null,        this->IsDense(),       h_group_ptr,      feature_types};
+      sctx, this->cuts_,     this->info.row_stride, this->base_rowid, this->n_rows, iter,
+      null, this->IsDense(), h_group_ptr,           h_group_feat_ptr, feature_types};
 }
 
 namespace {

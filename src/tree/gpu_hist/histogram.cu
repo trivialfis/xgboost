@@ -412,7 +412,7 @@ __device__ void HistKernelOneNodeTarget(Accessor const matrix, FeatureGroup cons
 
     Idx ridx = d_ridx[ridx_in_set];
     auto fidx = fidx_in_set + group.start_feature;
-
+    // fixme: idx_in_group is the same as idx
     auto idx_in_grp = (ridx - matrix.base_rowid) * feature_stride + fidx_in_set;
     auto it_idx = idx_in_grp + d_group_ptr[blockIdx.y];
 
