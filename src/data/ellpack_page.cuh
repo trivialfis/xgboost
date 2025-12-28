@@ -52,6 +52,8 @@ struct EllpackAccessorImpl {
   std::uint32_t const* feature_segments;
   /** @brief Histogram cut values. Size equals to (bins per feature * number of features). */
   common::Span<const float> gidx_fvalue_map;
+  common::Span<bst_idx_t const> group_ptr;
+  common::Span<bst_feature_t> group_feat_ptr;
   /** @brief Type of each feature, categorical or numerical. */
   common::Span<const FeatureType> feature_types;
 
@@ -59,12 +61,14 @@ struct EllpackAccessorImpl {
   EllpackAccessorImpl(Context const* ctx, std::shared_ptr<const common::HistogramCuts> cuts,
                       bst_idx_t row_stride, bst_idx_t base_rowid, bst_idx_t n_rows,
                       IterType gidx_iter, bst_idx_t null_value, bool is_dense,
+                      common::Span<bst_idx_t const> d_group_ptr,
                       common::Span<FeatureType const> feature_types)
       : null_value_{null_value},
         row_stride{row_stride},
         base_rowid{base_rowid},
         n_rows{n_rows},
         gidx_iter{gidx_iter},
+        group_ptr{d_group_ptr},
         feature_types{feature_types} {
     if (ctx->IsCUDA()) {
       cuts->cut_values_.SetDevice(ctx->Device());
@@ -108,14 +112,23 @@ struct EllpackAccessorImpl {
       ridx -= base_rowid;
     }
     auto row_begin = row_stride * ridx;
-    if (!this->IsDenseCompressed()) {
+    if (!this->IsDenseCompressed()) {  // fixme
       // binary search returns -1 if it's missing
       auto row_end = row_begin + row_stride;
-      bst_bin_t gidx = common::BinarySearchBin(row_begin, row_end, gidx_iter,
-                                               feature_segments[fidx], feature_segments[fidx + 1]);
+      bst_bin_t gidx =
+          common::BinarySearchBin(row_begin, row_end, gidx_iter, this->feature_segments[fidx],
+                                  this->feature_segments[fidx + 1]);
       return gidx;
     }
-    bst_bin_t gidx = gidx_iter[row_begin + fidx];
+
+    // auto idx = row_begin + fidx;
+    auto group_idx = dh::SegmentId(this->group_feat_ptr, fidx);  // fixme
+    auto n_feat_in_grp = group_feat_ptr[group_idx + 1] - group_feat_ptr[group_idx];
+    auto fidx_in_grp = fidx - this->group_feat_ptr[group_idx];
+    auto idx_in_grp = ridx * n_feat_in_grp + fidx_in_grp;
+    auto idx = group_ptr[group_idx] + idx_in_grp;
+
+    bst_bin_t gidx = gidx_iter[idx];
     if (gidx == this->NullValue()) {
       // Missing value in a dense ellpack
       return -1;
@@ -149,7 +162,7 @@ struct EllpackAccessorImpl {
   }
 
   [[nodiscard]] __device__ float GetFvalue(bst_idx_t ridx, size_t fidx) const {
-    auto gidx = GetBinIndex(ridx, fidx);
+    auto gidx = this->GetBinIndex(ridx, fidx);
     if (gidx == -1) {
       return std::numeric_limits<float>::quiet_NaN();
     }
@@ -245,14 +258,6 @@ class EllpackPageImpl {
    * @returns The number of elements copied.
    */
   bst_idx_t Copy(Context const* ctx, EllpackPageImpl const* page, bst_idx_t offset);
-  /**
-   * @brief Compact the given ELLPACK page into the current page.
-   *
-   * @param ctx The GPU context.
-   * @param page The ELLPACK page to compact from.
-   * @param row_indexes Row indexes for the compacted page.
-   */
-  void Compact(Context const* ctx, EllpackPageImpl const* page, common::Span<size_t> row_indexes);
 
   /** @return Number of instances in the page. */
   [[nodiscard]] bst_idx_t Size() const;
@@ -400,6 +405,7 @@ class EllpackPageImpl {
 
  private:
   common::Monitor monitor_;
+  HostDeviceVector<bst_idx_t> group_ptr_;
 };
 
 [[nodiscard]] inline bst_idx_t GetRowStride(DMatrix* dmat) {

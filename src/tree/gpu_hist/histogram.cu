@@ -383,6 +383,7 @@ __device__ void HistKernelOneNodeTarget(Accessor const matrix, FeatureGroup cons
 
   Idx const ridx_size = d_ridx_iter.size();
   auto const d_ridx = d_ridx_iter.data();
+  auto const* d_group_ptr = matrix.group_ptr.data();
 
   extern __align__(cuda::std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
 
@@ -412,7 +413,10 @@ __device__ void HistKernelOneNodeTarget(Accessor const matrix, FeatureGroup cons
     Idx ridx = d_ridx[ridx_in_set];
     auto fidx = fidx_in_set + group.start_feature;
 
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    auto idx_in_grp = (ridx - matrix.base_rowid) * feature_stride + fidx_in_set;
+    auto it_idx = idx_in_grp + d_group_ptr[blockIdx.y];
+
+    bst_bin_t compressed_bin = matrix.gidx_iter[it_idx];
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
       auto g = LoadGpair(gpair + ridx);
       if constexpr (Policy::kCompressed) {
