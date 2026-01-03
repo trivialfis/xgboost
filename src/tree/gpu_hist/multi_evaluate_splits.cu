@@ -178,13 +178,13 @@ struct EvaluateSplitAgent {
               shared.param, left_sum.GetGrad(), left_sum.GetHess(), lw_t);
           auto right_gain = ::xgboost::tree::CalcGainGivenWeight(
               shared.param, right_sum.GetGrad(), right_sum.GetHess(), rw_t);
-          
+
           // Add L1 regularization term if present (see param.h line 265)
           if (shared.param.reg_alpha != 0.0f) {
             left_gain += shared.param.reg_alpha * abs(lw_t);
             right_gain += shared.param.reg_alpha * abs(rw_t);
           }
-          
+
           gain += left_gain + right_gain;
         }
       }
@@ -398,7 +398,7 @@ void MultiHistEvaluator::EvaluateSplits(Context const *ctx,
       base_weight[t] = CalcWeight(shared_inputs.param, g.GetGrad(), g.GetHess());
       // Use CalcGainGivenWeight which properly incorporates reg_lambda
       auto pg = CalcGainGivenWeight(shared_inputs.param, static_cast<double>(g.GetGrad()),
-                                    static_cast<double>(g.GetHess()), 
+                                    static_cast<double>(g.GetHess()),
                                     static_cast<double>(base_weight[t]));
       if (shared_inputs.param.reg_alpha != 0.0f) {
         pg += shared_inputs.param.reg_alpha * std::abs(base_weight[t]);

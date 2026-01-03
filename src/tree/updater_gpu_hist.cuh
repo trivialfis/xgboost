@@ -51,7 +51,7 @@ void AssignNodes(TreeView const& tree, std::vector<ExpandEntry> const& candidate
   auto p_sub_nidx = nodes_to_sub.data();
   for (auto& e : candidates) {
     // Decide whether to build the left histogram or right histogram Use sum of Hessian as
-    // a heuristic to select node with fewest training instances This optimization is for
+    // an heuristic to select node with fewest training instances This optimization is for
     // distributed training to avoid an allreduce call for synchronizing the number of
     // instances for each node.
     bool fewer_right = compare_hess(e);
