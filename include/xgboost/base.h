@@ -288,9 +288,7 @@ class GradientPairIntImpl {
   }
 
   XGBOOST_DEVICE GradientPairIntImpl operator+(GradientPairIntImpl const &rhs) const {
-    GradientPairIntImpl g;
-    g.grad_ = grad_ + rhs.grad_;
-    g.hess_ = hess_ + rhs.hess_;
+    GradientPairIntImpl g{grad_ + rhs.grad_, hess_ + rhs.hess_};
     return g;
   }
 
@@ -301,9 +299,7 @@ class GradientPairIntImpl {
   }
 
   XGBOOST_DEVICE GradientPairIntImpl operator-(GradientPairIntImpl const &rhs) const {
-    GradientPairIntImpl g;
-    g.grad_ = grad_ - rhs.grad_;
-    g.hess_ = hess_ - rhs.hess_;
+    GradientPairIntImpl g{grad_ - rhs.grad_, hess_ - rhs.hess_};
     return g;
   }
 
