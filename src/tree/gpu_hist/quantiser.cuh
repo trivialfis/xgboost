@@ -74,12 +74,28 @@ class GradientQuantiser {
     auto h = gpair.GetQuantisedHess() * to_floating_point_.GetHess();
     return {g, h};
   }
+  auto Scale() const { return to_fixed_point_; }
+  auto InvScale() const { return to_floating_point_; }
+};
+
+struct FixedPointGradScale {
+  GradientPairInt32 exponent;
+
+  explicit FixedPointGradScale(GradientPairInt32 exponent) : exponent{exponent} {}
+
+  GradientPairInt64 ToInt64(GradientPairInt32 const& gpair) const {
+    auto g = detail::RestoreFixed64(gpair.GetQuantisedGrad(), exponent.GetQuantisedGrad());
+    auto h = detail::RestoreFixed64(gpair.GetQuantisedHess(), exponent.GetQuantisedHess());
+    return {g, h};
+  }
 };
 
 // For vector leaf
 class MultiGradientQuantiser {
  private:
   dh::device_vector<GradientQuantiser> quantizers_;
+  dh::device_vector<FixedPointGradScale> to_fixed_;
+  dh::device_vector<FixedPointGradScale> to_float_;
 
  public:
   MultiGradientQuantiser(Context const* ctx, linalg::MatrixView<GradientPair const> gpair,

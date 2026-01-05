@@ -140,6 +140,24 @@ MultiGradientQuantiser::MultiGradientQuantiser(Context const* ctx,
     h_quantizers.emplace_back(ctx, gpair.Slice(linalg::All(), t), info);
   }
   this->quantizers_ = h_quantizers;
+
+  std::vector<FixedPointGradScale> h_to_fixed;
+  std::vector<FixedPointGradScale> h_to_float;
+  for (auto q : h_quantizers) {
+    std::int32_t gs = std::log2(q.Scale().GetGrad());
+    std::int32_t hs = std::log2(q.Scale().GetHess());
+
+    std::int32_t inv_gs = std::log2(q.InvScale().GetGrad());
+    std::int32_t inv_hs = std::log2(q.InvScale().GetHess());
+
+    auto to_fixed = GradientPairInt32{gs, hs};
+    auto to_float = GradientPairInt32{inv_gs, inv_hs};
+    h_to_fixed.emplace_back(to_fixed);
+    h_to_float.emplace_back(to_float);
+  }
+
+  this->to_fixed_ = h_to_fixed;
+  this->to_float_ = h_to_float;
 }
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const gpairs,
