@@ -2,6 +2,9 @@
  * Copyright 2020-2025, XGBoost Contributors
  */
 #pragma once
+#include <cstdint>         // for int64_t, int32_t
+#include <cuda/std/cmath>  // for signbit
+
 #include "../../common/device_helpers.cuh"  // for ToSpan
 #include "../../common/device_vector.cuh"   // for device_vector
 #include "xgboost/base.h"                   // for GradientPairPrecise, GradientPairInt64
@@ -27,7 +30,7 @@ XGBOOST_DEVICE inline std::int32_t ExtractFixed32(std::int64_t v, std::int32_t n
   // Bring back the sign bit
   low |= (sign << 31);
 
-  return cuda::std::bit_cast<std::int32_t>(low);
+  return *reinterpret_cast<std::int32_t*>(&low);
 }
 
 XGBOOST_HOST_DEV_INLINE std::int64_t RestoreFixed64(std::int32_t v, std::int32_t n) {
