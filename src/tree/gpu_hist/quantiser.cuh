@@ -23,13 +23,14 @@ XGBOOST_DEVICE inline std::int32_t ExtractFixed32(std::int64_t v, std::int32_t n
   std::int32_t tail = std::max(n - kF32MantissaBits, 0);
 
   std::int64_t v0 = uv >> tail;
-  uint32_t low = static_cast<uint32_t>(v0 & 0xffffffff);
-  low = (sign << 31) | low;
+  std::uint32_t low = static_cast<uint32_t>(v0 & ~std::uint32_t{0});
+  // Bring back the sign bit
+  low |= (sign << 31);
 
   return cuda::std::bit_cast<std::int32_t>(low);
 }
 
-XGBOOST_DEVICE inline std::int64_t RestoreFixed64(std::int32_t v, std::int32_t n) {
+XGBOOST_HOST_DEV_INLINE std::int64_t RestoreFixed64(std::int32_t v, std::int32_t n) {
   std::uint64_t uv = *reinterpret_cast<std::uint32_t*>(&v);
   std::uint32_t constexpr kValueMask = ~(std::uint32_t{1} << 31);
   // Remove the sign bit
@@ -37,6 +38,7 @@ XGBOOST_DEVICE inline std::int64_t RestoreFixed64(std::int32_t v, std::int32_t n
 
   std::int32_t tail = std::max(n - kF32MantissaBits, 0);
   uv <<= tail;
+  // Bring back the sign bit
   uv |= (std::uint64_t{cuda::std::signbit(v)} << 63);
   return uv;
 }
