@@ -83,7 +83,13 @@ struct FixedPointGradScale {
 
   explicit FixedPointGradScale(GradientPairInt32 exponent) : exponent{exponent} {}
 
-  GradientPairInt64 ToInt64(GradientPairInt32 const& gpair) const {
+  XGBOOST_DEVICE GradientPairInt32 ToInt32(GradientPairInt64 const& gpair) const {
+    auto g = detail::ExtractFixed32(gpair.GetQuantisedGrad(), exponent.GetQuantisedGrad());
+    auto h = detail::ExtractFixed32(gpair.GetQuantisedHess(), exponent.GetQuantisedHess());
+    return {g, h};
+  }
+
+  XGBOOST_DEVICE GradientPairInt64 ToInt64(GradientPairInt32 const& gpair) const {
     auto g = detail::RestoreFixed64(gpair.GetQuantisedGrad(), exponent.GetQuantisedGrad());
     auto h = detail::RestoreFixed64(gpair.GetQuantisedHess(), exponent.GetQuantisedHess());
     return {g, h};
@@ -95,6 +101,8 @@ class MultiGradientQuantiser {
  private:
   dh::device_vector<GradientQuantiser> quantizers_;
   dh::device_vector<FixedPointGradScale> to_fixed_;
+  // fixme: doesn't need to float scale, we use 64 bit for histogram, evaluator doesn't need to
+  // float.
   dh::device_vector<FixedPointGradScale> to_float_;
 
  public:
@@ -102,9 +110,12 @@ class MultiGradientQuantiser {
                          MetaInfo const& info);
 
   [[nodiscard]] auto Quantizers() const { return dh::ToSpan(this->quantizers_); }
+  [[nodiscard]] auto ToFixedScales() const { return dh::ToSpan(this->to_fixed_); }
+  // [[nodiscard]] auto ToFloatScales() const { return dh::ToSpan(this->to_float_); }
 };
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const gpairs,
                          common::Span<GradientQuantiser const> roundings,
-                         linalg::Matrix<GradientPairInt64>* p_out);
+                         common::Span<FixedPointGradScale const> scales,
+                         linalg::Matrix<GradientPairInt32>* p_out);
 }  // namespace xgboost::tree

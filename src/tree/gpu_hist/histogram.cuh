@@ -41,7 +41,7 @@ XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
   uint32_t* y_low = reinterpret_cast<uint32_t*>(dst);
   uint32_t* y_high = y_low + 1;
 
-  auto cast_src = reinterpret_cast<uint64_t *>(&src);
+  auto cast_src = reinterpret_cast<uint64_t*>(&src);
 
   uint32_t const x_low = static_cast<uint32_t>(src);
   uint32_t const x_high = (*cast_src) >> 32;
@@ -185,7 +185,8 @@ class DeviceHistogramBuilder {
   // Build histograms for multiple nodes and multiple targets
   void BuildHistogram(Context const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      linalg::MatrixView<GradientPairInt64 const> gpair,
+                      linalg::MatrixView<GradientPairInt32 const> gpair,
+                      common::Span<FixedPointGradScale const> scales,
                       common::Span<common::Span<const std::uint32_t>> ridxs,
                       common::Span<common::Span<GradientPairInt64>> hists,
                       std::vector<std::size_t> const& h_sizes_csum);

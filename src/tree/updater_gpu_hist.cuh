@@ -66,7 +66,8 @@ void AssignNodes(TreeView const& tree, std::vector<ExpandEntry> const& candidate
   }
 }
 
-inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPairInt64> d_gpair,
+inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPairInt32> d_gpair,
+                        common::Span<FixedPointGradScale const> scales,
                         common::Span<GradientPairInt64> root_sum) {
   auto n_samples = d_gpair.Shape(0);
   auto n_targets = d_gpair.Shape(1);
@@ -81,7 +82,7 @@ inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPairInt64
     auto cidx = i / n_samples;
     auto ridx = i % n_samples;
     auto g = d_gpair(ridx, cidx);
-    return g;
+    return scales[cidx].ToInt64(g);
   });
   thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + d_gpair.Size(), val_it,
                         thrust::make_discard_iterator(), dh::tbegin(root_sum));
@@ -109,7 +110,7 @@ class MultiTargetHistMaker {
   std::unique_ptr<FeatureInteractionConstraintDevice> interaction_constraints_;
 
   // Gradient used for building the tree structure
-  linalg::Matrix<GradientPairInt64> split_gpair_;
+  linalg::Matrix<GradientPairInt32> split_gpair_;
   // Gradient used for calculating the leaf values
   linalg::Matrix<GradientPair> value_gpair_;
   std::vector<bst_idx_t> const batch_ptr_;
@@ -156,7 +157,8 @@ class MultiTargetHistMaker {
 
     this->histogram_.BuildHistogram(this->ctx_, acc,
                                     this->feature_groups_->DeviceAccessor(this->ctx_->Device()),
-                                    d_gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), h_sizes_csum);
+                                    d_gpair, this->split_quantizer_->ToFixedScales(),
+                                    dh::ToSpan(ridxs), dh::ToSpan(hists), h_sizes_csum);
   }
 
  public:
@@ -181,6 +183,7 @@ class MultiTargetHistMaker {
     this->split_quantizer_ = std::make_unique<MultiGradientQuantiser>(
         this->ctx_, gpair_all->View(ctx_->Device()), p_fmat->Info());
     CalcQuantizedGpairs(this->ctx_, gpair_all, this->split_quantizer_->Quantizers(),
+                        this->split_quantizer_->ToFixedScales(),
                         &this->split_gpair_);
 
     if (!this->value_gpair_.Empty()) {
@@ -207,7 +210,7 @@ class MultiTargetHistMaker {
     // Calculate the root sum
     this->evaluator_.AllocNodeSum(RegTree::kRoot, n_targets);
     auto d_root_sum = this->evaluator_.GetNodeSum(RegTree::kRoot, n_targets);
-    CalcRootSum(this->ctx_, d_gpair, d_root_sum);
+    CalcRootSum(this->ctx_, d_gpair, this->split_quantizer_->ToFixedScales(), d_root_sum);
 
     // Build the root histogram.
     histogram_.AllocateHistograms(ctx_, {RegTree::kRoot});

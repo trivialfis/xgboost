@@ -162,10 +162,11 @@ MultiGradientQuantiser::MultiGradientQuantiser(Context const* ctx,
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const gpairs,
                          common::Span<GradientQuantiser const> roundings,
-                         linalg::Matrix<GradientPairInt64>* p_out) {
+                         common::Span<FixedPointGradScale const> scales,
+                         linalg::Matrix<GradientPairInt32>* p_out) {
   auto shape = gpairs->Shape();
   if (p_out->Empty()) {
-    *p_out = linalg::Matrix<GradientPairInt64>{shape, ctx->Device(), linalg::kF};
+    *p_out = linalg::Matrix<GradientPairInt32>{shape, ctx->Device(), linalg::kF};
   } else {
     p_out->Reshape(shape);
   }
@@ -176,7 +177,8 @@ void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const
   auto it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
     auto [ridx, target_idx] = linalg::UnravelIndex(i, in_gpair.Shape());
     auto g = in_gpair(ridx, target_idx);
-    return roundings[target_idx].ToFixedPoint(g);
+    auto fixed = roundings[target_idx].ToFixedPoint(g);
+    return scales[target_idx].ToInt32(fixed);
   });
   thrust::copy_n(ctx->CUDACtx()->CTP(), it, in_gpair.Size(), linalg::tbegin(out_gpair));
 }
@@ -972,7 +974,8 @@ void DeviceHistogramBuilder::BuildHistogram(Context const* ctx, EllpackAccessor 
 
 void DeviceHistogramBuilder::BuildHistogram(
     Context const* ctx, EllpackAccessor const& matrix, FeatureGroupsAccessor const& feature_groups,
-    linalg::MatrixView<GradientPairInt64 const> gpair,
+    linalg::MatrixView<GradientPairInt32 const> gpair,
+    common::Span<FixedPointGradScale const> scales,
     common::Span<common::Span<cuda_impl::RowIndexT const>> ridxs,
     common::Span<common::Span<GradientPairInt64>> hists,
     std::vector<std::size_t> const& h_sizes_csum) {
