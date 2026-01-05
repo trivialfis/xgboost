@@ -92,25 +92,25 @@ GradientQuantiser::GradientQuantiser(Context const* ctx,
 
   GradientSumT positive_sum{p.first}, negative_sum{p.second};
 
-  std::size_t total_rows = gpair.Size();
-  rc = collective::GlobalSum(ctx, info, linalg::MakeVec(&total_rows, 1));
+  bst_idx_t n_total_rows = gpair.Size();
+  rc = collective::GlobalSum(ctx, info, linalg::MakeVec(&n_total_rows, 1));
   collective::SafeColl(rc);
 
   auto histogram_rounding =
       GradientSumT{common::CreateRoundingFactor<T>(
-                       std::max(positive_sum.GetGrad(), negative_sum.GetGrad()), total_rows),
+                       std::max(positive_sum.GetGrad(), negative_sum.GetGrad()), n_total_rows),
                    common::CreateRoundingFactor<T>(
-                       std::max(positive_sum.GetHess(), negative_sum.GetHess()), total_rows)};
+                       std::max(positive_sum.GetHess(), negative_sum.GetHess()), n_total_rows)};
 
   using IntT = typename GradientPairInt64::ValueT;
-
   /**
    * Factor for converting gradients from fixed-point to floating-point.
    */
+  std::size_t constexpr kSignBit = 1;  // keep 1 for sign bit
   to_floating_point_ =
       histogram_rounding /
       static_cast<T>(static_cast<IntT>(1)
-                     << (sizeof(typename GradientSumT::ValueT) * 8 - 2));  // keep 1 for sign bit
+                     << (sizeof(typename GradientSumT::ValueT) * 8 - 1 - kSignBit));
   /**
    * Factor for converting gradients from floating-point to fixed-point. For
    * f64:
