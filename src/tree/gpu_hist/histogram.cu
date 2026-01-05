@@ -441,12 +441,12 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
     __syncthreads();
   }
 
-  auto atomic_add = [&](auto bin_idx, auto const& adjusted) {
+  auto atomic_add = [&](auto bin_idx, auto const& g) {
     if constexpr (Policy::kSharedMem) {
-      AtomicAddGpairShared(smem_hist + bin_idx, adjusted);
+      AtomicAddGpairShared(smem_hist + bin_idx, g);
     } else {
       // gmem_hist is a subspan for the current target.
-      AtomicAddGpairGlobal(gmem_hist + bin_idx, adjusted);
+      AtomicAddGpairGlobal(gmem_hist + bin_idx, g);
     }
   };
 
