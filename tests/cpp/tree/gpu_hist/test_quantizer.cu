@@ -9,6 +9,7 @@
 namespace xgboost::tree {
 auto Pf(float v) { return std::bitset<32>{cuda::std::bit_cast<std::uint32_t>(v)}; }
 auto Pi64(std::int64_t v) { return std::bitset<64>{cuda::std::bit_cast<std::uint64_t>(v)}; }
+auto Pi32(std::int32_t v) { return std::bitset<32>{cuda::std::bit_cast<std::uint32_t>(v)}; }
 
 TEST(Quantizer, FixedPoint) {
   GradientPairPrecise to_fixed{std::pow(2.0, 48), std::pow(2.0, 62)};
@@ -54,6 +55,7 @@ TEST(Quantizer, FixedPoint) {
   v = std::stoi("00111111100000000000000000000001", nullptr, 2);
   auto v_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(v), bit_cast<float>(v)});
   // 62 bits for the fractional part,
+  //  62                          39|
   //  |--,----,----,----,----,----,-|  23-bit mantissa
   // 0100,0000,0000,0000,0000,0000,1000,0000,0000,0000,0000,0000,0000,0000,0000,0000
   std::cout << "v:" << v << ", f:" << bit_cast<float>(v) << "\n"
@@ -95,15 +97,75 @@ TEST(Quantizer, FixedPoint) {
 TEST(Quantizer, Controlled) {
   using cuda::std::bit_cast;
 
-  GradientPairPrecise to_fixed{std::pow(2.0, 75), std::pow(2.0, -75)};
+  GradientPairPrecise to_fixed{std::pow(2.0, 62), std::pow(2.0, -62)};
+  GradientPairPrecise to_float{1.0 / to_fixed.GetGrad(), 1.0 / to_fixed.GetHess()};
+
+  auto q0 = GradientQuantiser{to_fixed, to_float};
+  {
+    auto v = std::stoi("00111111100000000000000000000001", nullptr, 2);
+    auto v_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(v), bit_cast<float>(v)});
+    std::cout << "v:" << v << ", f:" << bit_cast<float>(v) << "\n"
+              << Pi64(v_fixed.GetQuantisedGrad()) << "\n"
+              << Pi64(v_fixed.GetQuantisedHess()) << std::endl;
+  }
+  {
+    std::cout << Pf(std::numeric_limits<float>::max()) << std::endl;
+    // 0,11111110,11111111111111111111111
+    float v = std::pow(2.0f, 63);
+    // 0,10111110,00000000000000000000000
+    // 0000000000000000000000000000000000000000000000000000000000000010
+    std::cout << Pf(v) << std::endl;
+    // auto v_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(v), bit_cast<float>(v)});
+    auto v_fixed = q0.ToFixedPoint(GradientPair{v, v});
+    // bit_cast<float>(v)
+    std::cout << "v:" << v << ", f:" << v << "\n"
+              << Pi64(v_fixed.GetQuantisedGrad()) << "\n"
+              << Pi64(v_fixed.GetQuantisedHess()) << std::endl;
+  }
+}
+
+std::int32_t ExtractFixed32(std::int64_t v, std::int32_t n) {
+  std::uint64_t uv = *reinterpret_cast<std::uint64_t*>(&v);
+  std::uint32_t sign = cuda::std::signbit(v);
+  std::uint64_t kValueBits = 0x7fffffffffffffffULL;
+  // remove sign bit
+  uv = uv & kValueBits;
+
+  std::int32_t tail = std::max(n - 23, 0);
+  // fixme: handle the sign bit.
+  std::int64_t v0 = uv >> tail;
+  uint32_t low = static_cast<uint32_t>(v0 & 0xFFFFFFFFULL);
+  low = (sign << 31) | low;
+
+  return cuda::std::bit_cast<std::int32_t>(low);
+}
+
+TEST(Quantizer, Extract) {
+  using cuda::std::bit_cast;
+
+  GradientPairPrecise to_fixed{std::pow(2.0, 62), std::pow(2.0, -62)};
   GradientPairPrecise to_float{1.0 / to_fixed.GetGrad(), 1.0 / to_fixed.GetHess()};
 
   auto q0 = GradientQuantiser{to_fixed, to_float};
 
+  // 0011,1111,1000,0000,0000,0000,0000,0001
   auto v = std::stoi("00111111100000000000000000000001", nullptr, 2);
   auto v_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(v), bit_cast<float>(v)});
-  std::cout << "v:" << v << ", f:" << bit_cast<float>(v) << "\n"
-            << Pi64(v_fixed.GetQuantisedGrad()) << "\n"
-            << Pi64(v_fixed.GetQuantisedHess()) << std::endl;
+  // 0000,0000,0001,1111,1111,1111,1111,1111,1110,0000,0000,0000,0000,0000,0000,0000
+  auto e = ExtractFixed32(v, 0);
+  // 0011,1111,1000,0000,0000,0000,0000,0001
+  std::cout << Pi32(e) << std::endl;
+
+  std::cout << Pi64(v_fixed.GetQuantisedGrad()) << std::endl;
+  auto e1 = ExtractFixed32(v_fixed.GetQuantisedGrad(), 62);
+  std::cout << Pi32(e1) << std::endl;
+
+  std::uint32_t nv = std::stoi("00111111100000000000000000000001", nullptr, 2);
+  nv |= (1u << 31);
+  auto inv = bit_cast<std::int32_t>(nv);
+  std::cout << "nv:" << Pi32(inv) << std::endl;
+  auto nv_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(inv), bit_cast<float>(inv)});
+  auto e2 = ExtractFixed32(nv_fixed.GetQuantisedGrad(), 62);
+  std::cout << Pi32(e2) << std::endl;
 }
 }  // namespace xgboost::tree
