@@ -23,7 +23,7 @@ inline auto MakeDummyQuantizers(bst_target_t n_targets) {
 inline auto MakeDummyScales(bst_target_t n_targets) {
   std::vector<FixedPointGradScale> h_quantizers;
   for (bst_target_t i = 0; i < n_targets; ++i) {
-    h_quantizers.emplace_back(GradientPairInt32{0, 0}, GradientPairInt32{0, 0});
+    h_quantizers.emplace_back(GradientPairInt32{0, 0});
   }
   dh::device_vector<FixedPointGradScale> d_quantizers(h_quantizers);
   return d_quantizers;

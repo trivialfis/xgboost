@@ -415,17 +415,18 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   }
 }
 
-__device__ GradientPairInt64 LoadGpair(GradientPairInt64 const* XGBOOST_RESTRICT gpairs) {
-  static_assert(sizeof(int4) == sizeof(GradientPairInt64));
-  auto g = *reinterpret_cast<int4 const*>(gpairs);
-  return *reinterpret_cast<GradientPairInt64*>(&g);
+__device__ GradientPairInt32 LoadGpair(GradientPairInt32 const* XGBOOST_RESTRICT gpairs) {
+  static_assert(sizeof(int2) == sizeof(GradientPairInt32));
+  auto g = *reinterpret_cast<int2 const*>(gpairs);
+  return *reinterpret_cast<GradientPairInt32*>(&g);
 }
 
 // Build the histogram for a single target in a single node.
 template <typename Policy, typename Accessor, typename RidxIterSpan>
 __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup const& group,
                                         RidxIterSpan d_ridx_iter,
-                                        GradientPairInt64 const* XGBOOST_RESTRICT gpair,
+                                        GradientPairInt32 const* XGBOOST_RESTRICT gpair,
+                                        FixedPointGradScale const& scale,
                                         GradientPairInt64* smem_hist, GradientPairInt64* gmem_hist,
                                         bst_target_t offset, std::uint32_t stride) {
   bst_feature_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
@@ -470,7 +471,8 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
       if constexpr (Policy::kSharedMem) {
         compressed_bin -= group.start_bin;
       }
-      atomic_add(compressed_bin, g);
+      auto i64_g = scale.ToInt64(g);
+      atomic_add(compressed_bin, i64_g);
     }
   };
 
@@ -527,7 +529,8 @@ template <typename Policy, typename Accessor, typename RidxIterSpan>
 __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) void HistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups, RidxIterSpan* d_ridx_iters,
     common::Span<std::uint32_t const> blk_ptr, common::Span<GradientPairInt64>* node_hists,
-    GradientPairInt64 const* d_gpair, bst_idx_t n_samples, bst_target_t n_targets) {
+    GradientPairInt32 const* d_gpair, FixedPointGradScale const* d_scales, bst_idx_t n_samples,
+    bst_target_t n_targets) {
   using Idx = RowPartitioner::RowIndexT;
 
   // Find the node for this block.
@@ -562,8 +565,10 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
   // be shared in L2.
   auto gmem_hist = d_node_hist->data() + target_idx * n_bins_per_target;
   auto t_gpair = d_gpair + n_samples * target_idx;
-  HistKernelOneNodeTarget<Policy>(matrix, group, d_ridx_iters[nidx_in_set], t_gpair, smem_hist,
-                                  gmem_hist, offset, kStride);
+  auto t_scale = d_scales[target_idx];
+
+  HistKernelOneNodeTarget<Policy>(matrix, group, d_ridx_iters[nidx_in_set], t_gpair, t_scale,
+                                  smem_hist, gmem_hist, offset, kStride);
 }
 
 namespace {
@@ -743,12 +748,13 @@ struct MtHistKernel {
   template <bool kDense, bool kCompressed, typename Accessor, typename RidxIterSpan>
   void DispatchHistShmem(Context const* ctx, Accessor const& matrix,
                          FeatureGroupsAccessor const& feature_groups,
-                         linalg::MatrixView<GradientPairInt64 const> gpair,
-                         RidxIterSpan* ridx_iters,
+                         linalg::MatrixView<GradientPairInt32 const> gpair,
+                         common::Span<FixedPointGradScale const> scales, RidxIterSpan* ridx_iters,
                          common::Span<common::Span<GradientPairInt64>> hists,
                          std::vector<std::size_t> const& h_sizes_csum) {
     auto d_gpair = gpair.Values().data();
     auto n_targets = gpair.Shape(1);
+    auto d_scales = scales.data();
 
     std::size_t shmem_bytes = feature_groups.ShmemSize();
     bool use_shared = !force_global && shmem_bytes <= this->max_shared_bytes;
@@ -765,7 +771,7 @@ struct MtHistKernel {
       CHECK_GE(n_blocks, hists.size());
       dim3 conf(n_blocks, feature_groups.NumGroups());
       kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream()>>>(
-          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), d_gpair,
+          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), d_gpair, d_scales,
           gpair.Shape(0), n_targets);
       dh::safe_cuda(cudaPeekAtLastError());
     };
@@ -895,7 +901,8 @@ class DeviceHistogramDispatchAccessor {
 
   void BuildHistogram(Context const* ctx, Accessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      linalg::MatrixView<GradientPairInt64 const> gpair,
+                      linalg::MatrixView<GradientPairInt32 const> gpair,
+                      common::Span<FixedPointGradScale const> scales,
                       common::Span<common::Span<cuda_impl::RowIndexT const>> ridxs,
                       common::Span<common::Span<GradientPairInt64>> hists,
                       std::vector<std::size_t> const& h_sizes_csum) {
@@ -908,11 +915,11 @@ class DeviceHistogramDispatchAccessor {
           thrust::make_counting_iterator(static_cast<cuda_impl::RowIndexT>(matrix.base_rowid)),
           matrix.n_rows};
       dh::caching_device_vector<common::IterSpan<RidxIter>> ridx_iters(hists.size(), iter);
-      this->mt_kernel_->Dispatch(ctx, matrix, feature_groups, gpair, ridx_iters.data().get(), hists,
-                                 h_sizes_csum);
+      this->mt_kernel_->Dispatch(ctx, matrix, feature_groups, gpair, scales,
+                                 ridx_iters.data().get(), hists, h_sizes_csum);
     } else {
       using RidxIter = cuda_impl::RowIndexT const;
-      this->mt_kernel_->Dispatch(ctx, matrix, feature_groups, gpair, ridxs.data(), hists,
+      this->mt_kernel_->Dispatch(ctx, matrix, feature_groups, gpair, scales, ridxs.data(), hists,
                                  h_sizes_csum);
     }
   }
@@ -981,7 +988,7 @@ void DeviceHistogramBuilder::BuildHistogram(
     std::vector<std::size_t> const& h_sizes_csum) {
   std::visit(
       [&](auto&& matrix) {
-        this->p_impl_->BuildHistogram(ctx, matrix, feature_groups, gpair, ridxs, hists,
+        this->p_impl_->BuildHistogram(ctx, matrix, feature_groups, gpair, scales, ridxs, hists,
                                       h_sizes_csum);
       },
       matrix);

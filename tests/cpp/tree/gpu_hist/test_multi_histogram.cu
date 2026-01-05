@@ -59,7 +59,7 @@ class MultiHistTest
     this->node_hist = histogram.GetNodeHistogram(0);
 
     this->quantizers = MakeDummyQuantizers(n_targets);
-    this->scales = MakeDummyQuantizers(n_targets);
+    this->scales = MakeDummyScales(n_targets);
   }
 
   void TestMtBuild() {
