@@ -1,7 +1,7 @@
 /**
- * Copyright 2015-2025, XGBoost Contributors
- * \file base.h
- * \brief Defines configuration macros and basic types for xgboost.
+ * Copyright 2015-2026, XGBoost Contributors
+ *
+ * @brief Defines configuration macros and basic types for xgboost.
  */
 #ifndef XGBOOST_BASE_H_
 #define XGBOOST_BASE_H_
@@ -259,60 +259,66 @@ using GradientPair = detail::GradientPairInternal<float>;
 /*! \brief High precision gradient statistics pair */
 using GradientPairPrecise = detail::GradientPairInternal<double>;
 
-/*! \brief Fixed point representation for high precision gradient pair. Has a different interface so
- * we don't accidentally use it in gain calculations.*/
-class GradientPairInt64 {
-  using T = int64_t;
+/**
+ * @brief Fixed point representation for high precision gradient pair. Has a different
+ *        interface so we don't accidentally use it in gain calculations.
+ */
+template <typename T>
+class GradientPairIntImpl {
   T grad_ = 0;
   T hess_ = 0;
 
  public:
   using ValueT = T;
 
-  XGBOOST_DEVICE GradientPairInt64(T grad, T hess) : grad_(grad), hess_(hess) {}
-  GradientPairInt64() = default;
+  XGBOOST_DEVICE GradientPairIntImpl(T grad, T hess) : grad_(grad), hess_(hess) {}
+  GradientPairIntImpl() = default;
 
   // Copy constructor if of same value type, marked as default to be trivially_copyable
-  GradientPairInt64(GradientPairInt64 const &g) = default;
-  GradientPairInt64 &operator=(GradientPairInt64 const &g) = default;
+  GradientPairIntImpl(GradientPairIntImpl const &g) = default;
+  GradientPairIntImpl &operator=(GradientPairIntImpl const &g) = default;
 
   [[nodiscard]] XGBOOST_DEVICE T GetQuantisedGrad() const { return grad_; }
   [[nodiscard]] XGBOOST_DEVICE T GetQuantisedHess() const { return hess_; }
 
-  XGBOOST_DEVICE GradientPairInt64 &operator+=(const GradientPairInt64 &rhs) {
+  XGBOOST_DEVICE GradientPairIntImpl &operator+=(GradientPairIntImpl const &rhs) {
     grad_ += rhs.grad_;
     hess_ += rhs.hess_;
     return *this;
   }
 
-  XGBOOST_DEVICE GradientPairInt64 operator+(const GradientPairInt64 &rhs) const {
-    GradientPairInt64 g;
+  XGBOOST_DEVICE GradientPairIntImpl operator+(GradientPairIntImpl const &rhs) const {
+    GradientPairIntImpl g;
     g.grad_ = grad_ + rhs.grad_;
     g.hess_ = hess_ + rhs.hess_;
     return g;
   }
 
-  XGBOOST_DEVICE GradientPairInt64 &operator-=(const GradientPairInt64 &rhs) {
+  XGBOOST_DEVICE GradientPairIntImpl &operator-=(GradientPairIntImpl const &rhs) {
     grad_ -= rhs.grad_;
     hess_ -= rhs.hess_;
     return *this;
   }
 
-  XGBOOST_DEVICE GradientPairInt64 operator-(const GradientPairInt64 &rhs) const {
-    GradientPairInt64 g;
+  XGBOOST_DEVICE GradientPairIntImpl operator-(GradientPairIntImpl const &rhs) const {
+    GradientPairIntImpl g;
     g.grad_ = grad_ - rhs.grad_;
     g.hess_ = hess_ - rhs.hess_;
     return g;
   }
 
-  XGBOOST_DEVICE bool operator==(const GradientPairInt64 &rhs) const {
+  XGBOOST_DEVICE bool operator==(const GradientPairIntImpl &rhs) const {
     return grad_ == rhs.grad_ && hess_ == rhs.hess_;
   }
-  friend std::ostream &operator<<(std::ostream &os, const GradientPairInt64 &g) {
+
+  friend std::ostream &operator<<(std::ostream &os, const GradientPairIntImpl &g) {
     os << g.GetQuantisedGrad() << "/" << g.GetQuantisedHess();
     return os;
   }
 };
+
+using GradientPairInt32 = GradientPairIntImpl<std::int32_t>;
+using GradientPairInt64 = GradientPairIntImpl<std::int64_t>;
 
 using Args = std::vector<std::pair<std::string, std::string> >;
 
