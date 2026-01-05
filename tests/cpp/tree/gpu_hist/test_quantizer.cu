@@ -140,6 +140,10 @@ std::int32_t ExtractFixed32(std::int64_t v, std::int32_t n) {
   return cuda::std::bit_cast<std::int32_t>(low);
 }
 
+std::int64_t RestoreFixed64(std::int32_t, std::int32_t n) {
+
+}
+
 TEST(Quantizer, Extract) {
   using cuda::std::bit_cast;
 
@@ -165,6 +169,7 @@ TEST(Quantizer, Extract) {
   auto inv = bit_cast<std::int32_t>(nv);
   std::cout << "nv:" << Pi32(inv) << std::endl;
   auto nv_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(inv), bit_cast<float>(inv)});
+  std::cout << Pi64(nv_fixed.GetQuantisedGrad()) << std::endl;
   auto e2 = ExtractFixed32(nv_fixed.GetQuantisedGrad(), 62);
   std::cout << Pi32(e2) << std::endl;
 }
