@@ -6,6 +6,7 @@
 
 #include <cmath>   // for frexp, ldexp
 #include <limits>  // for numeric_limits
+#include <iostream>
 
 #include "xgboost/base.h"  // XGBOOST_DEVICE
 
@@ -32,7 +33,9 @@ XGBOOST_DEVICE T CreateRoundingFactor(T max_abs, bst_idx_t n) {
   // Because |x| < 1, exp is exactly ceil(log_2(delta)).
   int exp;
   std::frexp(delta, &exp);
-
+#if !defined(__CUDA_ARCH__)
+  std::cout << "ceil(log_2(delta)):" << std::ceil(log2(delta)) << std::endl;
+  #endif
   // return M = 2 ^ ceil(log_2(delta))
   return std::ldexp(static_cast<T>(1.0), exp);
 }

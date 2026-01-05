@@ -103,6 +103,8 @@ GradientQuantiser::GradientQuantiser(Context const* ctx,
                        std::max(positive_sum.GetHess(), negative_sum.GetHess()), n_total_rows)};
 
   using IntT = typename GradientPairInt64::ValueT;
+  std::cout << "rounding:" << std::log2(histogram_rounding.GetGrad()) << ","
+            << std::log2(histogram_rounding.GetHess()) << std::endl;
   /**
    * Factor for converting gradients from fixed-point to floating-point.
    */
@@ -122,6 +124,11 @@ GradientQuantiser::GradientQuantiser(Context const* ctx,
    */
   to_fixed_point_ = GradientSumT{static_cast<T>(1) / to_floating_point_.GetGrad(),
                                  static_cast<T>(1) / to_floating_point_.GetHess()};
+  std::cout << "to float:" << to_floating_point_ << ", to fixed:" << to_fixed_point_ << std::endl;
+  std::cout << "to float:" << std::log2(to_floating_point_.GetGrad()) << "/"
+            << std::log2(to_floating_point_.GetHess())
+            << ", to fixed:" << std::log2(to_fixed_point_.GetGrad()) << "/"
+            << std::log2(to_fixed_point_.GetHess()) << std::endl;
 }
 
 MultiGradientQuantiser::MultiGradientQuantiser(Context const* ctx,
