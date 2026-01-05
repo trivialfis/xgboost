@@ -254,11 +254,12 @@ class GradientPairInternal {
 };
 }  // namespace detail
 
-/*! \brief gradient statistics pair usually needed in gradient boosting */
+/** @brief gradient statistics pair usually needed in gradient boosting */
 using GradientPair = detail::GradientPairInternal<float>;
-/*! \brief High precision gradient statistics pair */
+/** @brief High precision gradient statistics pair */
 using GradientPairPrecise = detail::GradientPairInternal<double>;
 
+namespace detail {
 /**
  * @brief Fixed point representation for high precision gradient pair. Has a different
  *        interface so we don't accidentally use it in gain calculations.
@@ -271,7 +272,7 @@ class GradientPairIntImpl {
  public:
   using ValueT = T;
 
-  XGBOOST_DEVICE GradientPairIntImpl(T grad, T hess) : grad_(grad), hess_(hess) {}
+  XGBOOST_DEVICE GradientPairIntImpl(T grad, T hess) : grad_{grad}, hess_{hess} {}
   GradientPairIntImpl() = default;
 
   // Copy constructor if of same value type, marked as default to be trivially_copyable
@@ -303,22 +304,25 @@ class GradientPairIntImpl {
     return g;
   }
 
-  XGBOOST_DEVICE bool operator==(const GradientPairIntImpl &rhs) const {
+  XGBOOST_DEVICE bool operator==(GradientPairIntImpl const &rhs) const {
     return grad_ == rhs.grad_ && hess_ == rhs.hess_;
   }
 
-  friend std::ostream &operator<<(std::ostream &os, const GradientPairIntImpl &g) {
+  friend std::ostream &operator<<(std::ostream &os, GradientPairIntImpl const &g) {
     os << g.GetQuantisedGrad() << "/" << g.GetQuantisedHess();
     return os;
   }
 };
+}  // namespace detail
 
-using GradientPairInt32 = GradientPairIntImpl<std::int32_t>;
-using GradientPairInt64 = GradientPairIntImpl<std::int64_t>;
+using GradientPairInt32 = detail::GradientPairIntImpl<std::int32_t>;
+/** @brief High precision gradient statistics pair stored in fixed point format. */
+using GradientPairInt64 = detail::GradientPairIntImpl<std::int64_t>;
 
-using Args = std::vector<std::pair<std::string, std::string> >;
+/** @brief Key-value pairs for configuration arguments. */
+using Args = std::vector<std::pair<std::string, std::string>>;
 
-/*! \brief small eps gap for minimum split decision. */
+/** @brief Small eps gap for minimum split decision. */
 constexpr bst_float kRtEps = 1e-6f;
 
 /*! \brief define unsigned long for openmp loop */
