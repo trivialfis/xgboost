@@ -124,26 +124,6 @@ TEST(Quantizer, Controlled) {
   }
 }
 
-std::int32_t ExtractFixed32(std::int64_t v, std::int32_t n) {
-  std::uint64_t uv = *reinterpret_cast<std::uint64_t*>(&v);
-  std::uint32_t sign = cuda::std::signbit(v);
-  std::uint64_t kValueBits = 0x7fffffffffffffffULL;
-  // remove sign bit
-  uv = uv & kValueBits;
-
-  std::int32_t tail = std::max(n - 23, 0);
-  // fixme: handle the sign bit.
-  std::int64_t v0 = uv >> tail;
-  uint32_t low = static_cast<uint32_t>(v0 & 0xFFFFFFFFULL);
-  low = (sign << 31) | low;
-
-  return cuda::std::bit_cast<std::int32_t>(low);
-}
-
-std::int64_t RestoreFixed64(std::int32_t, std::int32_t n) {
-
-}
-
 TEST(Quantizer, Extract) {
   using cuda::std::bit_cast;
 
@@ -156,12 +136,12 @@ TEST(Quantizer, Extract) {
   auto v = std::stoi("00111111100000000000000000000001", nullptr, 2);
   auto v_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(v), bit_cast<float>(v)});
   // 0000,0000,0001,1111,1111,1111,1111,1111,1110,0000,0000,0000,0000,0000,0000,0000
-  auto e = ExtractFixed32(v, 0);
+  auto e = detail::ExtractFixed32(v, 0);
   // 0011,1111,1000,0000,0000,0000,0000,0001
   std::cout << Pi32(e) << std::endl;
 
   std::cout << Pi64(v_fixed.GetQuantisedGrad()) << std::endl;
-  auto e1 = ExtractFixed32(v_fixed.GetQuantisedGrad(), 62);
+  auto e1 = detail::ExtractFixed32(v_fixed.GetQuantisedGrad(), 62);
   std::cout << Pi32(e1) << std::endl;
 
   std::uint32_t nv = std::stoi("00111111100000000000000000000001", nullptr, 2);
@@ -169,8 +149,9 @@ TEST(Quantizer, Extract) {
   auto inv = bit_cast<std::int32_t>(nv);
   std::cout << "nv:" << Pi32(inv) << std::endl;
   auto nv_fixed = q0.ToFixedPoint(GradientPair{bit_cast<float>(inv), bit_cast<float>(inv)});
-  std::cout << Pi64(nv_fixed.GetQuantisedGrad()) << std::endl;
-  auto e2 = ExtractFixed32(nv_fixed.GetQuantisedGrad(), 62);
-  std::cout << Pi32(e2) << std::endl;
+  std::cout << "orig:" << Pi64(nv_fixed.GetQuantisedGrad()) << std::endl;
+  auto e2 = detail::ExtractFixed32(nv_fixed.GetQuantisedGrad(), 62);
+  auto rv = detail::RestoreFixed64(e2, 62);
+  std::cout << "rest:" << Pi64(rv) << std::endl;
 }
 }  // namespace xgboost::tree
