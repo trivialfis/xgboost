@@ -45,6 +45,22 @@ XGBOOST_HOST_DEV_INLINE std::int64_t RestoreFixed64(std::int32_t v, std::int32_t
   uv |= (std::uint64_t{cuda::std::signbit(v)} << 63);
   return uv;
 }
+
+XGBOOST_HOST_DEV_INLINE std::uint16_t ExtractExponent(double v) {
+  std::uint64_t constexpr kMask = 0x7fff000000000000;
+  std::uint64_t iv = cuda::std::bit_cast<std::uint64_t>(v);
+  iv &= kMask;
+  iv >>= 52;
+  return static_cast<std::uint16_t>(iv);
+}
+
+XGBOOST_HOST_DEV_INLINE double RestoreExponent(double v, std::uint16_t exponent) {
+  std::uint64_t constexpr kMask = ~0x7fff000000000000;
+  std::uint64_t iv = cuda::std::bit_cast<std::uint64_t>(v);
+  iv &= kMask;
+  std::uint64_t res = (std::uint64_t{exponent} << 52) | iv;
+  return cuda::std::bit_cast<double>(res);
+}
 }  // namespace detail
 
 class GradientQuantiser {
@@ -77,25 +93,34 @@ class GradientQuantiser {
     auto h = gpair.GetQuantisedHess() * to_floating_point_.GetHess();
     return {g, h};
   }
-  auto Scale() const { return to_fixed_point_; }
+  XGBOOST_DEVICE auto Scale() const { return to_fixed_point_; }
   auto InvScale() const { return to_floating_point_; }
 };
 
+inline XGBOOST_DEVICE GradientPairInt64 ToInt64(GradientPair const& grad,
+                                                GradientPairUint16 exponent) {
+  auto grad64 = GradientPairPrecise{grad};
+  auto g = detail::RestoreExponent(grad64.GetGrad(), exponent.GetQuantisedGrad());
+  auto h = detail::RestoreExponent(grad64.GetHess(), exponent.GetQuantisedHess());
+  return GradientPairInt64{static_cast<std::int64_t>(g), static_cast<std::int64_t>(h)};
+}
+
 struct FixedPointGradScale {
-  GradientPairInt32 exponent;
+  GradientPairUint16 exponent;
 
-  explicit FixedPointGradScale(GradientPairInt32 exponent) : exponent{exponent} {}
+  explicit FixedPointGradScale(GradientPairUint16 exponent) : exponent{exponent} {}
 
-  XGBOOST_DEVICE GradientPairInt32 ToInt32(GradientPairInt64 const& gpair) const {
-    auto g = detail::ExtractFixed32(gpair.GetQuantisedGrad(), exponent.GetQuantisedGrad());
-    auto h = detail::ExtractFixed32(gpair.GetQuantisedHess(), exponent.GetQuantisedHess());
-    return {g, h};
+  XGBOOST_DEVICE GradientPairInt64 ToInt64(GradientPair const& grad) const {
+    auto grad64 = GradientPairPrecise{grad};
+    auto g = detail::RestoreExponent(grad64.GetGrad(), exponent.GetQuantisedGrad());
+    auto h = detail::RestoreExponent(grad64.GetHess(), exponent.GetQuantisedHess());
+    return GradientPairInt64{static_cast<std::int64_t>(g), static_cast<std::int64_t>(h)};
   }
 
-  XGBOOST_DEVICE GradientPairInt64 ToInt64(GradientPairInt32 const& gpair) const {
-    auto g = detail::RestoreFixed64(gpair.GetQuantisedGrad(), exponent.GetQuantisedGrad());
-    auto h = detail::RestoreFixed64(gpair.GetQuantisedHess(), exponent.GetQuantisedHess());
-    return {g, h};
+  XGBOOST_DEVICE static GradientPairUint16 FromInt64(GradientPairPrecise const& grad) {
+    auto g = detail::ExtractExponent(grad.GetGrad());
+    auto h = detail::ExtractExponent(grad.GetHess());
+    return GradientPairUint16{g, h};
   }
 };
 
@@ -103,22 +128,21 @@ struct FixedPointGradScale {
 class MultiGradientQuantiser {
  private:
   dh::device_vector<GradientQuantiser> quantizers_;
-  dh::device_vector<FixedPointGradScale> to_fixed_;
+  // dh::device_vector<FixedPointGradScale> to_fixed_;
   // fixme: doesn't need to float scale, we use 64 bit for histogram, evaluator doesn't need to
   // float.
-  dh::device_vector<FixedPointGradScale> to_float_;
+  // dh::device_vector<FixedPointGradScale> to_float_;
 
  public:
   MultiGradientQuantiser(Context const* ctx, linalg::MatrixView<GradientPair const> gpair,
                          MetaInfo const& info);
 
   [[nodiscard]] auto Quantizers() const { return dh::ToSpan(this->quantizers_); }
-  [[nodiscard]] auto ToFixedScales() const { return dh::ToSpan(this->to_fixed_); }
+  // [[nodiscard]] auto ToFixedScales() const { return dh::ToSpan(this->to_fixed_); }
   // [[nodiscard]] auto ToFloatScales() const { return dh::ToSpan(this->to_float_); }
 };
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const gpairs,
                          common::Span<GradientQuantiser const> roundings,
-                         common::Span<FixedPointGradScale const> scales,
-                         linalg::Matrix<GradientPairInt32>* p_out);
+                         linalg::Matrix<GradientPairUint16>* p_out);
 }  // namespace xgboost::tree

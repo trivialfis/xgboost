@@ -185,8 +185,8 @@ class DeviceHistogramBuilder {
   // Build histograms for multiple nodes and multiple targets
   void BuildHistogram(Context const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      linalg::MatrixView<GradientPairInt32 const> gpair,
-                      common::Span<FixedPointGradScale const> scales,
+                      linalg::MatrixView<GradientPair const> gpair,
+                      linalg::MatrixView<GradientPairUint16 const> scales,
                       common::Span<common::Span<const std::uint32_t>> ridxs,
                       common::Span<common::Span<GradientPairInt64>> hists,
                       std::vector<std::size_t> const& h_sizes_csum);

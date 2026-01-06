@@ -316,6 +316,8 @@ class GradientPairIntImpl {
 };
 }  // namespace detail
 
+using GradientPairUint16 = detail::GradientPairIntImpl<std::uint16_t>;
+
 using GradientPairInt32 = detail::GradientPairIntImpl<std::int32_t>;
 /** @brief High precision gradient statistics pair stored in fixed point format. */
 using GradientPairInt64 = detail::GradientPairIntImpl<std::int64_t>;

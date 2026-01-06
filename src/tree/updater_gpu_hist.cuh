@@ -66,8 +66,8 @@ void AssignNodes(TreeView const& tree, std::vector<ExpandEntry> const& candidate
   }
 }
 
-inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPairInt32> d_gpair,
-                        common::Span<FixedPointGradScale const> scales,
+inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPair> d_gpair,
+                        linalg::MatrixView<GradientPairUint16 const> scales,
                         common::Span<GradientPairInt64> root_sum) {
   auto n_samples = d_gpair.Shape(0);
   auto n_targets = d_gpair.Shape(1);
@@ -82,7 +82,7 @@ inline void CalcRootSum(Context const* ctx, linalg::MatrixView<GradientPairInt32
     auto cidx = i / n_samples;
     auto ridx = i % n_samples;
     auto g = d_gpair(ridx, cidx);
-    return scales[cidx].ToInt64(g);
+    return ToInt64(g, scales(ridx, cidx));
   });
   thrust::reduce_by_key(ctx->CUDACtx()->CTP(), key_it, key_it + d_gpair.Size(), val_it,
                         thrust::make_discard_iterator(), dh::tbegin(root_sum));
@@ -110,7 +110,7 @@ class MultiTargetHistMaker {
   std::unique_ptr<FeatureInteractionConstraintDevice> interaction_constraints_;
 
   // Gradient used for building the tree structure
-  linalg::Matrix<GradientPairInt32> split_gpair_;
+  linalg::Matrix<GradientPairUint16> split_gpair_;
   // Gradient used for calculating the leaf values
   linalg::Matrix<GradientPair> value_gpair_;
   std::vector<bst_idx_t> const batch_ptr_;
@@ -119,14 +119,16 @@ class MultiTargetHistMaker {
 
   dh::PinnedMemory pinned_;
 
-  void BuildHist(EllpackPage const& page, std::int32_t k, bst_node_t nidx) {
-    this->BuildHist(page, k, std::vector{nidx});
+  void BuildHist(EllpackPage const& page, linalg::Matrix<GradientPair> const* split_gpair,
+                 std::int32_t k, bst_node_t nidx) {
+    this->BuildHist(page, split_gpair, k, std::vector{nidx});
   }
 
-  void BuildHist(EllpackPage const& page, std::int32_t k, std::vector<bst_node_t> build_nodes) {
+  void BuildHist(EllpackPage const& page, linalg::Matrix<GradientPair> const* split_gpair,
+                 std::int32_t k, std::vector<bst_node_t> build_nodes) {
     xgboost_NVTX_FN_RANGE();
 
-    auto d_gpair = this->split_gpair_.View(this->ctx_->Device());
+    auto d_gpair = split_gpair->View(this->ctx_->Device());
     CHECK(!this->partitioners_.Empty());
 
     auto acc = page.Impl()->GetDeviceEllpack(this->ctx_, {});
@@ -157,7 +159,7 @@ class MultiTargetHistMaker {
 
     this->histogram_.BuildHistogram(this->ctx_, acc,
                                     this->feature_groups_->DeviceAccessor(this->ctx_->Device()),
-                                    d_gpair, this->split_quantizer_->ToFixedScales(),
+                                    d_gpair, this->split_gpair_.View(this->ctx_->Device()),
                                     dh::ToSpan(ridxs), dh::ToSpan(hists), h_sizes_csum);
   }
 
@@ -183,7 +185,6 @@ class MultiTargetHistMaker {
     this->split_quantizer_ = std::make_unique<MultiGradientQuantiser>(
         this->ctx_, gpair_all->View(ctx_->Device()), p_fmat->Info());
     CalcQuantizedGpairs(this->ctx_, gpair_all, this->split_quantizer_->Quantizers(),
-                        this->split_quantizer_->ToFixedScales(),
                         &this->split_gpair_);
 
     if (!this->value_gpair_.Empty()) {
@@ -201,16 +202,19 @@ class MultiTargetHistMaker {
                      cuts_->TotalBins() * n_targets, force_global);
   }
 
-  [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
+  [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat,
+                                          linalg::Matrix<GradientPair>* split_gpair,
+                                          RegTree* p_tree) {
     xgboost_NVTX_FN_RANGE();
 
-    auto d_gpair = split_gpair_.View(ctx_->Device());
+    auto d_gpair = split_gpair->View(ctx_->Device());
     auto n_targets = d_gpair.Shape(1);
+    auto d_scale = this->split_gpair_.View(ctx_->Device());
 
     // Calculate the root sum
     this->evaluator_.AllocNodeSum(RegTree::kRoot, n_targets);
     auto d_root_sum = this->evaluator_.GetNodeSum(RegTree::kRoot, n_targets);
-    CalcRootSum(this->ctx_, d_gpair, this->split_quantizer_->ToFixedScales(), d_root_sum);
+    CalcRootSum(this->ctx_, d_gpair, d_scale, d_root_sum);
 
     // Build the root histogram.
     histogram_.AllocateHistograms(ctx_, {RegTree::kRoot});
@@ -218,7 +222,7 @@ class MultiTargetHistMaker {
     CHECK_EQ(p_fmat->NumBatches(), this->partitioners_.Size());
     std::int32_t k = 0;
     for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(true))) {
-      this->BuildHist(page, k, RegTree::kRoot);
+      this->BuildHist(page, split_gpair, k, RegTree::kRoot);
       ++k;
     }
 
@@ -382,7 +386,8 @@ class MultiTargetHistMaker {
     }
   };
 
-  void ReduceHist(DMatrix* p_fmat, std::vector<MultiExpandEntry> const& candidates,
+  void ReduceHist(DMatrix* p_fmat, linalg::Matrix<GradientPair> const* split_gpair,
+                  std::vector<MultiExpandEntry> const& candidates,
                   std::vector<bst_node_t> const& build_nidx,
                   std::vector<bst_node_t> const& subtraction_nidx) {
     if (candidates.empty()) {
@@ -400,12 +405,13 @@ class MultiTargetHistMaker {
     // Build the nodes that can not obtain the histogram using subtraction. This is the slow path.
     std::int32_t k = 0;
     for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(true))) {
-      this->BuildHist(page, k, need_build);
+      this->BuildHist(page, split_gpair, k, need_build);
       ++k;
     }
   }
 
-  void PartitionAndBuildHist(DMatrix* p_fmat, std::vector<MultiExpandEntry> const& expand_set,
+  void PartitionAndBuildHist(DMatrix* p_fmat, linalg::Matrix<GradientPair> const* split_gpair,
+                             std::vector<MultiExpandEntry> const& expand_set,
                              std::vector<MultiExpandEntry> const& candidates,
                              RegTree const* p_tree) {
     if (expand_set.empty()) {
@@ -452,13 +458,13 @@ class MultiTargetHistMaker {
 
         // Build histograms.
         if (!build_nidx.empty()) {
-          this->BuildHist(page, k, build_nidx);
+          this->BuildHist(page, split_gpair, k, build_nidx);
         }
       });
       ++k;
     }
 
-    this->ReduceHist(p_fmat, expand_set, build_nidx, subtraction_nidx);
+    this->ReduceHist(p_fmat, split_gpair, expand_set, build_nidx, subtraction_nidx);
   }
 
   void EvaluateSplits(std::vector<MultiExpandEntry> const& candidates, RegTree const& tree,
@@ -612,7 +618,7 @@ class MultiTargetHistMaker {
     Driver<MultiExpandEntry> driver{param_, kMaxNodeBatchSize};
 
     this->Reset(split_gpair, p_fmat);
-    driver.Push({this->InitRoot(p_fmat, p_tree)});
+    driver.Push({this->InitRoot(p_fmat, split_gpair, p_tree)});
 
     // The set of leaves that can be expanded asynchronously
     auto expand_set = driver.Pop();
@@ -627,7 +633,7 @@ class MultiTargetHistMaker {
       // Allocate children nodes.
       auto new_candidates = pinned_.GetSpan(valid_candidates.size() * 2, MultiExpandEntry{});
 
-      this->PartitionAndBuildHist(p_fmat, expand_set, valid_candidates, p_tree);
+      this->PartitionAndBuildHist(p_fmat, split_gpair, expand_set, valid_candidates, p_tree);
 
       this->EvaluateSplits(valid_candidates, *p_tree, new_candidates);
       this->ctx_->CUDACtx()->Stream().Sync();

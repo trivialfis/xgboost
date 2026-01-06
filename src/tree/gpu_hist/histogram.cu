@@ -141,32 +141,31 @@ MultiGradientQuantiser::MultiGradientQuantiser(Context const* ctx,
   }
   this->quantizers_ = h_quantizers;
 
-  std::vector<FixedPointGradScale> h_to_fixed;
-  std::vector<FixedPointGradScale> h_to_float;
-  for (auto q : h_quantizers) {
-    std::int32_t gs = std::log2(q.Scale().GetGrad());
-    std::int32_t hs = std::log2(q.Scale().GetHess());
+  // std::vector<FixedPointGradScale> h_to_fixed;
+  // std::vector<FixedPointGradScale> h_to_float;
+  // for (auto q : h_quantizers) {
+  //   std::int32_t gs = std::log2(q.Scale().GetGrad());
+  //   std::int32_t hs = std::log2(q.Scale().GetHess());
 
-    std::int32_t inv_gs = std::log2(q.InvScale().GetGrad());
-    std::int32_t inv_hs = std::log2(q.InvScale().GetHess());
+  //   std::int32_t inv_gs = std::log2(q.InvScale().GetGrad());
+  //   std::int32_t inv_hs = std::log2(q.InvScale().GetHess());
 
-    auto to_fixed = GradientPairInt32{gs, hs};
-    auto to_float = GradientPairInt32{inv_gs, inv_hs};
-    h_to_fixed.emplace_back(to_fixed);
-    h_to_float.emplace_back(to_float);
-  }
+  //   auto to_fixed = GradientPairInt32{gs, hs};
+  //   auto to_float = GradientPairInt32{inv_gs, inv_hs};
+  //   h_to_fixed.emplace_back(to_fixed);
+  //   h_to_float.emplace_back(to_float);
+  // }
 
-  this->to_fixed_ = h_to_fixed;
-  this->to_float_ = h_to_float;
+  // this->to_fixed_ = h_to_fixed;
+  // this->to_float_ = h_to_float;
 }
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const gpairs,
                          common::Span<GradientQuantiser const> roundings,
-                         common::Span<FixedPointGradScale const> scales,
-                         linalg::Matrix<GradientPairInt32>* p_out) {
+                         linalg::Matrix<GradientPairUint16>* p_out) {
   auto shape = gpairs->Shape();
   if (p_out->Empty()) {
-    *p_out = linalg::Matrix<GradientPairInt32>{shape, ctx->Device(), linalg::kF};
+    *p_out = linalg::Matrix<GradientPairUint16>{shape, ctx->Device(), linalg::kF};
   } else {
     p_out->Reshape(shape);
   }
@@ -177,17 +176,10 @@ void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const
   auto it = dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
     auto [ridx, target_idx] = linalg::UnravelIndex(i, in_gpair.Shape());
     auto g = in_gpair(ridx, target_idx);
-    auto fixed = roundings[target_idx].ToFixedPoint(g);
-    auto v = scales[target_idx].ToInt32(fixed);
-    auto restore = scales[target_idx].ToInt64(v);
-    if (fixed != restore ) {
-      printf("fixed.g:%" PRId64 " h:%" PRId64 " s.g:%" PRId64 " h:%" PRId64 " exp.g:%d, h:%d\n",
-             fixed.GetQuantisedGrad(), fixed.GetQuantisedHess(), restore.GetQuantisedGrad(),
-             restore.GetQuantisedHess(), scales[target_idx].exponent.GetQuantisedGrad(),
-             scales[target_idx].exponent.GetQuantisedHess());
-    }
-    SPAN_CHECK(fixed == restore);
-    return scales[target_idx].ToInt32(fixed);
+    auto fixed_g = roundings[target_idx].Scale().GetGrad() * g.GetGrad();
+    auto fixed_h = roundings[target_idx].Scale().GetHess() * g.GetHess();
+    auto v = FixedPointGradScale::FromInt64(GradientPairPrecise{fixed_g, fixed_h});
+    return v;
   });
   thrust::copy_n(ctx->CUDACtx()->CTP(), it, in_gpair.Size(), linalg::tbegin(out_gpair));
 }
@@ -424,20 +416,20 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   }
 }
 
-__device__ GradientPairInt32 LoadGpair(GradientPairInt32 const* XGBOOST_RESTRICT gpairs) {
-  static_assert(sizeof(int2) == sizeof(GradientPairInt32));
+__device__ GradientPair LoadGpair(GradientPair const* XGBOOST_RESTRICT gpairs) {
+  static_assert(sizeof(int2) == sizeof(GradientPair));
   auto g = *reinterpret_cast<int2 const*>(gpairs);
-  return *reinterpret_cast<GradientPairInt32*>(&g);
+  return *reinterpret_cast<GradientPair const*>(&g);
 }
 
 // Build the histogram for a single target in a single node.
 template <typename Policy, typename Accessor, typename RidxIterSpan>
 __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup const& group,
-                                        RidxIterSpan d_ridx_iter,
-                                        GradientPairInt32 const* XGBOOST_RESTRICT gpair,
-                                        FixedPointGradScale const& scale,
+                                        RidxIterSpan d_ridx_iter, GradientPair const* gpair,
+                                        GradientPairUint16 const* scales,
                                         GradientPairInt64* smem_hist, GradientPairInt64* gmem_hist,
-                                        bst_target_t offset, std::uint32_t stride) {
+                                        bst_idx_t offset, bst_idx_t stride, bst_target_t n_targets,
+                                        bst_target_t target_idx) {
   bst_feature_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
 
   using Idx = RowPartitioner::RowIndexT;
@@ -473,14 +465,14 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
 
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
     if (Policy::kDense || compressed_bin != matrix.NullValue()) {
-      auto g = LoadGpair(gpair + ridx);
+      auto g = LoadGpair(gpair + ridx * n_targets + target_idx);
       if constexpr (Policy::kCompressed) {
         compressed_bin += matrix.feature_segments[fidx];
       }
       if constexpr (Policy::kSharedMem) {
         compressed_bin -= group.start_bin;
       }
-      auto i64_g = scale.ToInt64(g);
+      auto i64_g = ToInt64(g, scales[ridx]);
       atomic_add(compressed_bin, i64_g);
     }
   };
@@ -538,8 +530,8 @@ template <typename Policy, typename Accessor, typename RidxIterSpan>
 __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) void HistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups, RidxIterSpan* d_ridx_iters,
     common::Span<std::uint32_t const> blk_ptr, common::Span<GradientPairInt64>* node_hists,
-    GradientPairInt32 const* d_gpair, FixedPointGradScale const* d_scales, bst_idx_t n_samples,
-    bst_target_t n_targets) {
+    linalg::MatrixView<GradientPair const> d_gpair, GradientPairUint16 const* d_scales,
+    bst_idx_t n_samples, bst_target_t n_targets) {
   using Idx = RowPartitioner::RowIndexT;
 
   // Find the node for this block.
@@ -573,11 +565,12 @@ __global__ __launch_bounds__(HistBound::kBlockThreads, HistBound::kMinBlocks) vo
   // the shared memory. Since we launch one block for each target, the histogram index can
   // be shared in L2.
   auto gmem_hist = d_node_hist->data() + target_idx * n_bins_per_target;
-  auto t_gpair = d_gpair + n_samples * target_idx;
-  auto t_scale = d_scales[target_idx];
 
-  HistKernelOneNodeTarget<Policy>(matrix, group, d_ridx_iters[nidx_in_set], t_gpair, t_scale,
-                                  smem_hist, gmem_hist, offset, kStride);
+  auto t_scale = d_scales + n_samples * target_idx;
+
+  HistKernelOneNodeTarget<Policy>(matrix, group, d_ridx_iters[nidx_in_set], d_gpair.Values().data(),
+                                  t_scale, smem_hist, gmem_hist, offset, kStride, n_targets,
+                                  target_idx);
 }
 
 namespace {
@@ -757,13 +750,14 @@ struct MtHistKernel {
   template <bool kDense, bool kCompressed, typename Accessor, typename RidxIterSpan>
   void DispatchHistShmem(Context const* ctx, Accessor const& matrix,
                          FeatureGroupsAccessor const& feature_groups,
-                         linalg::MatrixView<GradientPairInt32 const> gpair,
-                         common::Span<FixedPointGradScale const> scales, RidxIterSpan* ridx_iters,
+                         linalg::MatrixView<GradientPair const> gpair,
+                         linalg::MatrixView<GradientPairUint16 const> scales,
+                         RidxIterSpan* ridx_iters,
                          common::Span<common::Span<GradientPairInt64>> hists,
                          std::vector<std::size_t> const& h_sizes_csum) {
     auto d_gpair = gpair.Values().data();
     auto n_targets = gpair.Shape(1);
-    auto d_scales = scales.data();
+    auto d_scales = scales.Values().data();
 
     std::size_t shmem_bytes = feature_groups.ShmemSize();
     bool use_shared = !force_global && shmem_bytes <= this->max_shared_bytes;
@@ -780,7 +774,7 @@ struct MtHistKernel {
       CHECK_GE(n_blocks, hists.size());
       dim3 conf(n_blocks, feature_groups.NumGroups());
       kernel<<<conf, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream()>>>(
-          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), d_gpair, d_scales,
+          matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), gpair, d_scales,
           gpair.Shape(0), n_targets);
       dh::safe_cuda(cudaPeekAtLastError());
     };
@@ -796,7 +790,7 @@ struct MtHistKernel {
         this->cfg[reinterpret_cast<void*>(kernel)] = v;
       }
     };
-    CHECK(gpair.FContiguous());
+    CHECK(scales.FContiguous());
     if (use_shared) {
       DispatchCudaSm(ctx->Ordinal(), [&](auto arch) {
         using Arch = common::GetValueT<decltype(arch)>;
@@ -910,8 +904,8 @@ class DeviceHistogramDispatchAccessor {
 
   void BuildHistogram(Context const* ctx, Accessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
-                      linalg::MatrixView<GradientPairInt32 const> gpair,
-                      common::Span<FixedPointGradScale const> scales,
+                      linalg::MatrixView<GradientPair const> gpair,
+                      linalg::MatrixView<GradientPairUint16 const> scales,
                       common::Span<common::Span<cuda_impl::RowIndexT const>> ridxs,
                       common::Span<common::Span<GradientPairInt64>> hists,
                       std::vector<std::size_t> const& h_sizes_csum) {
@@ -990,8 +984,8 @@ void DeviceHistogramBuilder::BuildHistogram(Context const* ctx, EllpackAccessor 
 
 void DeviceHistogramBuilder::BuildHistogram(
     Context const* ctx, EllpackAccessor const& matrix, FeatureGroupsAccessor const& feature_groups,
-    linalg::MatrixView<GradientPairInt32 const> gpair,
-    common::Span<FixedPointGradScale const> scales,
+    linalg::MatrixView<GradientPair const> gpair,
+    linalg::MatrixView<GradientPairUint16 const> scales,
     common::Span<common::Span<cuda_impl::RowIndexT const>> ridxs,
     common::Span<common::Span<GradientPairInt64>> hists,
     std::vector<std::size_t> const& h_sizes_csum) {
