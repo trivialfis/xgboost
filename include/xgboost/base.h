@@ -307,6 +307,7 @@ class GradientPairIntImpl {
   XGBOOST_DEVICE bool operator==(GradientPairIntImpl const &rhs) const {
     return grad_ == rhs.grad_ && hess_ == rhs.hess_;
   }
+  XGBOOST_DEVICE bool operator!=(GradientPairIntImpl const &rhs) const { return !(*this == rhs); }
 
   friend std::ostream &operator<<(std::ostream &os, GradientPairIntImpl const &g) {
     os << g.GetQuantisedGrad() << "/" << g.GetQuantisedHess();

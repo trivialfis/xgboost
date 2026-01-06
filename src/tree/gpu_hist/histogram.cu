@@ -178,6 +178,15 @@ void CalcQuantizedGpairs(Context const* ctx, linalg::Matrix<GradientPair>* const
     auto [ridx, target_idx] = linalg::UnravelIndex(i, in_gpair.Shape());
     auto g = in_gpair(ridx, target_idx);
     auto fixed = roundings[target_idx].ToFixedPoint(g);
+    auto v = scales[target_idx].ToInt32(fixed);
+    auto restore = scales[target_idx].ToInt64(v);
+    if (fixed != restore ) {
+      printf("fixed.g:%" PRId64 " h:%" PRId64 " s.g:%" PRId64 " h:%" PRId64 " exp.g:%d, h:%d\n",
+             fixed.GetQuantisedGrad(), fixed.GetQuantisedHess(), restore.GetQuantisedGrad(),
+             restore.GetQuantisedHess(), scales[target_idx].exponent.GetQuantisedGrad(),
+             scales[target_idx].exponent.GetQuantisedHess());
+    }
+    SPAN_CHECK(fixed == restore);
     return scales[target_idx].ToInt32(fixed);
   });
   thrust::copy_n(ctx->CUDACtx()->CTP(), it, in_gpair.Size(), linalg::tbegin(out_gpair));
