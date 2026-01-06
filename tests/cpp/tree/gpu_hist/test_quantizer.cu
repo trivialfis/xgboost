@@ -8,6 +8,7 @@
 
 namespace xgboost::tree {
 auto Pf(float v) { return std::bitset<32>{cuda::std::bit_cast<std::uint32_t>(v)}; }
+auto Pd(double v) { return std::bitset<64>{cuda::std::bit_cast<std::uint64_t>(v)}; }
 auto Pi64(std::int64_t v) { return std::bitset<64>{cuda::std::bit_cast<std::uint64_t>(v)}; }
 auto Pi32(std::int32_t v) { return std::bitset<32>{cuda::std::bit_cast<std::uint32_t>(v)}; }
 
@@ -153,5 +154,38 @@ TEST(Quantizer, Extract) {
   auto e2 = detail::ExtractFixed32(nv_fixed.GetQuantisedGrad(), 62);
   auto rv = detail::RestoreFixed64(e2, 62);
   std::cout << "rest:" << Pi64(rv) << std::endl;
+}
+
+TEST(Quantizer, Reg) {
+  // fixed.g:12786314240 h:137438953472 res.g:12786311168 h:137438953472 exp.g:35, h:37
+  // to float:2.91038e-11/7.27596e-12, to fixed:3.43597e+10/1.37439e+11
+  GradientPairInt64 fixed{12786314240ll, 137438953472ll};
+  FixedPointGradScale q{{35, 37}};
+  // auto i32_g = q.ToInt32(fixed);
+  // auto i64_g = q.ToInt64(i32_g);
+  // f64
+  // 0.37213072180747986
+  // i64
+  //                                   35
+  //                                    |
+  // 0000,0000,0000,0000,0000,0000,0000,001.0,1111,1010,0001,1111,1010,1100,0000,0000
+  // 0000,0000,0000,0000,0000,0000,0000,001.0,1111,1010,0001,1111,1010,1100,0000,0000
+  // i32
+  //                          0000,0000,001.0,1111,1010,0001,1111,1010
+  // restored i64
+  // 0000,0000,0000,0000,0000,0000,0000,001.0,1111,1010,0001,1111,1010,0000,0000,0000
+  // i64
+  // 0000,0000,0000,0000,0000,0000,0000,001.0,1111,1010,0001,1111,1010,1100,0000,0000
+  // f64
+  // 0,01111111101,                        .0,1111,1010,0001,1111,1010,1100,0000,0000,0000,0000,0000,0000,000
+  // 0,01111111101,                        .0,1111,1010,0001,1111,1010,1100,0000,0000,0000,0000,0000,0000,000
+  // f32
+  // 001111101,                            .0,1111,1010,0001,1111,1010,11
+
+
+  auto f64 = fixed.GetQuantisedGrad() / pow(2.0, 35);
+  std::cout << Pd(f64) << std::endl;
+  // std::int64_t i64 = f64 * pow(2.0, 35);
+  // std::cout << Pi64(i64) << std::endl;
 }
 }  // namespace xgboost::tree
