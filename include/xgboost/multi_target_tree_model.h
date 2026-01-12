@@ -141,6 +141,7 @@ class MultiTargetTree : public Model {
   void SaveModel(Json* out) const override;
 
   void EvictDevice();
+  [[nodiscard]] bool DeviceCanRead() const;
 
   [[nodiscard]] std::size_t MemCostBytes() const;
 };

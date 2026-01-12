@@ -356,6 +356,19 @@ void MultiTargetTree::EvictDevice() {
   leaf_weights_.EvictDevice();
 }
 
+[[nodiscard]] bool MultiTargetTree::DeviceCanRead() const {
+  bool can_read = false;
+  for (auto p_vec : {&left_, &right_, &parent_}) {
+    can_read |= p_vec->DeviceCanRead();
+  }
+  can_read |= split_index_.DeviceCanRead();
+  can_read |= default_left_.DeviceCanRead();
+  can_read |= split_conds_.DeviceCanRead();
+  can_read |= weights_.DeviceCanRead();
+  can_read |= leaf_weights_.DeviceCanRead();
+  return can_read;
+}
+
 [[nodiscard]] std::size_t MultiTargetTree::MemCostBytes() const {
   std::size_t n_bytes = 0;
   n_bytes += left_.SizeBytes();

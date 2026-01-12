@@ -958,6 +958,19 @@ void RegTree::EvictDevice() {
   }
 }
 
+[[nodiscard]] bool RegTree::DeviceCanRead() const {
+  if (this->p_mt_tree_) {
+    return this->p_mt_tree_->DeviceCanRead();
+  }
+  bool can_read = false;
+  can_read |= this->nodes_.DeviceCanRead();
+  can_read |= this->stats_.DeviceCanRead();
+  can_read |= this->split_types_.DeviceCanRead();
+  can_read |= this->split_categories_.DeviceCanRead();
+  can_read |= this->split_categories_segments_.DeviceCanRead();
+  return can_read;
+}
+
 template <bool typed>
 void RegTree::LoadCategoricalSplit(Json const& in) {
   auto const& categories_segments = get<I64ArrayT<typed>>(in["categories_segments"]);

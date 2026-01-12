@@ -552,6 +552,7 @@ class RegTree : public Model {
   tree::MultiTargetTreeView HostMtView() const;
   // Evict device storage and keep the host one to preserve memory.
   void EvictDevice();
+  [[nodiscard]] bool DeviceCanRead() const;
 
  private:
   template <bool typed>
