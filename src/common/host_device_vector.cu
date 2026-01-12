@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2025, XGBoost contributors
+ * Copyright 2017-2026, XGBoost contributors
  */
 #include <thrust/fill.h>
 
@@ -144,6 +144,10 @@ class HostDeviceVectorImpl {
                                     other->Size() * sizeof(T), cudaMemcpyDeviceToDevice,
                                     curt::DefaultStream()));
     }
+  }
+
+  void EvictDevice() {
+
   }
 
   std::vector<T>& HostVector() {
@@ -359,6 +363,11 @@ void HostDeviceVector<T>::Copy(std::initializer_list<T> other) {
 template <typename T>
 void HostDeviceVector<T>::Extend(HostDeviceVector const& other) {
   impl_->Extend(other.impl_);
+}
+
+template <typename T>
+void HostDeviceVector<T>::EvictDevice() {
+  impl_->EvictDevice();
 }
 
 template <typename T>

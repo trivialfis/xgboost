@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024 by XGBoost contributors
+ * Copyright 2017-2026, XGBoost contributors
  */
 #ifndef XGBOOST_USE_CUDA
 #ifndef XGBOOST_USE_SYCL
@@ -150,6 +150,9 @@ void HostDeviceVector<T>::Extend(HostDeviceVector const& other) {
   std::copy(other.ConstHostVector().cbegin(), other.ConstHostVector().cend(),
             this->HostVector().begin() + ori_size);
 }
+
+template <typename T>
+void HostDeviceVector<T>::EvictDevice() {}
 
 template <typename T>
 bool HostDeviceVector<T>::HostCanRead() const {

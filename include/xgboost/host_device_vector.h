@@ -1,5 +1,5 @@
-/*!
- * Copyright 2017-2019 XGBoost contributors
+/**
+ * Copyright 2017-2026, XGBoost contributors
  */
 
 /**
@@ -66,8 +66,8 @@ void SetCudaSetDeviceHandler(void (*handler)(int));
 
 template <typename T> struct HostDeviceVectorImpl;
 
-/*!
- * \brief Controls data access from the GPU.
+/**
+ * @brief Controls data access from the GPU.
  *
  * Since a `HostDeviceVector` can have data on both the host and device, access control needs to be
  * maintained to keep the data consistent.
@@ -103,13 +103,14 @@ class HostDeviceVector {
   [[nodiscard]] std::size_t Size() const;
   [[nodiscard]] std::size_t SizeBytes() const { return this->Size() * sizeof(T); }
   [[nodiscard]] DeviceOrd Device() const;
+  // Device accessors
   common::Span<T> DeviceSpan();
   common::Span<const T> ConstDeviceSpan() const;
   common::Span<const T> DeviceSpan() const { return ConstDeviceSpan(); }
   T* DevicePointer();
   const T* ConstDevicePointer() const;
   const T* DevicePointer() const { return ConstDevicePointer(); }
-
+  // Host accessors
   T* HostPointer() { return HostVector().data(); }
   common::Span<T> HostSpan() { return common::Span<T>{HostVector()}; }
   common::Span<T const> HostSpan() const { return common::Span<T const>{HostVector()}; }
@@ -123,6 +124,7 @@ class HostDeviceVector {
   void Copy(std::initializer_list<T> other);
 
   void Extend(const HostDeviceVector<T>& other);
+  void EvictDevice();  // To reduce device memory usage when possible.
 
   std::vector<T>& HostVector();
   const std::vector<T>& ConstHostVector() const;
