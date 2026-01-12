@@ -1,5 +1,5 @@
 /**
- * Copyright 2025, XGBoost Contributors
+ * Copyright 2025-2026, XGBoost Contributors
  *
  * The file provides views for two tree models. We hope to eventually unify them, but the
  * original scalar tree `Node` struct is used extensively in the codebase.
@@ -151,7 +151,7 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
       : CategoriesMixIn{std::move(cats)}, nodes{nodes}, stats{stats}, n{n_nodes} {}
 
   /** @brief Create a device view */
-  explicit ScalarTreeView(DeviceOrd device, RegTree const* tree);
+  explicit ScalarTreeView(DeviceOrd device, bool need_stat, RegTree const* tree);
   /** @brief Create a host view */
   explicit ScalarTreeView(RegTree const* tree)
       : CategoriesMixIn{tree->GetCategoriesMatrix(DeviceOrd::CPU())},
