@@ -147,7 +147,8 @@ class HostDeviceVectorImpl {
   }
 
   void EvictDevice() {
-
+    LazySyncHost(GPUAccess::kNone);
+    this->data_d_.reset();
   }
 
   std::vector<T>& HostVector() {

@@ -1,10 +1,12 @@
 /**
- * Copyright 2018-2024, XGBoost contributors
+ * Copyright 2018-2026, XGBoost contributors
  */
 #include <gtest/gtest.h>
 #include <thrust/equal.h>
-#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/counting_iterator.h>  // for make_counting_iterator
 #include <xgboost/host_device_vector.h>
+
+#include <numeric>  // for iota
 
 #include "../../../src/common/cuda_rt_utils.h"  // for SetDevice
 #include "../../../src/common/device_helpers.cuh"
@@ -218,5 +220,28 @@ TEST(HostDeviceVector, Resize) {
     ASSERT_TRUE(vec.HostCanWrite());
     check(vec);
   }
+}
+
+TEST(HostDeviceVector, EvictDevice) {
+  auto device = DeviceOrd::CUDA(0);
+  HostDeviceVector<float> vec(16);
+  auto& h_vec = vec.HostVector();
+  std::iota(h_vec.begin(), h_vec.end(), 0.0f);
+  vec.EvictDevice();  // do nothing
+  ASSERT_FALSE(vec.DeviceCanRead());
+  ASSERT_TRUE(vec.HostCanWrite());
+
+  vec.SetDevice(device);
+  auto d_vec = vec.ConstDeviceSpan();
+  auto it = thrust::make_counting_iterator(0.0f);
+  auto eq = thrust::equal(dh::tcbegin(d_vec), dh::tcend(d_vec), it);
+  ASSERT_TRUE(eq);
+  ASSERT_TRUE(vec.DeviceCanRead());
+  vec.EvictDevice();
+  ASSERT_FALSE(vec.DeviceCanRead());
+
+  d_vec = vec.ConstDeviceSpan();
+  eq = thrust::equal(dh::tcbegin(d_vec), dh::tcend(d_vec), it);
+  ASSERT_TRUE(eq);
 }
 }  // namespace xgboost::common
