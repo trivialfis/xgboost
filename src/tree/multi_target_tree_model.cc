@@ -345,6 +345,17 @@ void MultiTargetTree::SaveModel(Json* p_out) const {
   return ptr;
 }
 
+void MultiTargetTree::EvictDevice() {
+  for (auto p_vec : {&left_, &right_, &parent_}) {
+    p_vec->EvictDevice();
+  }
+  split_index_.EvictDevice();
+  default_left_.EvictDevice();
+  split_conds_.EvictDevice();
+  weights_.EvictDevice();
+  leaf_weights_.EvictDevice();
+}
+
 [[nodiscard]] std::size_t MultiTargetTree::MemCostBytes() const {
   std::size_t n_bytes = 0;
   n_bytes += left_.SizeBytes();

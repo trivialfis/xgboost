@@ -140,6 +140,8 @@ class MultiTargetTree : public Model {
   void LoadModel(Json const& in) override;
   void SaveModel(Json* out) const override;
 
+  void EvictDevice();
+
   [[nodiscard]] std::size_t MemCostBytes() const;
 };
 }  // namespace xgboost

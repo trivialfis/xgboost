@@ -550,6 +550,8 @@ class RegTree : public Model {
   [[nodiscard]] RegTree* Copy() const;
   tree::ScalarTreeView HostScView() const;
   tree::MultiTargetTreeView HostMtView() const;
+  // Evict device storage and keep the host one to preserve memory.
+  void EvictDevice();
 
  private:
   template <bool typed>

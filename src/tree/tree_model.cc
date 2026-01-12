@@ -947,6 +947,17 @@ tree::ScalarTreeView RegTree::HostScView() const { return tree::ScalarTreeView{t
 
 tree::MultiTargetTreeView RegTree::HostMtView() const { return tree::MultiTargetTreeView{this}; }
 
+void RegTree::EvictDevice() {
+  this->nodes_.EvictDevice();
+  this->stats_.EvictDevice();
+  this->split_types_.EvictDevice();
+  this->split_categories_.EvictDevice();
+  this->split_categories_segments_.EvictDevice();
+  if (this->p_mt_tree_) {
+    this->p_mt_tree_->EvictDevice();
+  }
+}
+
 template <bool typed>
 void RegTree::LoadCategoricalSplit(Json const& in) {
   auto const& categories_segments = get<I64ArrayT<typed>>(in["categories_segments"]);
