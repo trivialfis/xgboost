@@ -1,5 +1,5 @@
 /**
- * Copyright 2014-2025, XGBoost Contributors
+ * Copyright 2014-2026, XGBoost Contributors
  *
  * \file gbtree.cc
  * \brief gradient boosted tree implementation.
@@ -292,6 +292,12 @@ void GBTree::DoBoost(DMatrix* p_fmat, GradientContainer* in_gpair, PredictionCac
   }
 
   monitor_.Stop("BoostNewTrees");
+  // Don't keep the trees in device memory.
+  for (auto& tree_group : new_trees) {
+    for (auto& tree : tree_group) {
+      tree->EvictDevice();
+    }
+  }
   this->CommitModel(std::move(new_trees));
 }
 
@@ -534,8 +540,15 @@ void GBTree::PredictBatchImpl(DMatrix* p_fmat, PredictionCacheEntry* out_preds, 
   auto [tree_begin, tree_end] = detail::LayerToTree(model_, layer_begin, layer_end);
   CHECK_LE(tree_end, model_.trees.size()) << "Invalid number of trees.";
   if (tree_end > tree_begin) {
-    predictor->PredictBatch(p_fmat, out_preds, model_, tree_begin, tree_end);
+    predictor->PredictBatch(p_fmat, out_preds, this->model_, tree_begin, tree_end);
+    // We don't need the tree in device for fast inference when doing training.
+    if (is_training) {
+      for (bst_tree_t tree_idx = tree_begin; tree_idx < tree_end; ++tree_end) {
+        this->model_.trees[tree_idx]->EvictDevice();
+      }
+    }
   }
+
   if (reset) {
     out_preds->version = 0;
   } else {

@@ -150,7 +150,11 @@ struct ScalarTreeView : public WalkTreeMixIn<ScalarTreeView>, public CategoriesM
                                          RegTree::CategoricalSplitMatrix cats, bst_node_t n_nodes)
       : CategoriesMixIn{std::move(cats)}, nodes{nodes}, stats{stats}, n{n_nodes} {}
 
-  /** @brief Create a device view */
+  /**
+   * @brief Create a device view
+   *
+   * @param need_stat We can skip the stat when performing normal inference.
+   */
   explicit ScalarTreeView(DeviceOrd device, bool need_stat, RegTree const* tree);
   /** @brief Create a host view */
   explicit ScalarTreeView(RegTree const* tree)
