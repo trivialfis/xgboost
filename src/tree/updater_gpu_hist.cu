@@ -156,7 +156,8 @@ struct GPUHistMakerDevice {
         param{std::move(_param)},
         interaction_constraints(param, static_cast<bst_feature_t>(info.num_col_)),
         sampler{std::make_unique<GradientBasedSampler>(info.num_row_, param.subsample,
-                                                       param.sampling_method)} {
+                                                       param.sampling_method,
+                                                       param.mvs_adaptive_lambda)} {
     if (!param.monotone_constraints.empty()) {
       // Copy assigning an empty vector causes an exception in MSVC debug builds
       monotone_constraints = param.monotone_constraints;

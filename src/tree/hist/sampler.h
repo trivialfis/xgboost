@@ -8,12 +8,13 @@
 #include <cstdint>  // std::uint64_t
 #include <random>   // bernoulli_distribution, linear_congruential_engine
 
-#include "../../common/random.h"  // GlobalRandom
-#include "../param.h"             // TrainParam
-#include "xgboost/base.h"         // GradientPair
-#include "xgboost/context.h"      // Context
-#include "xgboost/data.h"         // MetaInfo
-#include "xgboost/linalg.h"       // TensorView
+#include "../../common/random.h"     // GlobalRandom
+#include "../param.h"                // TrainParam
+#include "gradient_based_sampler.h"  // GradientBasedSample
+#include "xgboost/base.h"            // GradientPair
+#include "xgboost/context.h"         // Context
+#include "xgboost/data.h"            // MetaInfo
+#include "xgboost/linalg.h"          // TensorView
 
 namespace xgboost::tree {
 struct RandomReplace {
@@ -43,16 +44,12 @@ struct RandomReplace {
   }
 };
 
-// Only uniform sampling, no gradient-based yet.
-inline void SampleGradient(Context const* ctx, TrainParam param,
-                           linalg::MatrixView<GradientPair> out) {
-  CHECK(out.Contiguous());
-  CHECK_EQ(param.sampling_method, TrainParam::kUniform)
-      << "Only uniform sampling is supported, gradient-based sampling is only support by GPU Hist.";
-
-  if (param.subsample >= 1.0) {
-    return;
-  }
+namespace detail {
+/**
+ * @brief Uniform sampling implementation.
+ */
+inline void UniformSample(Context const* ctx, linalg::MatrixView<GradientPair> out,
+                          float subsample) {
   bst_idx_t n_samples = out.Shape(0);
   auto& rnd = common::GlobalRandom();
 
@@ -60,7 +57,7 @@ inline void SampleGradient(Context const* ctx, TrainParam param,
 
   auto n_threads = static_cast<size_t>(ctx->Threads());
   std::size_t const discard_size = n_samples / n_threads;
-  std::bernoulli_distribution coin_flip(param.subsample);
+  std::bernoulli_distribution coin_flip(subsample);
 
   dmlc::OMPException exc;
 #pragma omp parallel num_threads(n_threads)
@@ -92,6 +89,32 @@ inline void SampleGradient(Context const* ctx, TrainParam param,
     });
   }
   exc.Rethrow();
+}
+}  // namespace detail
+
+/**
+ * @brief Sample gradients based on the configured sampling method.
+ *
+ * Supports both uniform and gradient-based (MVS) sampling methods.
+ */
+inline void SampleGradient(Context const* ctx, TrainParam param,
+                           linalg::MatrixView<GradientPair> out) {
+  CHECK(out.Contiguous());
+
+  if (param.subsample >= 1.0) {
+    return;
+  }
+
+  switch (param.sampling_method) {
+    case TrainParam::kUniform:
+      detail::UniformSample(ctx, out, param.subsample);
+      break;
+    case TrainParam::kGradientBased:
+      cpu_impl::GradientBasedSample(ctx, out, param.subsample, param.mvs_adaptive_lambda);
+      break;
+    default:
+      LOG(FATAL) << "Unknown sampling method: " << param.sampling_method;
+  }
 }
 namespace cpu_impl {
 /**

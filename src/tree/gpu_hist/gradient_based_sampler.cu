@@ -59,20 +59,23 @@ class BernoulliTrial {
 /**
  * @brief A functor that combines the gradient pair into a single float.
  *
- * The approach here is based on Minimal Variance Sampling (MVS), with lambda set to 0.1.
+ * The approach here is based on Minimal Variance Sampling (MVS).
  *
  * @see Ibragimov, B., & Gusev, G. (2019). Minimal Variance Sampling in Stochastic Gradient
  * Boosting. In Advances in Neural Information Processing Systems (pp. 15061-15071).
  */
+// fixme:
+// - merge this with the mvs coef estimator
 class CombineGradientPair {
  public:
+  explicit CombineGradientPair(float lambda) : lambda_(lambda) {}
   XGBOOST_DEVICE float operator()(const GradientPairPrecise& gpair) const {
     auto [g, h] = std::make_pair(gpair.GetGrad(), gpair.GetHess());
-    return cuda::std::sqrt((g * g) + kLambda * (h * h));
+    return cuda::std::sqrt((g * g) + lambda_ * (h * h));
   }
 
  private:
-  static constexpr float kLambda = 0.1f;
+  float lambda_;
 };
 
 /**
@@ -146,7 +149,6 @@ class PoissonSampling {
   common::Span<float const> regularized_abs_grad_;
   std::size_t threshold_index_;
   RandomWeight rnd_;
-  CombineGradientPair combine_;
 };
 
 void UniformSampling::Sample(Context const* ctx, linalg::MatrixView<GradientPairInt64> gpair,
@@ -164,15 +166,19 @@ void UniformSampling::Sample(Context const* ctx, linalg::MatrixView<GradientPair
       GradientPairInt64{});
 }
 
-GradientBasedSampling::GradientBasedSampling(std::size_t n_rows, float subsample)
+GradientBasedSampling::GradientBasedSampling(std::size_t n_rows, float subsample, float mvs_lambda)
     : subsample_(subsample),
+      lambda_(mvs_lambda),
       reg_abs_grad_(n_rows, 0.0f),
       threshold_(n_rows + 1, 0.0f),
-      grad_sum_(n_rows, 0.0f) {}
+      grad_sum_(n_rows, 0.0f) {
+  CHECK(!std::isnan(lambda_));
+  CHECK_GE(lambda_, 0);
+}
 
 void ReduceGrad(Context const* ctx, linalg::MatrixView<GradientPairInt64 const> gpairs,
-                common::Span<GradientQuantiser const> roundings, common::Span<float> reg_abs_grad) {
-  constexpr float kLambda = 0.1f;
+                common::Span<GradientQuantiser const> roundings, common::Span<float> reg_abs_grad,
+                float lambda) {
   auto n_segments = gpairs.Shape(0);
   CHECK_EQ(n_segments, reg_abs_grad.size());
   auto n_targets = gpairs.Shape(1);
@@ -181,7 +187,7 @@ void ReduceGrad(Context const* ctx, linalg::MatrixView<GradientPairInt64 const> 
     auto cidx = i % n_targets;
     auto gpair = roundings[cidx].ToFloatingPoint(gpairs_i64);
     auto [g, h] = cuda::std::make_pair(gpair.GetGrad(), gpair.GetHess());
-    return common::Sqr(g) + kLambda * common::Sqr(h);
+    return common::Sqr(g) + lambda * common::Sqr(h);
   };
   auto in_it = thrust::make_transform_iterator(
       thrust::make_zip_iterator(thrust::make_counting_iterator(0ul), linalg::tcbegin(gpairs)), op);
@@ -218,13 +224,14 @@ std::size_t CalculateThresholdIndex(Context const* ctx,
                                     linalg::MatrixView<GradientPairInt64 const> gpairs,
                                     common::Span<GradientQuantiser const> roundings,
                                     common::Span<float> reg_abs_grad, common::Span<float> threshold,
-                                    common::Span<float> grad_csum, std::size_t sample_rows) {
+                                    common::Span<float> grad_csum, std::size_t sample_rows,
+                                    float lambda) {
   auto cuctx = ctx->CUDACtx();
 
   thrust::fill(cuctx->CTP(), dh::tend(threshold) - 1, dh::tend(threshold),
                std::numeric_limits<float>::max());
   // Create the regularized absolute gradient
-  ReduceGrad(ctx, gpairs, roundings, dh::ToSpan(reg_abs_grad));
+  ReduceGrad(ctx, gpairs, roundings, dh::ToSpan(reg_abs_grad), lambda);
   thrust::transform(cuctx->CTP(), dh::tcbegin(reg_abs_grad), dh::tcend(reg_abs_grad) - 1,
                     dh::tbegin(reg_abs_grad),
                     [] XGBOOST_DEVICE(float gpair) { return cuda::std::sqrt(gpair); });
@@ -254,7 +261,7 @@ void GradientBasedSampling::Sample(Context const* ctx, linalg::MatrixView<Gradie
   CHECK_EQ(n_samples + 1, this->threshold_.size());
   std::size_t threshold_index = CalculateThresholdIndex(
       ctx, gpair, roundings, dh::ToSpan(reg_abs_grad_), dh::ToSpan(this->threshold_),
-      dh::ToSpan(grad_sum_), n_samples * subsample_);
+      dh::ToSpan(grad_sum_), n_samples * subsample_, lambda_);
   auto seed = common::GlobalRandom()();
   // Perform sequential Poisson sampling in place.
   // Only the threshold_[threshold_index] is used. (that is the \mu in the paper)
@@ -265,7 +272,7 @@ void GradientBasedSampling::Sample(Context const* ctx, linalg::MatrixView<Gradie
 }
 
 GradientBasedSampler::GradientBasedSampler(bst_idx_t n_samples, float subsample,
-                                           int sampling_method) {
+                                           int sampling_method, float mvs_lambda) {
   monitor_.Init(__func__);
 
   bool is_sampling = subsample < 1.0;
@@ -281,7 +288,7 @@ GradientBasedSampler::GradientBasedSampler(bst_idx_t n_samples, float subsample,
       break;
     }
     case TrainParam::kGradientBased: {
-      strategy_.reset(new GradientBasedSampling{n_samples, subsample});
+      strategy_.reset(new GradientBasedSampling{n_samples, subsample, mvs_lambda});
       break;
     }
     default:

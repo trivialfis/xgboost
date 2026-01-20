@@ -38,15 +38,20 @@ class UniformSampling : public SamplingStrategy {
   float subsample_;
 };
 
+/** @brief Default lambda for MVS regularization when adaptive lambda is not available. */
+// fixme: remove
+constexpr float kDefaultMvsLambda = 0.1f;
+
 /** @brief Gradient-based sampling. */
 class GradientBasedSampling : public SamplingStrategy {
  public:
-  GradientBasedSampling(std::size_t n_rows, float subsample);
+  GradientBasedSampling(std::size_t n_rows, float subsample, float mvs_lambda);
   void Sample(Context const* ctx, linalg::MatrixView<GradientPairInt64> gpair,
               common::Span<GradientQuantiser const> roundings) override;
 
  private:
   float subsample_;
+  float lambda_;  // MVS regularization lambda
   // abs gradient
   dh::device_vector<float> reg_abs_grad_;
   // sorted abs gradient
@@ -68,7 +73,8 @@ class GradientBasedSampling : public SamplingStrategy {
  */
 class GradientBasedSampler {
  public:
-  GradientBasedSampler(bst_idx_t n_samples, float subsample, int sampling_method);
+  GradientBasedSampler(bst_idx_t n_samples, float subsample, int sampling_method,
+                       float mvs_lambda = 0.0f);
 
   /** @brief Sample from a DMatrix based on the given gradient pairs. */
   void Sample(Context const* ctx, linalg::MatrixView<GradientPairInt64> gpair,

@@ -24,6 +24,7 @@
 #include "../common/threading_utils.h"
 #include "../common/timer.h"
 #include "../data/proxy_dmatrix.h"  // for DMatrixProxy, HostAdapterDispatch
+#include "adaptive_mvs.h"           // for MeanLeafSqrt, MeanGradSqrt
 #include "gbtree_model.h"
 #include "xgboost/base.h"
 #include "xgboost/data.h"
@@ -353,6 +354,35 @@ void GBTree::BoostNewTrees(GradientContainer* gpair, DMatrix* p_fmat, int bst_gr
   // Rescale learning rate according to the number of trees
   auto lr = tree_param_.learning_rate;
   tree_param_.learning_rate /= static_cast<float>(new_trees.size());
+
+  // Handle \lambda in MVS
+  if (this->tree_param_.sampling_method == tree::TrainParam::kGradientBased) {
+    double mvs_lambda = 0;
+    if (this->model_.trees.empty()) {
+      if (ctx_->IsCUDA()) {
+#if defined(XGBOOST_USE_CUDA)
+        mvs_lambda = cuda_impl::MeanGradSqrt(this->ctx_, gpair->ValueGrad(ctx_));
+#else
+        common::AssertGPUSupport();
+#endif  // defined(XGBOOST_USE_CUDA)
+      } else {
+        mvs_lambda = cpu_impl::MeanGradSqrt(this->ctx_, gpair->ValueGrad(ctx_));
+      }
+    } else {
+      // fixme: tree group
+      if (ctx_->IsCUDA()) {
+#if defined(XGBOOST_USE_CUDA)
+        mvs_lambda = cuda_impl::MeanLeafSqrt(this->ctx_, *this->model_.trees.back());
+#else
+        common::AssertGPUSupport();
+#endif  // defined(XGBOOST_USE_CUDA)
+      } else {
+        mvs_lambda = cpu_impl::MeanLeafSqrt(*this->model_.trees.back());
+      }
+    }
+    tree_param_.mvs_adaptive_lambda = mvs_lambda;
+  }
+
   for (auto& up : updaters_) {
     up->Update(&tree_param_, gpair, p_fmat,
                common::Span<HostDeviceVector<bst_node_t>>{*out_position}, new_trees);
