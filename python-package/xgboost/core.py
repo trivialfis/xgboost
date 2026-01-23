@@ -3331,60 +3331,134 @@ class Booster:
         gains = []
         covers = []
 
-        trees = self.get_dump(fmap, with_stats=True)
-        for i, tree in enumerate(trees):
-            for line in tree.split("\n"):
-                arr = line.split("[")
-                # Leaf node
-                if len(arr) == 1:
-                    # Last element of line.split is an empty string
-                    if arr == [""]:
-                        continue
-                    # parse string
-                    parse = arr[0].split(":")
-                    stats = re.split("=|,", parse[1])
+        model = json.loads(self.save_raw(raw_format="json"))
+        learner = model["learner"]
+        gbm = learner["gradient_booster"]
+        gbm_name = gbm["name"]
+        if gbm_name == "gbtree":
+            gbtree_model = gbm["model"]
+        elif gbm_name == "dart":
+            gbtree_model = gbm["gbtree"]["model"]
+        else:
+            raise ValueError(f"This method is not defined for Booster type {gbm_name}")
 
-                    # append to lists
-                    tree_ids.append(i)
-                    node_ids.append(int(re.findall(r"\b\d+\b", parse[0])[0]))
+        num_feature = int(learner["learner_model_param"]["num_feature"])
+
+        def load_feature_names() -> List[str]:
+            if fmap:
+                names: List[str] = []
+                with open(fmap, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        tokens = line.split()
+                        if len(tokens) < 3:
+                            raise ValueError("Invalid feature map file format.")
+                        idx = int(tokens[0])
+                        if idx != len(names):
+                            raise ValueError("Feature map must be sequential by feature index.")
+                        names.append(tokens[1])
+                return names
+            if self.feature_names is None:
+                return []
+            return list(self.feature_names)
+
+        feature_names = load_feature_names()
+
+        def feature_name(idx: int) -> str:
+            if idx < len(feature_names):
+                return feature_names[idx]
+            return f"f{idx}"
+
+        def build_category_map(tree: dict) -> Tuple[List[int], Dict[int, List[str]]]:
+            split_type = tree.get("split_type")
+            if split_type is None:
+                split_type = [0] * int(tree["tree_param"]["num_nodes"])
+            categories_nodes = tree.get("categories_nodes", [])
+            categories_segments = tree.get("categories_segments", [])
+            categories_sizes = tree.get("categories_sizes", [])
+            categories_list = tree.get("categories", [])
+            cat_map: Dict[int, List[str]] = {}
+            for i, node_id in enumerate(categories_nodes):
+                beg = int(categories_segments[i])
+                size = int(categories_sizes[i])
+                cats = categories_list[beg : beg + size]
+                cat_map[int(node_id)] = [str(cat) for cat in cats]
+            return [int(v) for v in split_type], cat_map
+
+        for tree_idx, tree in enumerate(gbtree_model["trees"]):
+            n_nodes = int(tree["tree_param"]["num_nodes"])
+            size_leaf_vector = int(tree["tree_param"]["size_leaf_vector"])
+            left_children = [int(v) for v in tree["left_children"]]
+            right_children = [int(v) for v in tree["right_children"]]
+            split_indices = [int(v) for v in tree["split_indices"]]
+            split_conditions = [float(v) for v in tree["split_conditions"]]
+            default_left = [bool(v) for v in tree["default_left"]]
+            loss_changes = [float(v) for v in tree["loss_changes"]]
+            sum_hessian = [float(v) for v in tree["sum_hessian"]]
+            leaf_weights = tree.get("leaf_weights")
+            split_types, cat_map = build_category_map(tree)
+
+            stack = [0]
+            visited: set[int] = set()
+            node_order: List[int] = []
+            while stack:
+                nidx = stack.pop()
+                if nidx in visited or nidx < 0:
+                    continue
+                visited.add(nidx)
+                node_order.append(nidx)
+                if left_children[nidx] == -1:
+                    continue
+                stack.append(right_children[nidx])
+                stack.append(left_children[nidx])
+
+            for nidx in node_order:
+                is_leaf = left_children[nidx] == -1
+                tree_ids.append(tree_idx)
+                node_ids.append(nidx)
+                if is_leaf:
                     fids.append("Leaf")
                     splits.append(float("NAN"))
                     categories.append(float("NAN"))
                     y_directs.append(float("NAN"))
                     n_directs.append(float("NAN"))
                     missings.append(float("NAN"))
-                    gains.append(float(stats[1]))
-                    covers.append(float(stats[3]))
-                # Not a Leaf Node
-                else:
-                    # parse string
-                    fid = arr[1].split("]")
-                    if fid[0].find("<") != -1:
-                        # numerical
-                        parse = fid[0].split("<")
-                        splits.append(float(parse[1]))
-                        categories.append(None)
-                    elif fid[0].find(":{") != -1:
-                        # categorical
-                        parse = fid[0].split(":")
-                        cats = parse[1][1:-1]  # strip the {}
-                        cats_split = cats.split(",")
-                        splits.append(float("NAN"))
-                        categories.append(cats_split if cats_split else None)
+                    if size_leaf_vector > 1:
+                        if leaf_weights is None:
+                            raise ValueError("Missing leaf_weights in vector leaf model.")
+                        leaf_idx = right_children[nidx]
+                        beg = leaf_idx * size_leaf_vector
+                        end = beg + size_leaf_vector
+                        leaf_value = [float(v) for v in leaf_weights[beg:end]]
+                        gains.append(leaf_value)
                     else:
-                        raise ValueError("Failed to parse model text dump.")
-                    stats = re.split("=|,", fid[1])
+                        gains.append(float(split_conditions[nidx]))
+                    covers.append(float(sum_hessian[nidx]))
+                    continue
 
-                    # append to lists
-                    tree_ids.append(i)
-                    node_ids.append(int(re.findall(r"\b\d+\b", arr[0])[0]))
-                    fids.append(parse[0])
-                    str_i = str(i)
-                    y_directs.append(str_i + "-" + stats[1])
-                    n_directs.append(str_i + "-" + stats[3])
-                    missings.append(str_i + "-" + stats[5])
-                    gains.append(float(stats[7]))
-                    covers.append(float(stats[9]))
+                split_index = split_indices[nidx]
+                fids.append(feature_name(split_index))
+                is_categorical = split_types[nidx] == 1
+                if is_categorical:
+                    splits.append(float("NAN"))
+                    categories.append(cat_map.get(nidx))
+                    yes = right_children[nidx]
+                    no = left_children[nidx]
+                else:
+                    splits.append(float(split_conditions[nidx]))
+                    categories.append(None)
+                    yes = left_children[nidx]
+                    no = right_children[nidx]
+                missing = yes if default_left[nidx] and is_categorical else (
+                    left_children[nidx] if default_left[nidx] else right_children[nidx]
+                )
+                str_i = str(tree_idx)
+                y_directs.append(str_i + "-" + str(yes))
+                n_directs.append(str_i + "-" + str(no))
+                missings.append(str_i + "-" + str(missing))
+                gains.append(float(loss_changes[nidx]))
+                covers.append(float(sum_hessian[nidx]))
 
         ids = [str(t_id) + "-" + str(n_id) for t_id, n_id in zip(tree_ids, node_ids)]
         df = DataFrame(
