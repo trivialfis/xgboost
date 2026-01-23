@@ -6,6 +6,7 @@ from xgboost import testing as tm
 from xgboost.testing.parse_tree import (
     run_split_value_histograms,
     run_tree_to_df_categorical,
+    run_tree_to_df_vector_leaf,
 )
 
 pytestmark = pytest.mark.skipif(**tm.no_pandas())
@@ -54,6 +55,9 @@ class TestTreesToDataFrame:
 
     def test_tree_to_df_categorical(self) -> None:
         run_tree_to_df_categorical("approx", "cpu")
+
+    def test_tree_to_df_vector_leaf(self) -> None:
+        run_tree_to_df_vector_leaf("cpu")
 
     def test_split_value_histograms(self):
         run_split_value_histograms("approx", "cpu")
