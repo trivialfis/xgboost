@@ -254,19 +254,20 @@ class HostDeviceVectorImpl {
 };
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(size_t size, T v, DeviceOrd device)
+HostDeviceVector<T>::HostDeviceVector(size_t size, T v, DeviceOrd device, Context const*)
   : impl_(nullptr) {
   impl_ = new HostDeviceVectorImpl<T>(size, v, device);
 }
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(std::initializer_list<T> init, DeviceOrd device)
+HostDeviceVector<T>::HostDeviceVector(std::initializer_list<T> init, DeviceOrd device,
+                                       Context const*)
   : impl_(nullptr) {
   impl_ = new HostDeviceVectorImpl<T>(init, device);
 }
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(const std::vector<T>& init, DeviceOrd device)
+HostDeviceVector<T>::HostDeviceVector(const std::vector<T>& init, DeviceOrd device, Context const*)
   : impl_(nullptr) {
   impl_ = new HostDeviceVectorImpl<T>(init, device);
 }
@@ -330,13 +331,23 @@ const std::vector<T>& HostDeviceVector<T>::ConstHostVector() const {
 }
 
 template <typename T>
+void HostDeviceVector<T>::Resize(size_t new_size) {
+  impl_->Resize(new_size);
+}
+
+template <typename T>
 void HostDeviceVector<T>::Resize(size_t new_size, T v) {
   impl_->Resize(new_size, v);
 }
 
 template <typename T>
-void HostDeviceVector<T>::Resize(size_t new_size) {
+void HostDeviceVector<T>::Resize(Context const*, size_t new_size) {
   impl_->Resize(new_size);
+}
+
+template <typename T>
+void HostDeviceVector<T>::Resize(Context const*, size_t new_size, T v) {
+  impl_->Resize(new_size, v);
 }
 
 template <typename T>

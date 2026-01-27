@@ -49,7 +49,7 @@
 #ifndef XGBOOST_HOST_DEVICE_VECTOR_H_
 #define XGBOOST_HOST_DEVICE_VECTOR_H_
 
-#include <xgboost/context.h>  // for DeviceOrd
+#include <xgboost/context.h>  // for DeviceOrd, Context
 #include <xgboost/span.h>     // for Span
 
 #include <initializer_list>
@@ -57,6 +57,8 @@
 #include <vector>
 
 namespace xgboost {
+
+struct Context;  // forward declaration
 
 #ifdef __CUDACC__
 // Sets a function to call instead of cudaSetDevice();
@@ -88,9 +90,12 @@ class HostDeviceVector {
   static_assert(std::is_standard_layout_v<T>, "HostDeviceVector admits only POD types");
 
  public:
-  explicit HostDeviceVector(size_t size = 0, T v = T(), DeviceOrd device = DeviceOrd::CPU());
-  HostDeviceVector(std::initializer_list<T> init, DeviceOrd device = DeviceOrd::CPU());
-  explicit HostDeviceVector(const std::vector<T>& init, DeviceOrd device = DeviceOrd::CPU());
+  explicit HostDeviceVector(size_t size = 0, T v = T(), DeviceOrd device = DeviceOrd::CPU(),
+                            Context const* ctx = nullptr);
+  HostDeviceVector(std::initializer_list<T> init, DeviceOrd device = DeviceOrd::CPU(),
+                   Context const* ctx = nullptr);
+  explicit HostDeviceVector(const std::vector<T>& init, DeviceOrd device = DeviceOrd::CPU(),
+                            Context const* ctx = nullptr);
   ~HostDeviceVector();
 
   HostDeviceVector(const HostDeviceVector<T>&) = delete;
@@ -139,6 +144,10 @@ class HostDeviceVector {
   void Resize(std::size_t new_size);
   /** @brief Resize and initialize the data if the new size is larger than the old size. */
   void Resize(std::size_t new_size, T v);
+  /** @brief Resize with context for stream-oriented allocation. */
+  void Resize(Context const* ctx, std::size_t new_size);
+  /** @brief Resize and initialize with context for stream-oriented allocation. */
+  void Resize(Context const* ctx, std::size_t new_size, T v);
 
   using value_type = T;  // NOLINT
 

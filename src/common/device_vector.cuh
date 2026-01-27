@@ -490,7 +490,10 @@ class DeviceUVectorImpl {
 
  public:
   DeviceUVectorImpl() = default;
-  explicit DeviceUVectorImpl(std::size_t n) { this->resize(n); }
+  explicit DeviceUVectorImpl(
+      std::size_t n, ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
+    this->resize(n, stream);
+  }
   DeviceUVectorImpl(DeviceUVectorImpl const &that) = delete;
   DeviceUVectorImpl &operator=(DeviceUVectorImpl const &that) = delete;
   DeviceUVectorImpl(DeviceUVectorImpl &&that) = default;
@@ -499,7 +502,8 @@ class DeviceUVectorImpl {
   [[nodiscard]] std::size_t Capacity() const { return this->capacity_; }
 
   // Resize without init.
-  void resize(std::size_t n) {  // NOLINT
+  void resize(std::size_t n,  // NOLINT
+              ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
     using ::xgboost::common::SizeBytes;
 
     if (n <= this->Capacity()) {
@@ -518,9 +522,8 @@ class DeviceUVectorImpl {
                             }};
     CHECK(new_ptr.get());
 
-    auto s = ::xgboost::curt::DefaultStream();
     safe_cuda(cudaMemcpyAsync(new_ptr.get(), this->data(), SizeBytes<T>(this->size()),
-                              cudaMemcpyDefault, s));
+                              cudaMemcpyDefault, stream));
     this->size_ = n;
     this->capacity_ = n;
 
@@ -529,11 +532,12 @@ class DeviceUVectorImpl {
     // std::swap(this->data_, new_ptr);
   }
   // Resize with init
-  void resize(std::size_t n, T const &v) {  // NOLINT
+  void resize(std::size_t n, T const &v,  // NOLINT
+              ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
     auto orig = this->size();
-    this->resize(n);
+    this->resize(n, stream);
     if (orig < n) {
-      auto exec = thrust::cuda::par_nosync.on(::xgboost::curt::DefaultStream());
+      auto exec = thrust::cuda::par_nosync.on(stream);
       thrust::fill(exec, this->begin() + orig, this->end(), v);
     }
   }
