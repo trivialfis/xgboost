@@ -23,8 +23,8 @@ inline void DeviceCheck(CatContainer const& cats) {
   ASSERT_FALSE(cats.DeviceCanRead());
 }
 
-[[nodiscard]] inline CatContainer FromDf(Context const*, enc::HostColumnsView df) {
-  return CatContainer{df, false};
+[[nodiscard]] inline CatContainer FromDf(Context const* ctx, enc::HostColumnsView df) {
+  return CatContainer{ctx, df, false};
 }
 
 #if defined(XGBOOST_USE_CUDA)

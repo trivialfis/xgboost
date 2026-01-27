@@ -312,7 +312,7 @@ TEST(MetaInfo, Validate) {
   info.labels.SetDevice(FstCU());
   EXPECT_THROW(info.Validate(DeviceOrd::CUDA(1)), dmlc::Error);
 
-  xgboost::HostDeviceVector<xgboost::bst_group_t> d_groups{groups};
+  xgboost::HostDeviceVector<xgboost::bst_group_t> d_groups{&ctx, groups};
   d_groups.SetDevice(FstCU());
   d_groups.DevicePointer();  // pull to device
   std::string arr_interface_str{ArrayInterfaceStr(xgboost::linalg::MakeVec(
@@ -325,9 +325,9 @@ TEST(MetaInfo, HostExtend) {
   xgboost::MetaInfo lhs, rhs;
   xgboost::Context ctx;
   size_t const kRows = 100;
-  lhs.labels.Reshape(kRows);
+  lhs.labels.Reshape(&ctx, kRows);
   lhs.num_row_ = kRows;
-  rhs.labels.Reshape(kRows);
+  rhs.labels.Reshape(&ctx, kRows);
   rhs.num_row_ = kRows;
   ASSERT_TRUE(lhs.labels.Data()->HostCanRead());
   ASSERT_TRUE(rhs.labels.Data()->HostCanRead());
@@ -340,7 +340,7 @@ TEST(MetaInfo, HostExtend) {
   lhs.SetInfo(ctx, "group", Make1dInterfaceTest(groups.data(), groups.size()));
   rhs.SetInfo(ctx, "group", Make1dInterfaceTest(groups.data(), groups.size()));
 
-  lhs.Extend(rhs, true, true);
+  lhs.Extend(&ctx, rhs, true, true);
   ASSERT_EQ(lhs.num_row_, kRows * 2);
   ASSERT_TRUE(lhs.labels.Data()->HostCanRead());
   ASSERT_TRUE(rhs.labels.Data()->HostCanRead());
@@ -364,9 +364,9 @@ class TestMetaInfo : public ::testing::TestWithParam<std::tuple<bst_target_t, bo
     info.num_row_ = 128;
     info.num_col_ = 3;
     info.feature_names.resize(info.num_col_, "a");
-    info.labels.Reshape(info.num_row_, n_targets);
+    info.labels.Reshape(ctx, info.num_row_, n_targets);
 
-    HostDeviceVector<bst_idx_t> ridx(info.num_row_ / 2, 0);
+    HostDeviceVector<bst_idx_t> ridx(ctx, info.num_row_ / 2, 0);
     ridx.SetDevice(ctx->Device());
     auto h_ridx = ridx.HostSpan();
     for (std::size_t i = 0, j = 0; i < ridx.Size(); i++, j += 2) {
@@ -374,7 +374,7 @@ class TestMetaInfo : public ::testing::TestWithParam<std::tuple<bst_target_t, bo
     }
 
     {
-      info.weights_.Resize(info.num_row_);
+      info.weights_.Resize(ctx, info.num_row_);
       auto h_w = info.weights_.HostSpan();
       std::iota(h_w.begin(), h_w.end(), 0);
     }

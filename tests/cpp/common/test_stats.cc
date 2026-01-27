@@ -106,14 +106,14 @@ TEST(Stats, Median) {
 namespace {
 void TestMean(Context const* ctx) {
   std::size_t n{128};
-  linalg::Vector<float> data({n}, ctx->Device());
+  linalg::Vector<float> data(ctx, {n}, ctx->Device());
   auto h_v = data.HostView().Values();
   std::iota(h_v.begin(), h_v.end(), .0f);
 
   auto nf = static_cast<float>(n);
   float mean = nf * (nf - 1) / 2 / n;
 
-  linalg::Vector<float> res{{1}, ctx->Device()};
+  linalg::Vector<float> res{ctx, {1}, ctx->Device()};
   Mean(ctx, data.View(ctx->Device()), &res);
   auto h_res = res.HostView();
   ASSERT_EQ(h_res.Size(), 1);
@@ -136,7 +136,7 @@ TEST(Stats, GpuMean) {
 namespace {
 void TestSampleMean(Context const* ctx) {
   std::size_t m{32}, n{16};
-  linalg::Matrix<float> data({m, n}, ctx->Device());
+  linalg::Matrix<float> data(ctx, {m, n}, ctx->Device());
   auto h_data = data.HostView();
   std::iota(linalg::begin(h_data), linalg::end(h_data), .0f);
   linalg::Vector<float> mean;
@@ -156,7 +156,7 @@ void TestSampleMeanDistributed(Context const* ctx) {
     auto rank = collective::GetRank();
     Context ctx = device.IsCUDA() ? MakeCUDACtx(DistGpuIdx()) : Context{};
     collective::GetWorkerLocalThreads(collective::GetWorldSize(), &ctx);
-    linalg::Matrix<float> data({m, n}, ctx.Device());
+    linalg::Matrix<float> data(&ctx, {m, n}, ctx.Device());
     auto h_data = data.HostView();
     for (std::size_t i = 0; i < m; ++i) {
       for (std::size_t j = 0; j < n; ++j) {
@@ -177,7 +177,7 @@ void TestWeightedSampleMean(Context const* ctx) {
   std::size_t m{32}, n{16};
   {
     auto data = linalg::Constant(ctx, 1.0f, m, n);
-    HostDeviceVector<float> w{m, 0.0f, ctx->Device()};
+    HostDeviceVector<float> w{ctx, m, 0.0f, ctx->Device()};
     auto h_w = w.HostSpan();
     std::iota(h_w.data(), h_w.data() + h_w.size(), 1.0f);
     linalg::Vector<float> mean;
@@ -187,10 +187,10 @@ void TestWeightedSampleMean(Context const* ctx) {
     }
   }
   {
-    linalg::Matrix<float> data({m, n}, ctx->Device());
+    linalg::Matrix<float> data(ctx, {m, n}, ctx->Device());
     auto h_data = data.HostView();
     std::iota(linalg::begin(h_data), linalg::end(h_data), .0f);
-    HostDeviceVector<float> w{m, 1.0f, ctx->Device()};
+    HostDeviceVector<float> w{ctx, m, 1.0f, ctx->Device()};
     linalg::Vector<float> mean;
     WeightedSampleMean(ctx, false, data, w, &mean);
     ASSERT_FLOAT_EQ(mean(0), 248.0f);
@@ -210,14 +210,14 @@ void TestWeightedSampleMeanDistributed(Context const* ctx) {
     auto rank = collective::GetRank();
     Context ctx = device.IsCUDA() ? MakeCUDACtx(DistGpuIdx()) : Context{};
     collective::GetWorkerLocalThreads(collective::GetWorldSize(), &ctx);
-    linalg::Matrix<float> data({m, n}, ctx.Device());
+    linalg::Matrix<float> data(&ctx, {m, n}, ctx.Device());
     auto h_data = data.HostView();
     for (std::size_t i = 0; i < m; ++i) {
       for (std::size_t j = 0; j < n; ++j) {
         h_data(i, j) = i + (m * rank) + j;
       }
     }
-    HostDeviceVector<float> w{m, 1.0f, ctx.Device()};
+    HostDeviceVector<float> w{&ctx, m, 1.0f, ctx.Device()};
     linalg::Vector<float> mean;
     WeightedSampleMean(&ctx, false, data, w, &mean);
     ASSERT_EQ(mean.Size(), n);

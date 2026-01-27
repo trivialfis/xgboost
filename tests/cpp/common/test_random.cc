@@ -103,7 +103,7 @@ TEST(ColumnSampler, ThreadSynchronisation) {
 namespace {
 void TestWeightedSampling(Context const* ctx) {
   auto test_basic = [ctx](int first) {
-    HostDeviceVector<float> feature_weights(2);
+    HostDeviceVector<float> feature_weights(ctx, 2);
     feature_weights.HostVector()[0] = std::abs(first - 1.0f);
     feature_weights.HostVector()[1] = first - 0.0f;
     ColumnSampler cs{0};
@@ -118,7 +118,7 @@ void TestWeightedSampling(Context const* ctx) {
   test_basic(1);
 
   size_t constexpr kCols = 64;
-  HostDeviceVector<float> feature_weights(kCols);
+  HostDeviceVector<float> feature_weights(ctx, kCols);
   SimpleLCG rng;
   SimpleRealUniformDistribution<float> dist(.0f, 12.0f);
   std::generate(feature_weights.HostVector().begin(), feature_weights.HostVector().end(),
@@ -168,7 +168,7 @@ TEST(ColumnSampler, GPUWeightedSampling) {
 namespace {
 void TestWeightedMultiSampling(Context const* ctx) {
   size_t constexpr kCols = 32;
-  HostDeviceVector<float> feature_weights(kCols, 0);
+  HostDeviceVector<float> feature_weights(ctx, kCols, 0);
   auto& h_feature_weights = feature_weights.HostVector();
   for (size_t i = 0; i < h_feature_weights.size(); ++i) {
     h_feature_weights[i] = i;

@@ -38,18 +38,20 @@ auto MakeMatrixFromTest(HostDeviceVector<float> *storage, std::size_t n_rows, st
 }
 
 TEST(Linalg, MatrixView) {
+  Context ctx;
   size_t kRows = 31, kCols = 77;
   HostDeviceVector<float> storage;
-  auto m = MakeMatrixFromTest(&storage, kRows, kCols);
+  auto m = MakeMatrixFromTest(&ctx, &storage, kRows, kCols);
   ASSERT_EQ(m.Device(), CPU());
   ASSERT_EQ(m(0, 0), 0);
   ASSERT_EQ(m(kRows - 1, kCols - 1), storage.Size() - 1);
 }
 
 TEST(Linalg, VectorView) {
+  Context ctx;
   size_t kRows = 31, kCols = 77;
   HostDeviceVector<float> storage;
-  auto m = MakeMatrixFromTest(&storage, kRows, kCols);
+  auto m = MakeMatrixFromTest(&ctx, &storage, kRows, kCols);
   auto v = m.Slice(linalg::All(), 3);
   for (size_t i = 0; i < v.Size(); ++i) {
     ASSERT_EQ(v(i), m(i, 3));
@@ -223,8 +225,9 @@ TEST(Linalg, TensorView) {
 }
 
 TEST(Linalg, Tensor) {
+  Context ctx;
   {
-    Tensor<float, 3> t{{2, 3, 4}, CPU(), Order::kC};
+    Tensor<float, 3> t{&ctx, {2, 3, 4}, CPU(), Order::kC};
     auto view = t.View(CPU());
 
     auto const &as_const = t;
@@ -243,23 +246,24 @@ TEST(Linalg, Tensor) {
   }
   {
     // Reshape
-    Tensor<float, 3> t{{2, 3, 4}, CPU(), Order::kC};
-    t.Reshape(4, 3, 2);
+    Tensor<float, 3> t{&ctx, {2, 3, 4}, CPU(), Order::kC};
+    t.Reshape(&ctx, 4, 3, 2);
     ASSERT_EQ(t.Size(), 24);
     ASSERT_EQ(t.Shape(2), 2);
-    t.Reshape(1);
+    t.Reshape(&ctx, 1);
     ASSERT_EQ(t.Size(), 1);
-    t.Reshape(0, 0, 0);
+    t.Reshape(&ctx, 0, 0, 0);
     ASSERT_EQ(t.Size(), 0);
-    t.Reshape(0, 3, 0);
+    t.Reshape(&ctx, 0, 3, 0);
     ASSERT_EQ(t.Size(), 0);
     ASSERT_EQ(t.Shape(1), 3);
-    t.Reshape(3, 3, 3);
+    t.Reshape(&ctx, 3, 3, 3);
     ASSERT_EQ(t.Size(), 27);
   }
 }
 
 TEST(Linalg, Empty) {
+  Context ctx;
   {
     auto t = TensorView<double, 2>{{}, {0, 3}, CPU(), Order::kC};
     for (int32_t i : {0, 1, 2}) {
@@ -270,7 +274,7 @@ TEST(Linalg, Empty) {
     }
   }
   {
-    auto t = Tensor<double, 2>{{0, 3}, CPU(), Order::kC};
+    auto t = Tensor<double, 2>{&ctx, {0, 3}, CPU(), Order::kC};
     ASSERT_EQ(t.Size(), 0);
     auto view = t.View(CPU());
 
@@ -284,8 +288,9 @@ TEST(Linalg, Empty) {
 }
 
 TEST(Linalg, ArrayInterface) {
+  Context ctx;
   auto cpu = CPU();
-  auto t = Tensor<double, 2>{{3, 3}, cpu, Order::kC};
+  auto t = Tensor<double, 2>{&ctx, {3, 3}, cpu, Order::kC};
   auto v = t.View(cpu);
   std::iota(v.Values().begin(), v.Values().end(), 0);
   auto arr = Json::Load(StringView{ArrayInterfaceStr(v)});
@@ -329,16 +334,17 @@ TEST(Linalg, Popc) {
 }
 
 TEST(Linalg, Stack) {
-  Tensor<float, 3> l{{2, 3, 4}, CPU(), Order::kC};
+  Context ctx;
+  Tensor<float, 3> l{&ctx, {2, 3, 4}, CPU(), Order::kC};
   cpu_impl::TransformIdxKernel(l.View(CPU()), omp_get_max_threads(),
                                [=](size_t i, float) { return i; });
-  Tensor<float, 3> r_0{{2, 3, 4}, CPU(), Order::kC};
+  Tensor<float, 3> r_0{&ctx, {2, 3, 4}, CPU(), Order::kC};
   cpu_impl::TransformIdxKernel(r_0.View(CPU()), omp_get_max_threads(),
                                [=](size_t i, float) { return i; });
 
   Stack(&l, r_0);
 
-  Tensor<float, 3> r_1{{0, 3, 4}, CPU(), Order::kC};
+  Tensor<float, 3> r_1{&ctx, {0, 3, 4}, CPU(), Order::kC};
   Stack(&l, r_1);
   ASSERT_EQ(l.Shape(0), 4);
 

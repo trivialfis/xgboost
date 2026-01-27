@@ -120,9 +120,10 @@ TEST(SimpleDMatrix, Empty) {
 }
 
 TEST(SimpleDMatrix, MissingData) {
-  HostDeviceVector<float> data{0.0, std::nanf(""), 1.0};
-  HostDeviceVector<unsigned> feature_idx = {0, 1, 0};
-  HostDeviceVector<size_t> row_ptr = {0, 2, 3};
+  Context ctx;
+  HostDeviceVector<float> data{&ctx, {0.0f, std::nanf(""), 1.0f}};
+  HostDeviceVector<unsigned> feature_idx{&ctx, {0u, 1u, 0u}};
+  HostDeviceVector<size_t> row_ptr{&ctx, {0ul, 2ul, 3ul}};
 
   auto j_data = Json::Dump(GetArrayInterface(&data, 3, 1));
   auto j_feature_idx = Json::Dump(GetArrayInterface(&feature_idx, 3, 1));
@@ -144,9 +145,10 @@ TEST(SimpleDMatrix, MissingData) {
 }
 
 TEST(SimpleDMatrix, EmptyRow) {
-  HostDeviceVector<float> data{0.0, 1.0};
-  HostDeviceVector<unsigned> feature_idx{0, 1};
-  HostDeviceVector<size_t> row_ptr{0, 2, 2};
+  Context ctx;
+  HostDeviceVector<float> data{&ctx, {0.0f, 1.0f}};
+  HostDeviceVector<unsigned> feature_idx{&ctx, {0u, 1u}};
+  HostDeviceVector<size_t> row_ptr{&ctx, {0ul, 2ul, 2ul}};
 
   auto j_data = Json::Dump(GetArrayInterface(&data, 2, 1));
   auto j_feature_idx = Json::Dump(GetArrayInterface(&feature_idx, 2, 1));
@@ -183,9 +185,10 @@ TEST(SimpleDMatrix, FromDense) {
 }
 
 TEST(SimpleDMatrix, FromCSC) {
-  HostDeviceVector<float> data{1, 3, 2, 4, 5};
-  HostDeviceVector<unsigned> row_idx{0, 1, 0, 1, 2};
-  HostDeviceVector<size_t> col_ptr{0, 2, 5};
+  Context ctx;
+  HostDeviceVector<float> data{&ctx, {1.0f, 3.0f, 2.0f, 4.0f, 5.0f}};
+  HostDeviceVector<unsigned> row_idx{&ctx, {0u, 1u, 0u, 1u, 2u}};
+  HostDeviceVector<size_t> col_ptr{&ctx, {0ul, 2ul, 5ul}};
 
   auto j_data = Json::Dump(GetArrayInterface(&data, data.Size(), 1));
   auto j_row_idx = Json::Dump(GetArrayInterface(&row_idx, row_idx.Size(), 1));

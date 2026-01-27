@@ -10,6 +10,7 @@
 
 namespace xgboost {
 TEST(ArrayInterface, Initialize) {
+  Context ctx;
   size_t constexpr kRows = 10, kCols = 10;
   HostDeviceVector<float> storage;
   auto array = RandomDataGenerator{kRows, kCols, 0}.GenerateArrayInterface(&storage);
@@ -20,7 +21,7 @@ TEST(ArrayInterface, Initialize) {
   ASSERT_EQ(arr_interface.ElementSize(), 4);
   ASSERT_EQ(arr_interface.type, ArrayInterfaceHandler::kF4);
 
-  HostDeviceVector<size_t> u64_storage(storage.Size());
+  HostDeviceVector<size_t> u64_storage(&ctx, storage.Size());
   std::string u64_arr_str{ArrayInterfaceStr(linalg::TensorView<size_t const, 2>{
       u64_storage.ConstHostSpan(), {kRows, kCols}, DeviceOrd::CPU()})};
   std::copy(storage.ConstHostVector().cbegin(), storage.ConstHostVector().cend(),

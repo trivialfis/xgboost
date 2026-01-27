@@ -81,7 +81,7 @@ void TestRankingCache(Context const* ctx) {
   MetaInfo& info = p_fmat->Info();
 
   info.num_row_ = 16;
-  info.labels.Reshape(info.num_row_);
+  info.labels.Reshape(ctx, info.num_row_);
   auto& h_label = info.labels.Data()->HostVector();
   for (std::size_t i = 0; i < h_label.size(); ++i) {
     h_label[i] = i % 2;
@@ -92,7 +92,7 @@ void TestRankingCache(Context const* ctx) {
 
   RankingCache cache{ctx, info, param};
 
-  HostDeviceVector<float> predt(info.num_row_, 0);
+  HostDeviceVector<float> predt(ctx, info.num_row_, 0);
   auto& h_predt = predt.HostVector();
   std::iota(h_predt.begin(), h_predt.end(), 0.0f);
   predt.SetDevice(ctx->Device());
@@ -150,7 +150,7 @@ void TestNDCGCache(Context const* ctx) {
     std::vector<float> h_data(32);
 
     common::Iota(ctx, h_data.begin(), h_data.end(), 0.0f);
-    info.labels.Reshape(h_data.size());
+    info.labels.Reshape(ctx, h_data.size());
     info.num_row_ = h_data.size();
     info.group_ptr_.back() = info.num_row_;
     info.labels.Data()->HostVector() = std::move(h_data);
@@ -187,7 +187,7 @@ void TestMAPCache(Context const* ctx) {
   std::vector<float> h_data(32);
 
   common::Iota(ctx, h_data.begin(), h_data.end(), 0.0f);
-  info.labels.Reshape(h_data.size());
+  info.labels.Reshape(ctx, h_data.size());
   info.num_row_ = h_data.size();
   info.labels.Data()->HostVector() = std::move(h_data);
 

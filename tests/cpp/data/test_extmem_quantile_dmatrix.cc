@@ -19,8 +19,8 @@ class ExtMemQuantileDMatrixCpu : public ::testing::TestWithParam<float> {
   void Run(float sparsity) {
     auto equal = [](Context const*, GHistIndexMatrix const& orig, GHistIndexMatrix const& sparse) {
       // Check the CSR matrix
-      auto orig_cuts = orig.Cuts();
-      auto sparse_cuts = sparse.Cuts();
+      auto const& orig_cuts = orig.Cuts();
+      auto const& sparse_cuts = sparse.Cuts();
       ASSERT_EQ(orig_cuts.Values(), sparse_cuts.Values());
       ASSERT_EQ(orig_cuts.MinValues(), sparse_cuts.MinValues());
       ASSERT_EQ(orig_cuts.Ptrs(), sparse_cuts.Ptrs());

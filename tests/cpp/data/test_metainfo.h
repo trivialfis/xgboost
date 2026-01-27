@@ -20,7 +20,7 @@ inline void TestMetaInfoStridedData(DeviceOrd device) {
   {
     // labels
     linalg::Tensor<float, 3> labels;
-    labels.Reshape(4, 2, 3);
+    labels.Reshape(&ctx, 4, 2, 3);
     auto& h_label = labels.Data()->HostVector();
     std::iota(h_label.begin(), h_label.end(), 0.0);
     auto t_labels = labels.View(device).Slice(linalg::All(), 0, linalg::All());
@@ -41,7 +41,7 @@ inline void TestMetaInfoStridedData(DeviceOrd device) {
   {
     // qid
     linalg::Tensor<uint64_t, 2> qid;
-    qid.Reshape(32, 2);
+    qid.Reshape(&ctx, 32, 2);
     auto& h_qid = qid.Data()->HostVector();
     std::iota(h_qid.begin(), h_qid.end(), 0);
     auto s = qid.View(device).Slice(linalg::All(), 0);
@@ -53,7 +53,7 @@ inline void TestMetaInfoStridedData(DeviceOrd device) {
   {
     // base margin
     linalg::Tensor<float, 3> base_margin;
-    base_margin.Reshape(4, 2, 3);
+    base_margin.Reshape(&ctx, 4, 2, 3);
     auto& h_margin = base_margin.Data()->HostVector();
     std::iota(h_margin.begin(), h_margin.end(), 0.0);
     auto t_margin = base_margin.View(device).Slice(linalg::All(), 0, linalg::All());

@@ -9,8 +9,8 @@
 namespace xgboost {
 namespace common {
 TEST(OptionalWeight, Basic) {
-  HostDeviceVector<float> weight{{2.0f, 3.0f, 4.0f}};
   Context ctx;
+  HostDeviceVector<float> weight{&ctx, {2.0f, 3.0f, 4.0f}};
   auto opt_w = MakeOptionalWeights(ctx.Device(), weight);
   ASSERT_EQ(opt_w[0], 2.0f);
   ASSERT_FALSE(opt_w.Empty());

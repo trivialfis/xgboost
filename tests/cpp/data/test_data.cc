@@ -66,11 +66,12 @@ TEST(SparsePage, PushCSCAfterTranspose) {
 
   auto dmat =
       RandomDataGenerator{kRows, kCols, 0.0f}.Batches(4).GenerateSparsePageDMatrix("temp", true);
+  Context ctx;
   const int ncols = dmat->Info().num_col_;
   SparsePage page;  // Consolidated sparse page
   for (const auto& batch : dmat->GetBatches<xgboost::SparsePage>()) {
     // Transpose each batch and push
-    SparsePage tmp = batch.GetTranspose(ncols, AllThreadsForTest());
+    SparsePage tmp = batch.GetTranspose(&ctx, ncols, AllThreadsForTest());
     page.PushCSC(tmp);
   }
 
