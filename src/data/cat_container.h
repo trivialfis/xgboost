@@ -145,7 +145,7 @@ class CatContainer {
 
  public:
   CatContainer();
-  explicit CatContainer(enc::HostColumnsView const& df, bool is_ref);
+  explicit CatContainer(Context const* ctx, enc::HostColumnsView const& df, bool is_ref);
 #if defined(XGBOOST_USE_CUDA)
   explicit CatContainer(Context const* ctx, enc::DeviceColumnsView const& df, bool is_ref);
 #endif  // defined(XGBOOST_USE_CUDA)

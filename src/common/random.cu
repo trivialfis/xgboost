@@ -80,17 +80,17 @@ void SampleFeature(Context const *ctx, bst_feature_t n_features,
     auto it = thrust::make_permutation_iterator(dh::tcbegin(d_feature_weight),
                                                 dh::tcbegin(d_old_features));
     thrust::copy_n(cuctx->CTP(), it, d_old_features.size(), dh::tbegin(d_weight_buffer));
-    new_features.Resize(n_features);
+    new_features.Resize(ctx, n_features);
     WeightedSamplingWithoutReplacement(ctx, d_old_features, d_weight_buffer,
                                        new_features.DeviceSpan(), idx_buffer, grng);
   } else {
-    new_features.Resize(p_features->Size());
+    new_features.Resize(ctx, p_features->Size());
     new_features.Copy(*p_features);
     auto d_feat = new_features.DeviceSpan();
     thrust::default_random_engine rng;
     rng.seed((*grng)());
     thrust::shuffle(cuctx->CTP(), dh::tbegin(d_feat), dh::tend(d_feat), rng);
-    new_features.Resize(n_features);
+    new_features.Resize(ctx, n_features);
   }
 
   auto d_new_features = new_features.DeviceSpan();

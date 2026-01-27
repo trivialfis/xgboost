@@ -160,8 +160,8 @@ BatchSet<ExtSparsePage> IterativeDMatrix::GetExtBatches(Context const* ctx,
                                                         BatchParam const& param) {
   for (auto const& page : this->GetGradientIndex(ctx, param)) {
     auto p_out = std::make_shared<SparsePage>();
-    p_out->data.Resize(this->Info().num_nonzero_);
-    p_out->offset.Resize(this->Info().num_row_ + 1);
+    p_out->data.Resize(ctx, this->Info().num_nonzero_);
+    p_out->offset.Resize(ctx, this->Info().num_row_ + 1);
 
     auto& h_offset = p_out->offset.HostVector();
     CHECK_EQ(page.row_ptr.size(), h_offset.size());

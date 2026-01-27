@@ -165,7 +165,7 @@ class SoftmaxMultiClassObj : public ObjFunction {
       io_preds->SetDevice(device);
       HostDeviceVector<float> max_preds;
       max_preds.SetDevice(device);
-      max_preds.Resize(n_samples);
+      max_preds.Resize(ctx_, n_samples);
       common::Transform<>::Init(
           [=] XGBOOST_DEVICE(size_t _idx, common::Span<const float> _preds,
                              common::Span<float> _max_preds) {

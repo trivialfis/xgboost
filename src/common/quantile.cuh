@@ -216,7 +216,7 @@ class SketchContainer {
     Span<OffsetT> d_column_scan = this->columns_ptr_.DeviceSpan();
     CHECK_EQ(d_column_scan.size(), num_columns_ + 1);
     Span<SketchEntry> entries = dh::ToSpan(this->Current());
-    HostDeviceVector<OffsetT> scan_out(d_column_scan.size());
+    HostDeviceVector<OffsetT> scan_out(ctx, d_column_scan.size());
     scan_out.SetDevice(ctx->Device());
     auto d_scan_out = scan_out.DeviceSpan();
 

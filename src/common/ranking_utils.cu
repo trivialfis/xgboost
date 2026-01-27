@@ -135,11 +135,11 @@ void RankingCache::InitOnCUDA(Context const* ctx, MetaInfo const& info) {
 
   group_ptr_.SetDevice(ctx->Device());
   if (info.group_ptr_.empty()) {
-    group_ptr_.Resize(2, 0);
+    group_ptr_.Resize(ctx, 2, 0);
     group_ptr_.HostVector()[1] = info.num_row_;
   } else {
     auto const& h_group_ptr = info.group_ptr_;
-    group_ptr_.Resize(h_group_ptr.size());
+    group_ptr_.Resize(ctx, h_group_ptr.size());
     auto d_group_ptr = group_ptr_.DeviceSpan();
     dh::safe_cuda(cudaMemcpyAsync(d_group_ptr.data(), h_group_ptr.data(), d_group_ptr.size_bytes(),
                                   cudaMemcpyHostToDevice, cuctx->Stream()));
@@ -154,7 +154,7 @@ void RankingCache::InitOnCUDA(Context const* ctx, MetaInfo const& info) {
       thrust::reduce(cuctx->CTP(), it, it + n_groups, 0ul, thrust::maximum<std::size_t>{});
 
   threads_group_ptr_.SetDevice(ctx->Device());
-  threads_group_ptr_.Resize(n_groups + 1, 0);
+  threads_group_ptr_.Resize(ctx, n_groups + 1, 0);
   auto d_threads_group_ptr = threads_group_ptr_.DeviceSpan();
   if (param_.HasTruncation()) {
     n_cuda_threads_ =
@@ -169,7 +169,7 @@ void RankingCache::InitOnCUDA(Context const* ctx, MetaInfo const& info) {
   }
 
   sorted_idx_cache_.SetDevice(ctx->Device());
-  sorted_idx_cache_.Resize(info.labels.Size(), 0);
+  sorted_idx_cache_.Resize(ctx, info.labels.Size(), 0);
 
   auto weight = common::MakeOptionalWeights(ctx->Device(), info.weights_);
   auto w_it =
@@ -199,7 +199,7 @@ void NDCGCache::InitOnCUDA(Context const* ctx, MetaInfo const& info) {
   CHECK_GE(this->Param().NumPair(), 1ul);
 
   discounts_.SetDevice(ctx->Device());
-  discounts_.Resize(MaxGroupSize());
+  discounts_.Resize(ctx, MaxGroupSize());
   auto d_discount = discounts_.DeviceSpan();
   dh::LaunchN(MaxGroupSize(), cuctx->Stream(),
               [=] XGBOOST_DEVICE(std::size_t i) { d_discount[i] = CalcDCGDiscount(i); });

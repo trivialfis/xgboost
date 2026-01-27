@@ -196,7 +196,7 @@ void Gather(Context const* ctx, HostDeviceVector<T> const& in, common::Span<bst_
 
   auto& out = *p_out;
   out.SetDevice(ctx->Device());
-  out.Resize(ridx.size());
+  out.Resize(ctx, ridx.size());
   auto d_out = out.DeviceSpan();
 
   auto cuctx = ctx->CUDACtx();

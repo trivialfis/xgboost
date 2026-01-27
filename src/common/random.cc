@@ -46,10 +46,10 @@ std::shared_ptr<HostDeviceVector<bst_feature_t>> ColumnSampler::ColSample(
     new_features.HostVector() =
         WeightedSamplingWithoutReplacement(ctx_, p_features->HostVector(), weight, n);
   } else {
-    new_features.Resize(features.size());
+    new_features.Resize(ctx_, features.size());
     std::copy(features.begin(), features.end(), new_features.HostVector().begin());
     std::shuffle(new_features.HostVector().begin(), new_features.HostVector().end(), rng_);
-    new_features.Resize(n);
+    new_features.Resize(ctx_, n);
   }
   std::sort(new_features.HostVector().begin(), new_features.HostVector().end());
   return p_new_features;

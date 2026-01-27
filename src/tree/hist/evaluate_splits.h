@@ -445,7 +445,7 @@ class HistEvaluator {
     // Set up child constraints
     auto left_child = tree[candidate.nid].LeftChild();
     auto right_child = tree[candidate.nid].RightChild();
-    tree_evaluator_.AddSplit(candidate.nid, left_child, right_child,
+    tree_evaluator_.AddSplit(ctx_, candidate.nid, left_child, right_child,
                              tree[candidate.nid].SplitIndex(), left_weight, right_weight);
     evaluator = tree_evaluator_.GetEvaluator();
 
@@ -480,10 +480,10 @@ class HistEvaluator {
   // for the entire training session.
   explicit HistEvaluator(Context const *ctx, TrainParam const *param, MetaInfo const &info,
                          std::shared_ptr<common::ColumnSampler> sampler)
-      : ctx_{ctx},
+      :       ctx_{ctx},
         param_{param},
         column_sampler_{std::move(sampler)},
-        tree_evaluator_{*param, static_cast<bst_feature_t>(info.num_col_), DeviceOrd::CPU()},
+        tree_evaluator_{ctx, *param, static_cast<bst_feature_t>(info.num_col_)},
         is_col_split_{info.IsColumnSplit()} {
     interaction_constraints_.Configure(*param, info.num_col_);
     column_sampler_->Init(ctx, info.num_col_, info.feature_weights, param_->colsample_bynode,
@@ -650,7 +650,7 @@ class HistMultiEvaluator {
     stats_ = linalg::Constant(ctx_, GradientPairPrecise{}, 1, n_targets);
     gain_.resize(1);
 
-    linalg::Vector<float> weight({n_targets}, ctx_->Device());
+    linalg::Vector<float> weight(ctx_, {n_targets}, ctx_->Device());
     CalcWeight(*param_, root_sum, weight.HostView());
     auto root_gain = CalcGainGivenWeight(*param_, root_sum, weight.HostView());
     gain_.front() = root_gain;
@@ -711,7 +711,7 @@ class HistMultiEvaluator {
     gain_[right_child] = CalcGainGivenWeight(*param_, right_sum, right_weight);
 
     if (n_nodes >= stats_.Shape(0)) {
-      stats_.Reshape(n_nodes * 2, stats_.Shape(1));
+      stats_.Reshape(ctx_, n_nodes * 2, stats_.Shape(1));
     }
     CHECK_EQ(stats_.Shape(1), n_split_targets);
     auto left_sum_stat = stats_.Slice(left_child, linalg::All());

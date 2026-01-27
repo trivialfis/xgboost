@@ -91,11 +91,11 @@ void EncodeTreeLeafDevice(Context const* ctx, common::Span<bst_node_t const> pos
   auto& nidx = *p_nidx;
   auto& nptr = *p_nptr;
   nidx.SetDevice(ctx->Device());
-  nidx.Resize(n_leaf);
+  nidx.Resize(ctx, n_leaf);
   auto d_node_idx = nidx.DeviceSpan();
 
   nptr.SetDevice(ctx->Device());
-  nptr.Resize(n_leaf + 1, 0);
+  nptr.Resize(ctx, n_leaf + 1, 0);
   auto d_node_ptr = nptr.DeviceSpan();
 
   dh::LaunchN(n_leaf, [=] XGBOOST_DEVICE(size_t i) {
@@ -119,8 +119,8 @@ void EncodeTreeLeafDevice(Context const* ctx, common::Span<bst_node_t const> pos
 
   if (*h_num_runs < n_leaf) {
     // shrink to omit the sampled nodes.
-    nptr.Resize(*h_num_runs + 1);
-    nidx.Resize(*h_num_runs);
+    nptr.Resize(ctx, *h_num_runs + 1);
+    nidx.Resize(ctx, *h_num_runs);
 
     std::vector<bst_node_t> leaves;
     tree::WalkTree(tree, [&](auto const& tree, bst_node_t nidx) {

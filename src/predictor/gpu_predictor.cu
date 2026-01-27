@@ -417,7 +417,7 @@ static_assert(sizeof(PathInfo) == 16);
 auto MakeTreeSegments(Context const* ctx, bst_tree_t tree_begin, bst_tree_t tree_end,
                       gbm::GBTreeModel const& model) {
   // Copy decision trees to device
-  auto tree_segments = HostDeviceVector<size_t>({}, ctx->Device());
+  auto tree_segments = HostDeviceVector<size_t>(ctx, {}, ctx->Device());
   auto& h_tree_segments = tree_segments.HostVector();
   h_tree_segments.reserve((tree_end - tree_begin) + 1);
   std::size_t sum = 0;

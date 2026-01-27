@@ -152,7 +152,7 @@ template <typename T>
   detail::AllgatherVOffset(sizes, common::Span{recv_segments->data(), recv_segments->size()});
   auto total_bytes = std::accumulate(sizes.cbegin(), sizes.cend(), 0LL);
   recv->SetDevice(data.Device());
-  recv->Resize(total_bytes);
+  recv->Resize(ctx, total_bytes);
 
   auto s_segments = common::Span{recv_segments->data(), recv_segments->size()};
 

@@ -415,12 +415,13 @@ class RegTree : public Model {
   /**
    * @brief Set the root weight and statistics for a multi-target tree.
    *
+   * @param ctx      Context for stream-oriented allocation.
    * @param weight   Internal split weight, with size equals to reduced targets.
    * @param sum_hess The sum of hessians for the root node (coverage).
    */
-  void SetRoot(linalg::VectorView<float const> weight, float sum_hess) {
+  void SetRoot(Context const* ctx, linalg::VectorView<float const> weight, float sum_hess) {
     CHECK(IsMultiTarget());
-    return this->p_mt_tree_->SetRoot(weight, sum_hess);
+    return this->p_mt_tree_->SetRoot(ctx, weight, sum_hess);
   }
   /**
    * @brief Get the maximum depth.

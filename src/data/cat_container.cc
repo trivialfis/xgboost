@@ -16,14 +16,15 @@
 #include "xgboost/json.h"                    // for Json
 
 namespace xgboost {
-CatContainer::CatContainer(enc::HostColumnsView const& df, bool is_ref) : CatContainer{} {
+CatContainer::CatContainer(Context const* ctx, enc::HostColumnsView const& df, bool is_ref)
+    : CatContainer{} {
   this->is_ref_ = is_ref;
   this->n_total_cats_ = df.n_total_cats;
   if (this->n_total_cats_ == 0) {
     return;
   }
 
-  this->feature_segments_.Resize(df.feature_segments.size());
+  this->feature_segments_.Resize(ctx, df.feature_segments.size());
   auto& seg = this->feature_segments_.HostVector();
   std::copy_n(df.feature_segments.data(), df.feature_segments.size(), seg.begin());
 
@@ -57,7 +58,7 @@ CatContainer::CatContainer(enc::HostColumnsView const& df, bool is_ref) : CatCon
                col);
   }
 
-  this->sorted_idx_.Resize(0);
+  this->sorted_idx_.Resize(ctx, 0);
   this->cpu_impl_->Finalize();
 
   CHECK(!this->DeviceCanRead());

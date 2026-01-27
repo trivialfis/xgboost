@@ -606,7 +606,7 @@ struct InvalidCatOp {
 
 void SketchContainer::MakeCuts(Context const* ctx, HistogramCuts* p_cuts, bool is_column_split) {
   curt::SetDevice(ctx->Ordinal());
-  p_cuts->min_vals_.Resize(num_columns_);
+  p_cuts->min_vals_.Resize(ctx, num_columns_);
 
   // Sync between workers.
   this->AllReduce(ctx, is_column_split);
@@ -703,7 +703,7 @@ void SketchContainer::MakeCuts(Context const* ctx, HistogramCuts* p_cuts, bool i
 
   size_t total_bins = h_out_columns_ptr.back();
   p_cuts->cut_values_.SetDevice(ctx->Device());
-  p_cuts->cut_values_.Resize(total_bins);
+  p_cuts->cut_values_.Resize(ctx, total_bins);
   auto out_cut_values = p_cuts->cut_values_.DeviceSpan();
 
   dh::LaunchN(total_bins, [=] __device__(size_t idx) {

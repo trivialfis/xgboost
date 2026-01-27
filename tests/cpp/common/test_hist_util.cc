@@ -261,7 +261,7 @@ TEST(HistUtil, DenseCutsExternalMemory) {
   int num_columns = 5;
   Context ctx;
   for (auto num_rows : sizes) {
-    HostDeviceVector<float> x{GenerateRandom(num_rows, num_columns)};
+    HostDeviceVector<float> x{&ctx, GenerateRandom(num_rows, num_columns)};
     common::TemporaryDirectory tmpdir;
     auto dmat = GetExternalMemoryDMatrixFromData(x, num_rows, num_columns, tmpdir);
     for (auto num_bins : bin_sizes) {

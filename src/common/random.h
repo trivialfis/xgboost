@@ -161,7 +161,7 @@ class ColumnSampler {
    * \brief Resets this object.
    */
   void Reset() {
-    feature_set_tree_->Resize(0);
+    feature_set_tree_->Resize(ctx_, 0);
     feature_set_level_.clear();
   }
 

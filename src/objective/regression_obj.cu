@@ -422,9 +422,9 @@ class PoissonRegression : public FitInterceptGlmLike {
     CHECK_EQ(preds.Size(), info.labels.Size()) << "labels are not correctly provided";
     size_t const ndata = preds.Size();
     out_gpair->SetDevice(ctx_->Device());
-    out_gpair->Reshape(info.num_row_, this->Targets(info));
+    out_gpair->Reshape(ctx_, info.num_row_, this->Targets(info));
     auto device = ctx_->Device();
-    label_correct_.Resize(1);
+    label_correct_.Resize(ctx_, 1);
     label_correct_.Fill(1);
 
     bool is_null_weight = info.weights_.Size() == 0;
@@ -626,10 +626,10 @@ class TweedieRegression : public FitInterceptGlmLike {
     CHECK_EQ(preds.Size(), info.labels.Size()) << "labels are not correctly provided";
     const size_t ndata = preds.Size();
     out_gpair->SetDevice(ctx_->Device());
-    out_gpair->Reshape(info.num_row_, this->Targets(info));
+    out_gpair->Reshape(ctx_, info.num_row_, this->Targets(info));
 
     auto device = ctx_->Device();
-    label_correct_.Resize(1);
+    label_correct_.Resize(ctx_, 1);
     label_correct_.Fill(1);
 
     const bool is_null_weight = info.weights_.Size() == 0;

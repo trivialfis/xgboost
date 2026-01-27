@@ -832,6 +832,33 @@ class Tensor {
     this->Initialize(shape, device);
   }
   /**
+   * @brief Construct a tensor with context for stream-oriented allocation.
+   */
+  template <typename I, int32_t D>
+  explicit Tensor(Context const* ctx, std::initializer_list<T> data, I const (&shape)[D],
+                  DeviceOrd device, Order order = kC)
+      : order_{order} {
+    this->data_.Resize(ctx, data.size());
+    auto &h_vec = data_.HostVector();
+    h_vec = data;
+    // shape
+    this->Initialize(shape, device);
+  }
+  /**
+   * @brief Construct from iterator range with context for stream-oriented allocation.
+   */
+  template <typename It, typename I, int32_t D>
+  explicit Tensor(Context const* ctx, It begin, It end, I const (&shape)[D], DeviceOrd device,
+                  Order order = kC)
+      : order_{order} {
+    auto n = std::distance(begin, end);
+    this->data_.Resize(ctx, n);
+    auto &h_vec = data_.HostVector();
+    h_vec.insert(h_vec.begin(), begin, end);
+    // shape
+    this->Initialize(shape, device);
+  }
+  /**
    * \brief Index operator. Not thread safe, should not be used in performance critical
    *        region. For more efficient indexing, consider getting a view first.
    */
@@ -970,7 +997,7 @@ template <typename T, typename... Index>
 auto Empty(Context const *ctx, Index &&...index) {
   Tensor<T, sizeof...(Index)> t;
   t.SetDevice(ctx->Device());
-  t.Reshape(index...);
+  t.Reshape(ctx, index...);
   return t;
 }
 
@@ -981,7 +1008,7 @@ template <typename T, std::int32_t kDim>
 auto EmptyLike(Context const *ctx, Tensor<T, kDim> const &in) {
   Tensor<T, kDim> t;
   t.SetDevice(ctx->Device());
-  t.Reshape(in.Shape());
+  t.Reshape(ctx, in.Shape());
   return t;
 }
 

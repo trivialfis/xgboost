@@ -68,11 +68,11 @@ bst_idx_t CopyToSparsePage(Context const* ctx, AdapterBatchT const& batch, Devic
 
   page->offset.SetDevice(device);
   page->data.SetDevice(device);
-  page->offset.Resize(batch.NumRows() + 1);
+  page->offset.Resize(ctx, batch.NumRows() + 1);
   auto s_offset = page->offset.DeviceSpan();
   CountRowOffsets(ctx, batch, s_offset, device, missing);
   auto num_nonzero_ = page->offset.HostVector().back();
-  page->data.Resize(num_nonzero_);
+  page->data.Resize(ctx, num_nonzero_);
   CopyDataToDMatrix(ctx, batch, page->data.DeviceSpan(), missing);
 
   return num_nonzero_;

@@ -182,7 +182,7 @@ void MultiTargetTree::SetLeaves(std::vector<bst_node_t> leaves, common::Span<flo
   }
 }
 
-void MultiTargetTree::SetLeaves() {
+void MultiTargetTree::SetLeaves(Context const* ctx) {
   CHECK_EQ(this->NumLeaves(), 0);
   auto n_targets = this->NumTargets();
   CHECK_EQ(n_targets, this->NumSplitTargets());
@@ -208,7 +208,7 @@ void MultiTargetTree::SetLeaves() {
 }
 
 template <bool typed, bool feature_is_64>
-void LoadModelImpl(Json const& in, HostDeviceVector<float>* p_weights,
+void LoadModelImpl(Context const* ctx, Json const& in, HostDeviceVector<float>* p_weights,
                    HostDeviceVector<float>* p_leaf_weights, HostDeviceVector<bst_node_t>* p_lefts,
                    HostDeviceVector<bst_node_t>* p_rights, HostDeviceVector<bst_node_t>* p_parents,
                    HostDeviceVector<float>* p_conds, HostDeviceVector<bst_feature_t>* p_fidx,
@@ -219,7 +219,7 @@ void LoadModelImpl(Json const& in, HostDeviceVector<float>* p_weights,
   auto get_float = [&](std::string_view name, HostDeviceVector<float>* p_out) {
     auto& values = get<FloatArrayT<typed>>(get<Object const>(in).find(name)->second);
     auto& out = *p_out;
-    out.Resize(values.size());
+    out.Resize(ctx, values.size());
     auto& h_out = out.HostVector();
     for (std::size_t i = 0; i < values.size(); ++i) {
       h_out[i] = GetElem<Number>(values, i);
@@ -242,14 +242,14 @@ void LoadModelImpl(Json const& in, HostDeviceVector<float>* p_weights,
   get_nidx(tf::kParent, p_parents);
 
   auto const& splits = get<IndexArrayT<typed, feature_is_64> const>(in[tf::kSplitIdx]);
-  p_fidx->Resize(splits.size());
+  p_fidx->Resize(ctx, splits.size());
   auto& out_fidx = p_fidx->HostVector();
   for (std::size_t i = 0; i < splits.size(); ++i) {
     out_fidx[i] = GetElem<Integer>(splits, i);
   }
 
   auto const& dft_left = get<U8ArrayT<typed> const>(in[tf::kDftLeft]);
-  p_dft_left->Resize(dft_left.size());
+  p_dft_left->Resize(ctx, dft_left.size());
   auto& out_dft_l = p_dft_left->HostVector();
   for (std::size_t i = 0; i < dft_left.size(); ++i) {
     out_dft_l[i] = GetElem<Boolean>(dft_left, i);

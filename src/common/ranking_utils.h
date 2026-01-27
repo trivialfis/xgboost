@@ -340,7 +340,7 @@ class NDCGCache : public RankingCache {
   linalg::VectorView<double> Dcg(Context const* ctx) {
     if (dcg_.Size() == 0) {
       dcg_.SetDevice(ctx->Device());
-      dcg_.Reshape(this->Groups());
+      dcg_.Reshape(ctx, this->Groups());
     }
     return dcg_.View(ctx->Device().IsSycl() ? DeviceOrd::CPU() : ctx->Device());
   }

@@ -158,7 +158,7 @@ CatContainer::CatContainer(Context const* ctx, enc::DeviceColumnsView const& df,
   this->n_total_cats_ = df.n_total_cats;
 
   this->feature_segments_.SetDevice(ctx->Device());
-  this->feature_segments_.Resize(df.feature_segments.size());
+  this->feature_segments_.Resize(ctx, df.feature_segments.size());
   auto d_segs = this->feature_segments_.DeviceSpan();
   thrust::copy_n(ctx->CUDACtx()->CTP(), dh::tcbegin(df.feature_segments),
                  df.feature_segments.size(), dh::tbegin(d_segs));
@@ -168,7 +168,7 @@ CatContainer::CatContainer(Context const* ctx, enc::DeviceColumnsView const& df,
   this->cu_impl_->CopyFrom(ctx, df);
 
   this->sorted_idx_.SetDevice(ctx->Device());
-  this->sorted_idx_.Resize(0);
+  this->sorted_idx_.Resize(ctx, 0);
   if (this->n_total_cats_ > 0) {
     CHECK(this->DeviceCanRead());
     CHECK(!this->HostCanRead());
@@ -260,7 +260,7 @@ void CatContainer::Sort(Context const* ctx) {
     auto view = this->DeviceView(ctx);
     CHECK(!view.Empty()) << view.n_total_cats;
     this->sorted_idx_.SetDevice(ctx->Device());
-    this->sorted_idx_.Resize(view.n_total_cats);
+    this->sorted_idx_.Resize(ctx, view.n_total_cats);
     enc::SortNames(cuda_impl::EncPolicy, view, this->sorted_idx_.DeviceSpan());
   }
 }
