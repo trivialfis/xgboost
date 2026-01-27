@@ -142,7 +142,7 @@ void TestUnbiasedNDCG(Context const* ctx) {
   auto h_label = p_fmat->Info().labels.HostView().Values();
   // Move clicked samples to the beginning.
   std::sort(h_label.begin(), h_label.end(), std::greater<>{});
-  HostDeviceVector<float> predt(p_fmat->Info().num_row_, 1.0f);
+  HostDeviceVector<float> predt(ctx, p_fmat->Info().num_row_, 1.0f);
 
   linalg::Matrix<GradientPair> out_gpair;
   obj->GetGradient(predt, p_fmat->Info(), 0, &out_gpair);
@@ -251,7 +251,7 @@ void TestMAPStat(Context const* ctx) {
 
   {
     std::vector<float> h_data{1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f};
-    info.labels.Reshape(h_data.size(), 1);
+    info.labels.Reshape(ctx, h_data.size(), 1);
     info.labels.Data()->HostVector() = h_data;
     info.num_row_ = h_data.size();
 
@@ -284,7 +284,7 @@ void TestMAPStat(Context const* ctx) {
     ASSERT_NEAR(acc.back(), 1.95 + (1.0 / h_data.size()), kRtEps);
   }
   {
-    info.labels.Reshape(16);
+    info.labels.Reshape(ctx, 16);
     auto& h_label = info.labels.Data()->HostVector();
     info.group_ptr_ = {0, 8, 16};
     info.num_row_ = info.labels.Shape(0);

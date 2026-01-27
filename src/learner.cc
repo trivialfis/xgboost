@@ -427,7 +427,7 @@ class Intercept : public Learner {
 
     if (this->NeedFit()) {
       // Initialize with a sensible default value to get prediction/model io going.
-      this->mparam_.base_score.Resize(this->mparam_.OutputLength(),
+      this->mparam_.base_score.Resize(this->Ctx(), this->mparam_.OutputLength(),
                                       ObjFunction::DefaultBaseScore());
       this->InitModelParam(tparam, false);
       // This should not be altered, we will estimate it later.
@@ -438,7 +438,7 @@ class Intercept : public Learner {
       this->InitModelParam(tparam, true);
     } else {
       // user-provided
-      this->mparam_.HandleOldFormat();
+      this->mparam_.HandleOldFormat(this->Ctx());
       this->InitModelParam(tparam, true);
     }
   }

@@ -38,9 +38,10 @@ TEST(Transform, DeclareUnifiedTest(Basic)) {
   std::vector<float> h_sol(size);
   std::iota(h_sol.begin(), h_sol.end(), 0);
 
+  Context ctx;
   auto device = TransformDevice();
-  HostDeviceVector<float> const in_vec{h_in, device};
-  HostDeviceVector<float> out_vec{h_out, device};
+  HostDeviceVector<float> const in_vec{&ctx, h_in, device};
+  HostDeviceVector<float> out_vec{&ctx, h_out, device};
   out_vec.Fill(0);
 
   Transform<>::Init(TestTransformRange<float>{},
@@ -54,9 +55,10 @@ TEST(Transform, DeclareUnifiedTest(Basic)) {
 
 #if !defined(__CUDACC__)
 TEST(TransformDeathTest, Exception) {
+  Context ctx;
   size_t const kSize{16};
   std::vector<float> h_in(kSize);
-  const HostDeviceVector<float> in_vec{h_in, DeviceOrd::CPU()};
+  const HostDeviceVector<float> in_vec{&ctx, h_in, DeviceOrd::CPU()};
   EXPECT_DEATH(
       {
         Transform<>::Init([](size_t idx, common::Span<float const> _in) { _in[idx + 1]; },

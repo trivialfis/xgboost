@@ -264,6 +264,7 @@ TEST(SimpleDMatrix, FromFile) {
 }
 
 TEST(SimpleDMatrix, Slice) {
+  Context ctx;
   size_t constexpr kRows {16};
   size_t constexpr kCols {8};
   size_t constexpr kClasses {3};
@@ -281,7 +282,7 @@ TEST(SimpleDMatrix, Slice) {
   std::iota(upper.begin(), upper.end(), 1.0f);
 
   auto& margin = p_m->Info().base_margin_;
-  margin = decltype(p_m->Info().base_margin_){{kRows, kClasses}, DeviceOrd::CPU()};
+  margin = decltype(p_m->Info().base_margin_){&ctx, {kRows, kClasses}, DeviceOrd::CPU()};
 
   std::array<int32_t, 3> ridxs {1, 3, 5};
   std::unique_ptr<DMatrix> out { p_m->Slice(ridxs) };
@@ -337,6 +338,7 @@ TEST(SimpleDMatrix, Slice) {
 }
 
 TEST(SimpleDMatrix, SliceCol) {
+  Context ctx;
   size_t constexpr kRows {16};
   size_t constexpr kCols {8};
   size_t constexpr kClasses {3};
@@ -354,7 +356,7 @@ TEST(SimpleDMatrix, SliceCol) {
   std::iota(upper.begin(), upper.end(), 1.0f);
 
   auto& margin = p_m->Info().base_margin_;
-  margin = decltype(p_m->Info().base_margin_){{kRows, kClasses}, DeviceOrd::CPU()};
+  margin = decltype(p_m->Info().base_margin_){&ctx, {kRows, kClasses}, DeviceOrd::CPU()};
 
   auto constexpr kSlices {2};
   auto constexpr kSliceSize {4};

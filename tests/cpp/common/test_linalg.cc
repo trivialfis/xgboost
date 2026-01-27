@@ -27,8 +27,9 @@ void ConstView(linalg::VectorView<T> v1, linalg::VectorView<std::add_const_t<T>>
 }
 }  // namespace
 
-auto MakeMatrixFromTest(HostDeviceVector<float> *storage, std::size_t n_rows, std::size_t n_cols) {
-  storage->Resize(n_rows * n_cols);
+auto MakeMatrixFromTest(Context const* ctx, HostDeviceVector<float> *storage, std::size_t n_rows,
+                        std::size_t n_cols) {
+  storage->Resize(ctx, n_rows * n_cols);
   auto &h_storage = storage->HostVector();
 
   std::iota(h_storage.begin(), h_storage.end(), 0);

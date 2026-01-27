@@ -30,10 +30,10 @@ struct HostDeviceVectorSetDeviceHandler {
   }
 };
 
-void InitHostDeviceVector(size_t n, DeviceOrd device, HostDeviceVector<int> *v) {
+void InitHostDeviceVector(Context const* ctx, size_t n, DeviceOrd device, HostDeviceVector<int> *v) {
   // create the vector
   v->SetDevice(device);
-  v->Resize(n);
+  v->Resize(ctx, n);
 
   ASSERT_EQ(v->Size(), n);
   ASSERT_EQ(v->Device(), device);

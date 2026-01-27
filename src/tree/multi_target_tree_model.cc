@@ -57,12 +57,13 @@ MultiTargetTree::MultiTargetTree(MultiTargetTree const& that)
   this->sum_hess_.Copy(that.sum_hess_);
 }
 
-void MultiTargetTree::SetRoot(linalg::VectorView<float const> weight, float sum_hess) {
+void MultiTargetTree::SetRoot(Context const* ctx, linalg::VectorView<float const> weight,
+                              float sum_hess) {
   CHECK(!weight.Empty());
   auto const next_nidx = RegTree::kRoot + 1;
 
   this->weights_.SetDevice(weight.Device());
-  this->weights_.Resize(weight.Size(), DftBadValue());
+  this->weights_.Resize(ctx, weight.Size(), DftBadValue());
 
   CHECK_LE(weight.Size(), this->NumTargets());
   CHECK_GE(weights_.Size(), next_nidx * weight.Size());
@@ -80,16 +81,17 @@ void MultiTargetTree::SetRoot(linalg::VectorView<float const> weight, float sum_
   }
 
   // Set root statistics
-  sum_hess_.Resize(next_nidx, 0.0f);
+  sum_hess_.Resize(ctx, next_nidx, 0.0f);
   sum_hess_.HostVector()[RegTree::kRoot] = sum_hess;
-  loss_chg_.Resize(next_nidx, 0.0f);
+  loss_chg_.Resize(ctx, next_nidx, 0.0f);
 
   CHECK_EQ(this->param_->num_nodes, 1);
   CHECK_EQ(this->NumSplitTargets(), weight.Size());
 }
 
-void MultiTargetTree::Expand(bst_node_t nidx, bst_feature_t split_idx, float split_cond,
-                             bool default_left, linalg::VectorView<float const> base_weight,
+void MultiTargetTree::Expand(Context const* ctx, bst_node_t nidx, bst_feature_t split_idx,
+                             float split_cond, bool default_left,
+                             linalg::VectorView<float const> base_weight,
                              linalg::VectorView<float const> left_weight,
                              linalg::VectorView<float const> right_weight, float loss_chg,
                              float sum_hess, float left_sum, float right_sum) {
@@ -102,9 +104,9 @@ void MultiTargetTree::Expand(bst_node_t nidx, bst_feature_t split_idx, float spl
 
   std::size_t n = param_->num_nodes + 2;
   CHECK_LT(split_idx, this->param_->num_feature);
-  left_.Resize(n, InvalidNodeId());
-  right_.Resize(n, InvalidNodeId());
-  parent_.Resize(n, InvalidNodeId());
+  left_.Resize(ctx, n, InvalidNodeId());
+  right_.Resize(ctx, n, InvalidNodeId());
+  parent_.Resize(ctx, n, InvalidNodeId());
 
   auto left_child = parent_.Size() - 2;
   auto right_child = parent_.Size() - 1;
@@ -121,17 +123,17 @@ void MultiTargetTree::Expand(bst_node_t nidx, bst_feature_t split_idx, float spl
   h_parent[left_child] = nidx;
   h_parent[right_child] = nidx;
 
-  split_index_.Resize(n);
+  split_index_.Resize(ctx, n);
   split_index_.HostVector()[nidx] = split_idx;
 
-  split_conds_.Resize(n, DftBadValue());
+  split_conds_.Resize(ctx, n, DftBadValue());
   split_conds_.HostVector()[nidx] = split_cond;
 
-  default_left_.Resize(n);
+  default_left_.Resize(ctx, n);
   default_left_.HostVector()[nidx] = static_cast<std::uint8_t>(default_left);
 
   // Set weights
-  weights_.Resize(n * base_weight.Size());
+  weights_.Resize(ctx, n * base_weight.Size());
   auto p_weight = this->NodeWeight(nidx, n_split_targets);
   CHECK_GE(p_weight.Size(), base_weight.Size());
   auto l_weight = this->NodeWeight(left_child, n_split_targets);
@@ -148,23 +150,24 @@ void MultiTargetTree::Expand(bst_node_t nidx, bst_feature_t split_idx, float spl
     r_weight(i) = right_weight(i);
   }
 
-  loss_chg_.Resize(n, 0.0f);
+  loss_chg_.Resize(ctx, n, 0.0f);
   loss_chg_.HostVector()[nidx] = loss_chg;
 
-  sum_hess_.Resize(n, 0.0f);
+  sum_hess_.Resize(ctx, n, 0.0f);
   auto& h_hess = sum_hess_.HostVector();
   h_hess[nidx] = sum_hess;
   h_hess[left_child] = left_sum;
   h_hess[right_child] = right_sum;
 }
 
-void MultiTargetTree::SetLeaves(std::vector<bst_node_t> leaves, common::Span<float const> weights) {
+void MultiTargetTree::SetLeaves(Context const* ctx, std::vector<bst_node_t> leaves,
+                                common::Span<float const> weights) {
   auto is_partial_tree = this->NumLeaves() == 0;
   CHECK(is_partial_tree || leaves.size() == this->NumLeaves());
   auto n_targets = this->NumTargets();
   std::int32_t nidx_in_set = 0;
   auto n_leaves = leaves.size();
-  this->leaf_weights_.Resize(n_leaves * n_targets);
+  this->leaf_weights_.Resize(ctx, n_leaves * n_targets);
   auto h_weights = this->leaf_weights_.HostSpan();
   // Reuse the right child as the leaf weight mapping.
   auto h_leaf_mapping = this->right_.HostSpan();
@@ -261,23 +264,25 @@ void LoadModelImpl(Context const* ctx, Json const& in, HostDeviceVector<float>* 
 }
 
 void MultiTargetTree::LoadModel(Json const& in) {
+  // Model loading happens on CPU, use a CPU context for allocation.
+  Context ctx;
   namespace tf = tree_field;
   bool typed = IsA<F32Array>(in[tf::kBaseWeight]);
   bool feature_is_64 = IsA<I64Array>(in[tf::kSplitIdx]);
 
   if (typed && feature_is_64) {
-    LoadModelImpl<true, true>(in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
+    LoadModelImpl<true, true>(&ctx, in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
                               &split_conds_, &split_index_, &default_left_, &loss_chg_, &sum_hess_);
   } else if (typed && !feature_is_64) {
-    LoadModelImpl<true, false>(in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
+    LoadModelImpl<true, false>(&ctx, in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
                                &split_conds_, &split_index_, &default_left_, &loss_chg_,
                                &sum_hess_);
   } else if (!typed && feature_is_64) {
-    LoadModelImpl<false, true>(in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
+    LoadModelImpl<false, true>(&ctx, in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
                                &split_conds_, &split_index_, &default_left_, &loss_chg_,
                                &sum_hess_);
   } else {
-    LoadModelImpl<false, false>(in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
+    LoadModelImpl<false, false>(&ctx, in, &weights_, &leaf_weights_, &left_, &right_, &parent_,
                                 &split_conds_, &split_index_, &default_left_, &loss_chg_,
                                 &sum_hess_);
   }
