@@ -490,8 +490,7 @@ class DeviceUVectorImpl {
 
  public:
   DeviceUVectorImpl() = default;
-  explicit DeviceUVectorImpl(
-      std::size_t n, ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
+  explicit DeviceUVectorImpl(std::size_t n, ::xgboost::curt::StreamRef stream) {
     this->resize(n, stream);
   }
   DeviceUVectorImpl(DeviceUVectorImpl const &that) = delete;
@@ -502,8 +501,7 @@ class DeviceUVectorImpl {
   [[nodiscard]] std::size_t Capacity() const { return this->capacity_; }
 
   // Resize without init.
-  void resize(std::size_t n,  // NOLINT
-              ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
+  void resize(std::size_t n, ::xgboost::curt::StreamRef stream) {  // NOLINT
     using ::xgboost::common::SizeBytes;
 
     if (n <= this->Capacity()) {
@@ -532,8 +530,7 @@ class DeviceUVectorImpl {
     // std::swap(this->data_, new_ptr);
   }
   // Resize with init
-  void resize(std::size_t n, T const &v,  // NOLINT
-              ::xgboost::curt::StreamRef stream = ::xgboost::curt::DefaultStream()) {
+  void resize(std::size_t n, T const &v, ::xgboost::curt::StreamRef stream) {  // NOLINT
     auto orig = this->size();
     this->resize(n, stream);
     if (orig < n) {
@@ -542,8 +539,8 @@ class DeviceUVectorImpl {
     }
   }
 
-  void clear() {  // NOLINT
-    this->resize(0);
+  void clear(::xgboost::curt::StreamRef stream) {  // NOLINT
+    this->resize(0, stream);
   }
 
   [[nodiscard]] std::size_t size() const { return this->size_; }  // NOLINT

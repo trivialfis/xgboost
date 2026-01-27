@@ -174,7 +174,7 @@ class MetaInfo {
    * @param check_column Whether the extend method should check the consistency of
    *                     columns.
    */
-  void Extend(MetaInfo const& that, bool accumulate_rows, bool check_column);
+  void Extend(Context const* ctx, MetaInfo const& that, bool accumulate_rows, bool check_column);
   /**
    * @brief Synchronize the number of columns across all workers.
    *
@@ -402,7 +402,7 @@ class SparsePage {
     base_rowid = row_id;
   }
 
-  [[nodiscard]] SparsePage GetTranspose(int num_columns, int32_t n_threads) const;
+  [[nodiscard]] SparsePage GetTranspose(Context const* ctx, int num_columns, int32_t n_threads) const;
 
   /**
    * \brief Sort the column index.

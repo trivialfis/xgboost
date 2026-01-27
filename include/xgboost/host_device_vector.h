@@ -90,12 +90,15 @@ class HostDeviceVector {
   static_assert(std::is_standard_layout_v<T>, "HostDeviceVector admits only POD types");
 
  public:
-  explicit HostDeviceVector(size_t size = 0, T v = T(), DeviceOrd device = DeviceOrd::CPU(),
-                            Context const* ctx = nullptr);
-  HostDeviceVector(std::initializer_list<T> init, DeviceOrd device = DeviceOrd::CPU(),
-                   Context const* ctx = nullptr);
-  explicit HostDeviceVector(const std::vector<T>& init, DeviceOrd device = DeviceOrd::CPU(),
-                            Context const* ctx = nullptr);
+  /** @brief Create an empty vector. */
+  HostDeviceVector();
+  /** @brief Create a vector with context for stream-oriented allocation. */
+  explicit HostDeviceVector(Context const* ctx, size_t size, T v = T(),
+                            DeviceOrd device = DeviceOrd::CPU());
+  HostDeviceVector(Context const* ctx, std::initializer_list<T> init,
+                   DeviceOrd device = DeviceOrd::CPU());
+  explicit HostDeviceVector(Context const* ctx, const std::vector<T>& init,
+                            DeviceOrd device = DeviceOrd::CPU());
   ~HostDeviceVector();
 
   HostDeviceVector(const HostDeviceVector<T>&) = delete;
@@ -141,9 +144,6 @@ class HostDeviceVector {
 
   void SetDevice(DeviceOrd device) const;
 
-  void Resize(std::size_t new_size);
-  /** @brief Resize and initialize the data if the new size is larger than the old size. */
-  void Resize(std::size_t new_size, T v);
   /** @brief Resize with context for stream-oriented allocation. */
   void Resize(Context const* ctx, std::size_t new_size);
   /** @brief Resize and initialize with context for stream-oriented allocation. */

@@ -117,12 +117,12 @@ class CatContainer {
 
     that.sorted_idx_.SetDevice(device);
     this->sorted_idx_.SetDevice(device);
-    this->sorted_idx_.Resize(that.sorted_idx_.Size());
+    this->sorted_idx_.Resize(ctx, that.sorted_idx_.Size());
     this->sorted_idx_.Copy(that.sorted_idx_);
 
     this->feature_segments_.SetDevice(device);
     that.feature_segments_.SetDevice(device);
-    this->feature_segments_.Resize(that.feature_segments_.Size());
+    this->feature_segments_.Resize(ctx, that.feature_segments_.Size());
     this->feature_segments_.Copy(that.feature_segments_);
 
     this->n_total_cats_ = that.n_total_cats_;

@@ -30,6 +30,17 @@ HistogramCuts::HistogramCuts() {
   cut_ptrs_.HostVector().emplace_back(0);
 }
 
+void HistogramCuts::Copy(Context const* ctx, HistogramCuts const& that) {
+  cut_values_.Resize(ctx, that.cut_values_.Size());
+  cut_ptrs_.Resize(ctx, that.cut_ptrs_.Size());
+  min_vals_.Resize(ctx, that.min_vals_.Size());
+  cut_values_.Copy(that.cut_values_);
+  cut_ptrs_.Copy(that.cut_ptrs_);
+  min_vals_.Copy(that.min_vals_);
+  has_categorical_ = that.has_categorical_;
+  max_cat_ = that.max_cat_;
+}
+
 void HistogramCuts::Save(common::AlignedFileWriteStream *fo) const {
   auto const &ptrs = this->Ptrs();
   CHECK_LE(Span{ptrs}.size_bytes(), WriteVec(fo, ptrs));

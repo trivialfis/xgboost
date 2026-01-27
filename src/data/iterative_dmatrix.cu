@@ -81,7 +81,7 @@ void IterativeDMatrix::InitFromCUDA(
     proxy->Info().num_row_ = BatchSamples(proxy);
     proxy->Info().num_col_ = ext_info.n_features;
     if (ext_info.n_batches != 1) {
-      this->info_.Extend(std::move(proxy->Info()), false, true);
+      this->info_.Extend(this->Ctx(), std::move(proxy->Info()), false, true);
     }
     n_batches_for_verification++;
   }

@@ -62,7 +62,7 @@ SparsePageDMatrix::SparsePageDMatrix(DataIterHandle iter_handle, DMatrixHandle p
   // The proxy is iterated together with the sparse page source so we can obtain all
   // information in 1 pass.
   for (auto const &page : this->GetRowBatchesImpl(&ctx)) {
-    this->info_.Extend(std::move(proxy->Info()), false, false);
+    this->info_.Extend(&ctx, std::move(proxy->Info()), false, false);
     ext_info_.n_features =
         std::max(static_cast<bst_feature_t>(ext_info_.n_features), BatchColumns(proxy));
     ext_info_.accumulated_rows += BatchSamples(proxy);

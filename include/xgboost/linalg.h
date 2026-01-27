@@ -785,14 +785,16 @@ class Tensor {
    * \brief Create a tensor with shape and device ordinal.  The storage is initialized
    *        automatically.
    *
-   * See \ref TensorView for parameters of this constructor.
+   * @param ctx Context for stream-oriented allocation.
+   * See \ref TensorView for other parameters.
    */
   template <typename I, int32_t D>
-  explicit Tensor(I const (&shape)[D], DeviceOrd device, Order order = kC)
-      : Tensor{common::Span<I const, D>{shape}, device, order} {}
+  explicit Tensor(Context const* ctx, I const (&shape)[D], DeviceOrd device, Order order = kC)
+      : Tensor{ctx, common::Span<I const, D>{shape}, device, order} {}
 
   template <typename I, size_t D>
-  explicit Tensor(common::Span<I const, D> shape, DeviceOrd device, Order order = kC)
+  explicit Tensor(Context const* ctx, common::Span<I const, D> shape, DeviceOrd device,
+                  Order order = kC)
       : order_{order} {
     // No device unroll as this is a host only function.
     std::copy(shape.data(), shape.data() + D, shape_);
@@ -803,7 +805,7 @@ class Tensor {
     if (!device.IsCPU()) {
       data_.SetDevice(device);
     }
-    data_.Resize(size);
+    data_.Resize(ctx, size);
     if (!device.IsCPU()) {
       data_.DevicePointer();  // Pull to device
     }
@@ -898,36 +900,40 @@ class Tensor {
   /**
    * \brief Reshape the tensor.
    *
+   * @param ctx Context for stream-oriented allocation.
+   *
    *    If the total size is changed, then data in this tensor is no longer valid.
    */
   template <typename... S, detail::EnableIfIntegral<S...> * = nullptr>
-  void Reshape(S &&...s) {
+  void Reshape(Context const* ctx, S &&...s) {
     static_assert(sizeof...(S) <= kDim, "Invalid shape.");
     detail::ReshapeImpl<0>(shape_, std::forward<S>(s)...);
     auto constexpr kEnd = sizeof...(S);
     static_assert(kEnd <= kDim, "Invalid shape.");
     std::fill(shape_ + kEnd, shape_ + kDim, 1);
     auto n = detail::CalcSize(shape_);
-    data_.Resize(n);
+    data_.Resize(ctx, n);
   }
 
   /**
    * \brief Reshape the tensor.
    *
+   * @param ctx Context for stream-oriented allocation.
+   *
    *    If the total size is changed, then data in this tensor is no longer valid.
    */
   template <size_t D>
-  void Reshape(common::Span<size_t const, D> shape) {
+  void Reshape(Context const* ctx, common::Span<size_t const, D> shape) {
     static_assert(D <= kDim, "Invalid shape.");
     std::copy(shape.data(), shape.data() + D, this->shape_);
     std::fill(shape_ + D, shape_ + kDim, 1);
     auto n = detail::CalcSize(shape_);
-    data_.Resize(n);
+    data_.Resize(ctx, n);
   }
 
   template <size_t D>
-  void Reshape(size_t (&shape)[D]) {
-    this->Reshape(common::Span<size_t const, D>{shape});
+  void Reshape(Context const* ctx, size_t (&shape)[D]) {
+    this->Reshape(ctx, common::Span<size_t const, D>{shape});
   }
   /**
    * \brief Get a host view on the slice.
@@ -986,7 +992,7 @@ template <typename T, typename... Index>
 auto Constant(Context const *ctx, T v, Index &&...index) {
   Tensor<T, sizeof...(Index)> t;
   t.SetDevice(ctx->Device());
-  t.Reshape(index...);
+  t.Reshape(ctx, index...);
   t.Data()->Fill(std::move(v));
   return t;
 }

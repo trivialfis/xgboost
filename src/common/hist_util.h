@@ -49,16 +49,6 @@ class HistogramCuts {
     std::swap(max_cat_, that.max_cat_);
   }
 
-  void Copy(HistogramCuts const& that) {
-    cut_values_.Resize(that.cut_values_.Size());
-    cut_ptrs_.Resize(that.cut_ptrs_.Size());
-    min_vals_.Resize(that.min_vals_.Size());
-    cut_values_.Copy(that.cut_values_);
-    cut_ptrs_.Copy(that.cut_ptrs_);
-    min_vals_.Copy(that.min_vals_);
-    has_categorical_ = that.has_categorical_;
-    max_cat_ = that.max_cat_;
-  }
 
  public:
   HostDeviceVector<float> cut_values_;   // NOLINT
@@ -67,21 +57,23 @@ class HistogramCuts {
   HostDeviceVector<float> min_vals_;  // NOLINT
 
   HistogramCuts();
-  HistogramCuts(HistogramCuts const& that) { this->Copy(that); }
+  // Copy constructor deleted - use Copy(ctx, other) instead for explicit copying with context
+  HistogramCuts(HistogramCuts const& that) = delete;
 
   HistogramCuts(HistogramCuts&& that) noexcept(true) {
     this->Swap(std::forward<HistogramCuts>(that));
   }
 
-  HistogramCuts& operator=(HistogramCuts const& that) {
-    this->Copy(that);
-    return *this;
-  }
+  // Copy assignment deleted - use Copy(ctx, other) instead for explicit copying with context
+  HistogramCuts& operator=(HistogramCuts const& that) = delete;
 
   HistogramCuts& operator=(HistogramCuts&& that) noexcept(true) {
     this->Swap(std::forward<HistogramCuts>(that));
     return *this;
   }
+
+  /** @brief Copy from another HistogramCuts with context for stream-oriented allocation. */
+  void Copy(Context const* ctx, HistogramCuts const& that);
 
   [[nodiscard]] bst_bin_t FeatureBins(bst_feature_t feature) const {
     return cut_ptrs_.ConstHostVector().at(feature + 1) - cut_ptrs_.ConstHostVector()[feature];

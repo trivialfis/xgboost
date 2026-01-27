@@ -410,13 +410,13 @@ MetaInfo MetaInfo::Slice(Context const* ctx, common::Span<bst_idx_t const> ridxs
    * Feature Info
    */
   out.feature_weights.SetDevice(ctx->Device());
-  out.feature_weights.Resize(this->feature_weights.Size());
+  out.feature_weights.Resize(ctx, this->feature_weights.Size());
   out.feature_weights.Copy(this->feature_weights);
 
   out.feature_names = this->feature_names;
 
   out.feature_types.SetDevice(ctx->Device());
-  out.feature_types.Resize(this->feature_types.Size());
+  out.feature_types.Resize(ctx, this->feature_types.Size());
   out.feature_types.Copy(this->feature_types);
 
   out.feature_type_names = this->feature_type_names;
@@ -707,7 +707,8 @@ void MetaInfo::GetFeatureInfo(const char* field, std::vector<std::string>* out_s
   }
 }
 
-void MetaInfo::Extend(MetaInfo const& that, bool accumulate_rows, bool check_column) {
+void MetaInfo::Extend(Context const* ctx, MetaInfo const& that, bool accumulate_rows,
+                      bool check_column) {
   /**
    * shape
    */
@@ -772,14 +773,14 @@ void MetaInfo::Extend(MetaInfo const& that, bool accumulate_rows, bool check_col
     this->has_categorical_ = LoadFeatureType(this->feature_type_names, &h_feature_types);
   } else if (!that.feature_types.Empty()) {
     // FIXME(jiamingy): https://github.com/dmlc/xgboost/pull/9171/files#r1440188612
-    this->feature_types.Resize(that.feature_types.Size());
+    this->feature_types.Resize(ctx, that.feature_types.Size());
     this->feature_types.Copy(that.feature_types);
     auto const& ft = this->feature_types.ConstHostVector();
     this->has_categorical_ = std::any_of(ft.cbegin(), ft.cend(), common::IsCatOp{});
   }
 
   if (!that.feature_weights.Empty()) {
-    this->feature_weights.Resize(that.feature_weights.Size());
+    this->feature_weights.Resize(ctx, that.feature_weights.Size());
     this->feature_weights.SetDevice(that.feature_weights.Device());
     this->feature_weights.Copy(that.feature_weights);
   }
@@ -1013,7 +1014,7 @@ template DMatrix* DMatrix::Create(
     data::IteratorAdapter<DataIterHandle, XGBCallbackDataIterNext, XGBoostBatchCSR>* adapter,
     float missing, int nthread, std::string const& cache_prefix, DataSplitMode data_split_mode);
 
-SparsePage SparsePage::GetTranspose(int num_columns, int32_t n_threads) const {
+SparsePage SparsePage::GetTranspose(Context const* ctx, int num_columns, int32_t n_threads) const {
   SparsePage transpose;
   common::ParallelGroupBuilder<Entry, bst_idx_t> builder(&transpose.offset.HostVector(),
                                                          &transpose.data.HostVector());
@@ -1040,7 +1041,7 @@ SparsePage SparsePage::GetTranspose(int num_columns, int32_t n_threads) const {
   });
 
   if (this->data.Empty()) {
-    transpose.offset.Resize(num_columns + 1);
+    transpose.offset.Resize(ctx, num_columns + 1);
     transpose.offset.Fill(0);
   }
   CHECK_EQ(transpose.offset.Size(), num_columns + 1);

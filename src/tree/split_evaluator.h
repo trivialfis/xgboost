@@ -33,12 +33,12 @@ class TreeEvaluator {
   bool has_constraint_;
 
  public:
-  TreeEvaluator(TrainParam const& p, bst_feature_t n_features, DeviceOrd device) {
-    device_ = device;
-    if (device.IsCUDA()) {
-      lower_bounds_.SetDevice(device);
-      upper_bounds_.SetDevice(device);
-      monotone_.SetDevice(device);
+  TreeEvaluator(Context const* ctx, TrainParam const& p, bst_feature_t n_features) {
+    device_ = ctx->Device();
+    if (device_.IsCUDA()) {
+      lower_bounds_.SetDevice(device_);
+      upper_bounds_.SetDevice(device_);
+      monotone_.SetDevice(device_);
     }
 
     if (p.monotone_constraints.empty()) {
@@ -50,8 +50,8 @@ class TreeEvaluator {
       monotone_.HostVector() = p.monotone_constraints;
       monotone_.HostVector().resize(n_features, 0);
       // Initialised to some small size, can grow if needed
-      lower_bounds_.Resize(256, -std::numeric_limits<float>::max());
-      upper_bounds_.Resize(256, std::numeric_limits<float>::max());
+      lower_bounds_.Resize(ctx, 256, -std::numeric_limits<float>::max());
+      upper_bounds_.Resize(ctx, 256, std::numeric_limits<float>::max());
       has_constraint_ = true;
     }
 
@@ -163,7 +163,7 @@ class TreeEvaluator {
   }
 
   template <bool CompiledWithCuda = WITH_CUDA()>
-  void AddSplit(bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid,
+  void AddSplit(Context const* ctx, bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid,
                 bst_feature_t f, float left_weight, float right_weight) {
     if (!has_constraint_) {
       return;
@@ -171,10 +171,10 @@ class TreeEvaluator {
 
     size_t max_nidx = std::max(leftid, rightid);
     if (lower_bounds_.Size() <= max_nidx) {
-      lower_bounds_.Resize(max_nidx * 2 + 1, -std::numeric_limits<float>::max());
+      lower_bounds_.Resize(ctx, max_nidx * 2 + 1, -std::numeric_limits<float>::max());
     }
     if (upper_bounds_.Size() <= max_nidx) {
-      upper_bounds_.Resize(max_nidx * 2 + 1, std::numeric_limits<float>::max());
+      upper_bounds_.Resize(ctx, max_nidx * 2 + 1, std::numeric_limits<float>::max());
     }
 
     common::Transform<>::Init(

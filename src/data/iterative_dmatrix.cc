@@ -89,7 +89,7 @@ void IterativeDMatrix::InitFromCPU(
                                      Info().num_row_);
     });
     if (ext_info.n_batches != 1) {
-      this->info_.Extend(std::move(proxy->Info()), false, true);
+      this->info_.Extend(ctx, std::move(proxy->Info()), false, true);
     }
     auto batch_size = BatchSamples(proxy);
     prev_sum = this->ghist_->row_ptr[rbegin + batch_size];

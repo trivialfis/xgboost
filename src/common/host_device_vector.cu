@@ -37,7 +37,7 @@ void SetCudaSetDeviceHandler(void (*handler)(int)) {
 template <typename T>
 class HostDeviceVectorImpl {
  public:
-  HostDeviceVectorImpl(size_t size, T v, DeviceOrd device, Context const* ctx = nullptr)
+  HostDeviceVectorImpl(size_t size, T v, DeviceOrd device, Context const* ctx)
       : device_(device) {
     if (device.IsCUDA()) {
       gpu_access_ = GPUAccess::kWrite;
@@ -50,7 +50,7 @@ class HostDeviceVectorImpl {
 
   // Initializer can be std::vector<T> or std::initializer_list<T>
   template <class Initializer>
-  HostDeviceVectorImpl(const Initializer& init, DeviceOrd device, Context const* ctx = nullptr)
+  HostDeviceVectorImpl(const Initializer& init, DeviceOrd device, Context const* ctx)
       : device_(device) {
     if (device.IsCUDA()) {
       gpu_access_ = GPUAccess::kWrite;
@@ -185,7 +185,7 @@ class HostDeviceVectorImpl {
     }
   }
 
-  void Resize(std::size_t new_size, Context const* ctx = nullptr) {
+  void Resize(std::size_t new_size, Context const* ctx) {
     if (new_size == Size()) {
       return;
     }
@@ -201,7 +201,7 @@ class HostDeviceVectorImpl {
     }
   }
 
-  void Resize(std::size_t new_size, T v, Context const* ctx = nullptr) {
+  void Resize(std::size_t new_size, T v, Context const* ctx) {
     if (new_size == Size()) {
       return;
     }
@@ -303,17 +303,21 @@ class HostDeviceVectorImpl {
 };
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(size_t size, T v, DeviceOrd device, Context const* ctx)
+HostDeviceVector<T>::HostDeviceVector()
+    : impl_(new HostDeviceVectorImpl<T>(0, T{}, DeviceOrd::CPU(), nullptr)) {}
+
+template <typename T>
+HostDeviceVector<T>::HostDeviceVector(Context const* ctx, size_t size, T v, DeviceOrd device)
     : impl_(new HostDeviceVectorImpl<T>(size, v, device, ctx)) {}
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(std::initializer_list<T> init, DeviceOrd device,
-                                       Context const* ctx)
+HostDeviceVector<T>::HostDeviceVector(Context const* ctx, std::initializer_list<T> init,
+                                       DeviceOrd device)
     : impl_(new HostDeviceVectorImpl<T>(init, device, ctx)) {}
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(const std::vector<T>& init, DeviceOrd device,
-                                       Context const* ctx)
+HostDeviceVector<T>::HostDeviceVector(Context const* ctx, const std::vector<T>& init,
+                                       DeviceOrd device)
     : impl_(new HostDeviceVectorImpl<T>(init, device, ctx)) {}
 
 template <typename T>
@@ -426,16 +430,6 @@ GPUAccess HostDeviceVector<T>::DeviceAccess() const {
 template <typename T>
 void HostDeviceVector<T>::SetDevice(DeviceOrd device) const {
   impl_->SetDevice(device);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Resize(std::size_t new_size) {
-  impl_->Resize(new_size, nullptr);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Resize(std::size_t new_size, T v) {
-  impl_->Resize(new_size, v, nullptr);
 }
 
 template <typename T>

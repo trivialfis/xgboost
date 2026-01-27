@@ -126,7 +126,7 @@ class ColumnSampler {
   void Init(Context const* ctx, int64_t num_col, HostDeviceVector<float> const& feature_weights,
             float colsample_bynode, float colsample_bylevel, float colsample_bytree) {
     this->feature_weights_.SetDevice(ctx->Device()), feature_weights.SetDevice(ctx->Device());
-    this->feature_weights_.Resize(feature_weights.Size());
+    this->feature_weights_.Resize(ctx, feature_weights.Size());
     this->feature_weights_.Copy(feature_weights);
 
     colsample_bylevel_ = colsample_bylevel;
@@ -143,7 +143,7 @@ class ColumnSampler {
     if (!ctx->Device().IsSycl()) {
       feature_set_tree_->SetDevice(ctx->Device());
     }
-    feature_set_tree_->Resize(num_col);
+    feature_set_tree_->Resize(ctx, num_col);
     if (ctx->IsCUDA()) {
 #if defined(XGBOOST_USE_CUDA)
       cuda_impl::InitFeatureSet(ctx, feature_set_tree_);

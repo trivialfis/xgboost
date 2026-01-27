@@ -244,7 +244,7 @@ class RankingCache {
   common::Span<std::size_t const> SortedIdx(Context const* ctx, common::Span<float const> predt) {
     if (sorted_idx_cache_.Empty()) {
       sorted_idx_cache_.SetDevice(ctx->Device());
-      sorted_idx_cache_.Resize(predt.size());
+      sorted_idx_cache_.Resize(ctx, predt.size());
     }
     if (ctx->IsCUDA()) {
       return this->MakeRankOnCUDA(ctx, predt);
@@ -258,7 +258,7 @@ class RankingCache {
     CHECK(ctx->IsCUDA()) << error::InvalidCUDAOrdinal();
     if (y_sorted_idx_cache_.Empty()) {
       y_sorted_idx_cache_.SetDevice(ctx->Device());
-      y_sorted_idx_cache_.Resize(n_samples);
+      y_sorted_idx_cache_.Resize(ctx, n_samples);
     }
     return y_sorted_idx_cache_.DeviceSpan();
   }
@@ -266,7 +266,7 @@ class RankingCache {
     CHECK(ctx->IsCUDA()) << error::InvalidCUDAOrdinal();
     if (y_ranked_by_model_.Empty()) {
       y_ranked_by_model_.SetDevice(ctx->Device());
-      y_ranked_by_model_.Resize(n_samples);
+      y_ranked_by_model_.Resize(ctx, n_samples);
     }
     return y_ranked_by_model_.DeviceSpan();
   }
@@ -282,14 +282,14 @@ class RankingCache {
   [[nodiscard]] linalg::VectorView<GradientPair> CUDARounding(Context const* ctx) {
     if (roundings_.Size() == 0) {
       roundings_.SetDevice(ctx->Device());
-      roundings_.Reshape(Groups());
+      roundings_.Reshape(ctx, Groups());
     }
     return roundings_.View(ctx->Device());
   }
   [[nodiscard]] common::Span<double> CUDACostRounding(Context const* ctx) {
     if (cost_rounding_.Size() == 0) {
       cost_rounding_.SetDevice(ctx->Device());
-      cost_rounding_.Resize(1);
+      cost_rounding_.Resize(ctx, 1);
     }
     return cost_rounding_.DeviceSpan();
   }
@@ -298,7 +298,7 @@ class RankingCache {
     max_lambdas_.SetDevice(ctx->Device());
     std::size_t bytes = n * sizeof(Type);
     if (bytes != max_lambdas_.Size()) {
-      max_lambdas_.Resize(bytes);
+      max_lambdas_.Resize(ctx, bytes);
     }
     return common::Span<Type>{reinterpret_cast<Type*>(max_lambdas_.DevicePointer()), n};
   }
@@ -413,7 +413,7 @@ class PreCache : public RankingCache {
   common::Span<double> Pre(Context const* ctx) {
     if (pre_.Empty()) {
       pre_.SetDevice(ctx->Device());
-      pre_.Resize(this->Groups());
+      pre_.Resize(ctx, this->Groups());
     }
     return ctx->IsCUDA() ? pre_.DeviceSpan() : pre_.HostSpan();
   }
@@ -444,21 +444,21 @@ class MAPCache : public RankingCache {
   common::Span<double> NumRelevant(Context const* ctx) {
     if (n_rel_.Empty()) {
       n_rel_.SetDevice(ctx->Device());
-      n_rel_.Resize(n_samples_);
+      n_rel_.Resize(ctx, n_samples_);
     }
     return ctx->IsCUDA() ? n_rel_.DeviceSpan() : n_rel_.HostSpan();
   }
   common::Span<double> Acc(Context const* ctx) {
     if (acc_.Empty()) {
       acc_.SetDevice(ctx->Device());
-      acc_.Resize(n_samples_);
+      acc_.Resize(ctx, n_samples_);
     }
     return ctx->IsCUDA() ? acc_.DeviceSpan() : acc_.HostSpan();
   }
   common::Span<double> Map(Context const* ctx) {
     if (map_.Empty()) {
       map_.SetDevice(ctx->Device());
-      map_.Resize(this->Groups());
+      map_.Resize(ctx, this->Groups());
     }
     return ctx->IsCUDA() ? map_.DeviceSpan() : map_.HostSpan();
   }

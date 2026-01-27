@@ -100,17 +100,18 @@ class SketchContainer {
    * \param num_rows    Total number of rows in known dataset (typically the rows in current worker).
    * \param device      GPU ID.
    */
-  SketchContainer(HostDeviceVector<FeatureType> const& feature_types, bst_bin_t max_bin,
-                  bst_feature_t num_columns, bst_idx_t num_rows, DeviceOrd device)
+  SketchContainer(Context const* ctx, HostDeviceVector<FeatureType> const& feature_types,
+                  bst_bin_t max_bin, bst_feature_t num_columns, bst_idx_t num_rows)
       : num_rows_{num_rows}, num_columns_{num_columns}, num_bins_{max_bin} {
+    auto device = ctx->Device();
     CHECK(device.IsCUDA());
     // Initialize Sketches for this dmatrix
     this->columns_ptr_.SetDevice(device);
-    this->columns_ptr_.Resize(num_columns + 1, 0);
+    this->columns_ptr_.Resize(ctx, num_columns + 1, 0);
     this->columns_ptr_b_.SetDevice(device);
-    this->columns_ptr_b_.Resize(num_columns + 1, 0);
+    this->columns_ptr_b_.Resize(ctx, num_columns + 1, 0);
 
-    this->feature_types_.Resize(feature_types.Size());
+    this->feature_types_.Resize(ctx, feature_types.Size());
     this->feature_types_.Copy(feature_types);
     // Pull to device.
     this->feature_types_.SetDevice(device);
