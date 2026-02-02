@@ -4,6 +4,8 @@
 
 #include <thrust/copy.h>  // for copy_n
 #include <thrust/functional.h>
+#include <thrust/iterator/transform_iterator.h>         // for make_transform_iterator
+#include <thrust/iterator/transform_output_iterator.h>  // for make_transform_output_iterator
 #include <thrust/random.h>
 #include <thrust/sort.h>  // for sort
 #include <thrust/transform.h>
@@ -19,7 +21,8 @@
 #include <cuda/std/iterator>  // for distance
 #include <limits>
 
-#include "../../common/cuda_context.cuh"  // for CUDAContext
+#include "../../common/cuda_context.cuh"   // for CUDAContext
+#include "../../common/device_helpers.cuh" // for MakeTransformIterator
 #include "../../common/random.h"
 #include "../hist/sampler.h"  // for kDefaultMvsLambda
 #include "../param.h"
@@ -211,22 +214,31 @@ std::size_t CalculateThresholdIndex(Context const* ctx,
                                     common::Span<float> thresholds, common::Span<float> grad_csum,
                                     std::size_t sample_rows) {
   auto cuctx = ctx->CUDACtx();
+  auto n_samples = reg_abs_grad.size();
 
-  // Set a sentinal for upper boud.
+  // Set a sentinel for upper bound.
   thrust::fill(cuctx->CTP(), dh::tend(thresholds) - 1, dh::tend(thresholds),
                std::numeric_limits<float>::max());
-  // Create the regularized absolute gradient
+  // Create the regularized absolute gradient.
   ReduceGrad(ctx, gpairs, roundings, dh::ToSpan(reg_abs_grad));
   thrust::transform(cuctx->CTP(), dh::tcbegin(reg_abs_grad), dh::tcend(reg_abs_grad),
                     dh::tbegin(reg_abs_grad),
                     [] XGBOOST_DEVICE(float gpair) { return cuda::std::sqrt(gpair); });
 
-  // Sort and calculate csum
+  // Sort thresholds
   thrust::copy(cuctx->CTP(), dh::tbegin(reg_abs_grad), dh::tend(reg_abs_grad),
                dh::tbegin(thresholds));
-  thrust::sort(cuctx->TP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1);
-  thrust::inclusive_scan(cuctx->CTP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1,
-                         dh::tbegin(grad_csum));
+  thrust::sort(cuctx->CTP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1);
+
+  // scan is not yet made deterministic
+  float h_total_sum = thrust::reduce(cuctx->CTP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1,
+                                     0.0f, cuda::std::plus{});
+  FloatQuantiser quantiser{h_total_sum, static_cast<bst_idx_t>(n_samples)};
+  auto in_it =
+      dh::MakeTransformIterator<std::int64_t>(dh::tbegin(thresholds), ToFixedPointOp{quantiser});
+  auto out_it =
+      thrust::make_transform_output_iterator(dh::tbegin(grad_csum), ToFloatingPointOp{quantiser});
+  thrust::inclusive_scan(cuctx->CTP(), in_it, in_it + n_samples, out_it);
 
   // Find the threshold u for each row.
   thrust::transform(cuctx->CTP(), dh::tbegin(grad_csum), dh::tend(grad_csum),
