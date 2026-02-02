@@ -217,12 +217,13 @@ std::size_t CalculateThresholdIndex(Context const* ctx,
                std::numeric_limits<float>::max());
   // Create the regularized absolute gradient
   ReduceGrad(ctx, gpairs, roundings, dh::ToSpan(reg_abs_grad));
-  thrust::transform(cuctx->CTP(), dh::tcbegin(reg_abs_grad), dh::tcend(reg_abs_grad) - 1,
+  thrust::transform(cuctx->CTP(), dh::tcbegin(reg_abs_grad), dh::tcend(reg_abs_grad),
                     dh::tbegin(reg_abs_grad),
                     [] XGBOOST_DEVICE(float gpair) { return cuda::std::sqrt(gpair); });
 
   // Sort and calculate csum
-  thrust::copy(dh::tbegin(reg_abs_grad), dh::tend(reg_abs_grad), dh::tbegin(thresholds));
+  thrust::copy(cuctx->CTP(), dh::tbegin(reg_abs_grad), dh::tend(reg_abs_grad),
+               dh::tbegin(thresholds));
   thrust::sort(cuctx->TP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1);
   thrust::inclusive_scan(cuctx->CTP(), dh::tbegin(thresholds), dh::tend(thresholds) - 1,
                          dh::tbegin(grad_csum));
