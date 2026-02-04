@@ -171,7 +171,112 @@ SEXP SafeAllocInteger(size_t size, SEXP continuation_token) {
   return "";
 }
 
-[[nodiscard]] std::string MakeArrayInterfaceFromRDataFrame(SEXP R_df) {
+/**
+ * @brief Buffers to hold categorical data for JSON serialization.
+ *
+ * These buffers must remain alive until the JSON string is consumed by the C API.
+ */
+struct CategoricalBuffers {
+  std::vector<std::vector<std::int32_t>> offsets;
+  std::vector<std::string> strings;
+};
+
+/**
+ * @brief Create arrow-style StringArray JSON for R factor levels.
+ *
+ * @param codes    REALSXP vector of base-0 encoded category codes
+ * @param levels   STRSXP vector of factor level names
+ * @param n_rows   Number of rows in the data
+ * @param buffers  Buffer holder to keep string data alive
+ * @return JSON array [names_obj, codes_obj] for categorical column
+ */
+[[nodiscard]] xgboost::Json MakeCategoricalColumnJson(
+    SEXP codes,
+    SEXP levels,
+    std::size_t n_rows,
+    CategoricalBuffers* buffers) {
+  R_xlen_t n_levels = Rf_xlength(levels);
+
+  // Create offsets and concatenated string buffer
+  buffers->offsets.emplace_back(n_levels + 1);
+  auto& offsets = buffers->offsets.back();
+  offsets[0] = 0;
+
+  buffers->strings.emplace_back();
+  auto& concat = buffers->strings.back();
+
+  for (R_xlen_t i = 0; i < n_levels; ++i) {
+    const char* str = CHAR(STRING_ELT(levels, i));
+    concat += str;
+    offsets[i + 1] = static_cast<std::int32_t>(concat.size());
+  }
+
+  // Helper to create JSON array
+  auto make_json_array = [](std::vector<xgboost::Json> elements) {
+    return xgboost::Json{std::move(elements)};
+  };
+
+  // Create JSON for offsets array interface
+  xgboost::Json joffsets{xgboost::Object{}};
+  joffsets["data"] = make_json_array({
+      xgboost::Json{xgboost::Integer{reinterpret_cast<std::int64_t>(offsets.data())}},
+      xgboost::Json{xgboost::Boolean{true}}});
+  joffsets["typestr"] = xgboost::Json{xgboost::String{"<i4"}};
+  joffsets["shape"] = make_json_array({
+      xgboost::Json{xgboost::Integer{n_levels + 1}}});
+  joffsets["strides"] = xgboost::Json{xgboost::Null{}};
+  joffsets["version"] = xgboost::Json{xgboost::Integer{3}};
+  joffsets["mask"] = xgboost::Json{xgboost::Null{}};
+
+  // Create JSON for string values array interface
+  xgboost::Json jvalues{xgboost::Object{}};
+  jvalues["data"] = make_json_array({
+      xgboost::Json{xgboost::Integer{reinterpret_cast<std::int64_t>(concat.data())}},
+      xgboost::Json{xgboost::Boolean{true}}});
+  jvalues["typestr"] = xgboost::Json{xgboost::String{"|i1"}};
+  jvalues["shape"] = make_json_array({
+      xgboost::Json{xgboost::Integer{static_cast<std::int64_t>(concat.size())}}});
+  jvalues["strides"] = xgboost::Json{xgboost::Null{}};
+  jvalues["version"] = xgboost::Json{xgboost::Integer{3}};
+  jvalues["mask"] = xgboost::Json{xgboost::Null{}};
+
+  // Combine into names object (arrow StringArray format)
+  xgboost::Json jnames{xgboost::Object{}};
+  jnames["offsets"] = std::move(joffsets);
+  jnames["values"] = std::move(jvalues);
+
+  // Create codes array interface
+  auto const* codes_ptr = REAL(codes);
+  auto codes_vec = xgboost::linalg::MakeVec(codes_ptr, n_rows);
+  xgboost::Json jcodes = xgboost::linalg::ArrayInterface(codes_vec);
+
+  // Return [names, codes] tuple for categorical column
+  return make_json_array({std::move(jnames), std::move(jcodes)});
+}
+
+/**
+ * @brief Create JSON array interface from R data.frame with optional categorical support.
+ *
+ * @param R_df          VECSXP list of numeric vectors (codes for factors)
+ * @param factor_levels VECSXP list where each element is STRSXP (factor levels) or NULL
+ * @param buffers       Buffer holder for categorical data (can be nullptr if no categoricals)
+ * @return JSON string for columnar data
+ */
+[[nodiscard]] std::string MakeArrayInterfaceFromRDataFrame(
+    SEXP R_df,
+    SEXP factor_levels,
+    CategoricalBuffers* buffers) {
+  // Pre-allocate buffers to avoid reallocation invalidating pointers
+  if (buffers != nullptr && !Rf_isNull(factor_levels)) {
+    R_xlen_t n_cat_cols = 0;
+    for (R_xlen_t i = 0; i < Rf_xlength(factor_levels); ++i) {
+      if (!Rf_isNull(VECTOR_ELT(factor_levels, i))) {
+        ++n_cat_cols;
+      }
+    }
+    buffers->offsets.reserve(n_cat_cols);
+    buffers->strings.reserve(n_cat_cols);
+  }
   auto make_vec = [&](auto const *ptr, std::size_t len) {
     auto v = xgboost::linalg::MakeVec(ptr, len);
     return xgboost::linalg::ArrayInterface(v);
@@ -182,28 +287,36 @@ SEXP SafeAllocInteger(size_t size, SEXP continuation_token) {
   CHECK_GT(n_features, 0);
   std::size_t len = Rf_xlength(VECTOR_ELT(R_df, 0));
 
-  // The `data.frame` in R actually converts all data into numeric. The other type
-  // handlers here are not used. At the moment they are kept as a reference for when we
-  // can avoid making data copies during transformation.
+  bool has_factor_levels = !Rf_isNull(factor_levels);
+
   for (R_xlen_t i = 0; i < n_features; ++i) {
-    switch (TYPEOF(VECTOR_ELT(R_df, i))) {
-      case INTSXP: {
-        auto const *ptr = INTEGER(VECTOR_ELT(R_df, i));
-        array[i] = make_vec(ptr, len);
-        break;
-      }
-      case REALSXP: {
-        auto const *ptr = REAL(VECTOR_ELT(R_df, i));
-        array[i] = make_vec(ptr, len);
-        break;
-      }
-      case LGLSXP: {
-        auto const *ptr = LOGICAL(VECTOR_ELT(R_df, i));
-        array[i] = make_vec(ptr, len);
-        break;
-      }
-      default: {
-        LOG(FATAL) << "data.frame has unsupported type.";
+    // Check if this column has factor levels (is categorical)
+    SEXP levels_i = has_factor_levels ? VECTOR_ELT(factor_levels, i) : R_NilValue;
+
+    if (!Rf_isNull(levels_i) && buffers != nullptr) {
+      // Categorical column - create [names, codes] tuple
+      array[i] = MakeCategoricalColumnJson(VECTOR_ELT(R_df, i), levels_i, len, buffers);
+    } else {
+      // Numeric column - create simple array interface
+      switch (TYPEOF(VECTOR_ELT(R_df, i))) {
+        case INTSXP: {
+          auto const *ptr = INTEGER(VECTOR_ELT(R_df, i));
+          array[i] = make_vec(ptr, len);
+          break;
+        }
+        case REALSXP: {
+          auto const *ptr = REAL(VECTOR_ELT(R_df, i));
+          array[i] = make_vec(ptr, len);
+          break;
+        }
+        case LGLSXP: {
+          auto const *ptr = LOGICAL(VECTOR_ELT(R_df, i));
+          array[i] = make_vec(ptr, len);
+          break;
+        }
+        default: {
+          LOG(FATAL) << "data.frame has unsupported type.";
+        }
       }
     }
   }
@@ -402,20 +515,36 @@ XGB_DLL SEXP XGDMatrixCreateFromMat_R(SEXP mat, SEXP missing, SEXP n_threads) {
   return ret;
 }
 
-XGB_DLL SEXP XGDMatrixCreateFromDF_R(SEXP df, SEXP missing, SEXP n_threads) {
+XGB_DLL SEXP XGDMatrixCreateFromDF_R(SEXP df, SEXP factor_levels, SEXP missing, SEXP n_threads,
+                                     SEXP ref_categories) {
   SEXP ret = Rf_protect(R_MakeExternalPtr(nullptr, R_NilValue, R_NilValue));
   R_API_BEGIN();
 
   DMatrixHandle handle;
   std::int32_t rc{0};
   {
-    const std::string sinterface = MakeArrayInterfaceFromRDataFrame(df);
+    CategoricalBuffers buffers;
+    const std::string columns_json = MakeArrayInterfaceFromRDataFrame(df, factor_levels, &buffers);
+
+    // Build final JSON, wrapping with ref_categories if provided
+    std::string final_json;
+    if (!Rf_isNull(ref_categories) && R_ExternalPtrAddr(ref_categories) != nullptr) {
+      auto* cat_handle = static_cast<CategoriesHandle>(R_ExternalPtrAddr(ref_categories));
+      std::ostringstream oss;
+      oss << "{\"columns\":" << columns_json
+          << ",\"ref_categories\":" << reinterpret_cast<std::uintptr_t>(cat_handle)
+          << "}";
+      final_json = oss.str();
+    } else {
+      final_json = columns_json;
+    }
+
     xgboost::Json jconfig{xgboost::Object{}};
     jconfig["missing"] = Rf_asReal(missing);
     jconfig["nthread"] = Rf_asInteger(n_threads);
     std::string sconfig = xgboost::Json::Dump(jconfig);
 
-    rc = XGDMatrixCreateFromColumnar(sinterface.c_str(), sconfig.c_str(), &handle);
+    rc = XGDMatrixCreateFromColumnar(final_json.c_str(), sconfig.c_str(), &handle);
   }
 
   CHECK_CALL(rc);
@@ -711,12 +840,13 @@ XGB_DLL SEXP XGProxyDMatrixSetDataCSR_R(SEXP handle, SEXP lst) {
   return R_NilValue;
 }
 
-XGB_DLL SEXP XGProxyDMatrixSetDataColumnar_R(SEXP handle, SEXP lst) {
+XGB_DLL SEXP XGProxyDMatrixSetDataColumnar_R(SEXP handle, SEXP lst, SEXP factor_levels) {
   R_API_BEGIN();
   DMatrixHandle proxy_dmat = R_ExternalPtrAddr(handle);
   int res_code;
   {
-    std::string sinterface = MakeArrayInterfaceFromRDataFrame(lst);
+    CategoricalBuffers buffers;
+    std::string sinterface = MakeArrayInterfaceFromRDataFrame(lst, factor_levels, &buffers);
     res_code = XGProxyDMatrixSetDataColumnar(proxy_dmat, sinterface.c_str());
   }
   CHECK_CALL(res_code);
@@ -845,6 +975,179 @@ XGB_DLL SEXP XGDMatrixCreateFromCallback_R(
 XGB_DLL SEXP XGDMatrixFree_R(SEXP proxy_dmat) {
   _DMatrixFinalizer(proxy_dmat);
   return R_NilValue;
+}
+
+namespace {
+void _CategoriesFinalizer(SEXP ptr) {
+  CategoriesHandle handle = static_cast<CategoriesHandle>(R_ExternalPtrAddr(ptr));
+  if (handle != nullptr) {
+    XGBCategoriesFree(handle);
+    R_ClearExternalPtr(ptr);
+  }
+}
+
+/**
+ * @brief Parse JSON categories array to R list.
+ *
+ * Input JSON format is the arrow export format:
+ * [
+ *   {"offsets": <array_interface>, "values": <array_interface>},  // string categorical
+ *   null,                                                          // numeric column
+ *   ...
+ * ]
+ *
+ * Output: R list where each element is a character vector or NULL
+ */
+SEXP ParseCategoriesToRList(char const* json_str, SEXP continuation_token) {
+  auto json = xgboost::Json::Load(json_str);
+  auto const& arr = xgboost::get<xgboost::Array const>(json);
+
+  R_xlen_t n_cols = arr.size();
+  SEXP result = Rf_protect(Rf_allocVector(VECSXP, n_cols));
+
+  for (R_xlen_t i = 0; i < n_cols; ++i) {
+    if (xgboost::IsA<xgboost::Null>(arr[i])) {
+      // Numeric column - no categories
+      SET_VECTOR_ELT(result, i, R_NilValue);
+    } else if (xgboost::IsA<xgboost::Object>(arr[i])) {
+      // String categorical column - arrow StringArray format
+      auto const& obj = xgboost::get<xgboost::Object const>(arr[i]);
+
+      // Check for "offsets" and "values" keys (arrow StringArray format)
+      auto offsets_it = obj.find("offsets");
+      auto values_it = obj.find("values");
+
+      if (offsets_it != obj.end() && values_it != obj.end()) {
+        // Parse arrow StringArray format
+        // offsets: array interface with int32 offsets
+        // values: array interface with int8 string bytes
+
+        auto const& joffsets = xgboost::get<xgboost::Object const>(offsets_it->second);
+        auto const& jvalues = xgboost::get<xgboost::Object const>(values_it->second);
+
+        // Extract offsets data pointer and shape
+        auto const& offset_data = xgboost::get<xgboost::Array const>(joffsets.at("data"));
+        auto offset_ptr = reinterpret_cast<std::int32_t const*>(
+            xgboost::get<xgboost::Integer const>(offset_data[0]));
+        auto const& offset_shape = xgboost::get<xgboost::Array const>(joffsets.at("shape"));
+        auto n_offsets = xgboost::get<xgboost::Integer const>(offset_shape[0]);
+        auto n_cats = n_offsets - 1;  // number of strings = offsets - 1
+
+        // Extract values data pointer
+        auto const& value_data = xgboost::get<xgboost::Array const>(jvalues.at("data"));
+        auto value_ptr = reinterpret_cast<char const*>(
+            xgboost::get<xgboost::Integer const>(value_data[0]));
+
+        // Create R character vector
+        SEXP r_cats = Rf_protect(Rf_allocVector(STRSXP, n_cats));
+        for (std::int64_t j = 0; j < n_cats; ++j) {
+          auto start = offset_ptr[j];
+          auto end = offset_ptr[j + 1];
+          std::string cat_str(value_ptr + start, end - start);
+          SET_STRING_ELT(r_cats, j, SafeMkChar(cat_str.c_str(), continuation_token));
+        }
+        SET_VECTOR_ELT(result, i, r_cats);
+        Rf_unprotect(1);
+      } else {
+        // Numeric categorical - array interface format
+        // For now, treat as NULL (not supported yet)
+        SET_VECTOR_ELT(result, i, R_NilValue);
+      }
+    } else {
+      // Unknown format - treat as numeric (NULL)
+      SET_VECTOR_ELT(result, i, R_NilValue);
+    }
+  }
+
+  Rf_unprotect(1);
+  return result;
+}
+}  // namespace
+
+XGB_DLL SEXP XGDMatrixGetCategoriesHandle_R(SEXP handle) {
+  SEXP ret = R_NilValue;
+  R_API_BEGIN();
+
+  CategoriesHandle cats_handle = nullptr;
+  CHECK_CALL(XGDMatrixGetCategories(
+      static_cast<DMatrixHandle>(R_ExternalPtrAddr(handle)),
+      nullptr,
+      &cats_handle));
+
+  if (cats_handle != nullptr) {
+    ret = Rf_protect(R_MakeExternalPtr(cats_handle, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ret, _CategoriesFinalizer, TRUE);
+    Rf_unprotect(1);
+  }
+
+  R_API_END();
+  return ret;
+}
+
+XGB_DLL SEXP XGDMatrixGetCategoriesExport_R(SEXP handle) {
+  SEXP continuation_token = Rf_protect(R_MakeUnwindCont());
+  SEXP ret = R_NilValue;
+  R_API_BEGIN();
+
+  CategoriesHandle cats_handle = nullptr;
+  char const* json_out = nullptr;
+  CHECK_CALL(XGDMatrixGetCategoriesExportToArrow(
+      static_cast<DMatrixHandle>(R_ExternalPtrAddr(handle)),
+      nullptr,
+      &cats_handle,
+      &json_out));
+
+  if (cats_handle != nullptr && json_out != nullptr) {
+    ret = ParseCategoriesToRList(json_out, continuation_token);
+    XGBCategoriesFree(cats_handle);
+  }
+
+  R_API_END();
+  Rf_unprotect(1);
+  return ret;
+}
+
+XGB_DLL SEXP XGBoosterGetCategoriesHandle_R(SEXP handle) {
+  SEXP ret = R_NilValue;
+  R_API_BEGIN();
+
+  CategoriesHandle cats_handle = nullptr;
+  CHECK_CALL(XGBoosterGetCategories(
+      static_cast<BoosterHandle>(R_ExternalPtrAddr(handle)),
+      nullptr,
+      &cats_handle));
+
+  if (cats_handle != nullptr) {
+    ret = Rf_protect(R_MakeExternalPtr(cats_handle, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ret, _CategoriesFinalizer, TRUE);
+    Rf_unprotect(1);
+  }
+
+  R_API_END();
+  return ret;
+}
+
+XGB_DLL SEXP XGBoosterGetCategoriesExport_R(SEXP handle) {
+  SEXP continuation_token = Rf_protect(R_MakeUnwindCont());
+  SEXP ret = R_NilValue;
+  R_API_BEGIN();
+
+  CategoriesHandle cats_handle = nullptr;
+  char const* json_out = nullptr;
+  CHECK_CALL(XGBoosterGetCategoriesExportToArrow(
+      static_cast<BoosterHandle>(R_ExternalPtrAddr(handle)),
+      nullptr,
+      &cats_handle,
+      &json_out));
+
+  if (cats_handle != nullptr && json_out != nullptr) {
+    ret = ParseCategoriesToRList(json_out, continuation_token);
+    XGBCategoriesFree(cats_handle);
+  }
+
+  R_API_END();
+  Rf_unprotect(1);
+  return ret;
 }
 
 XGB_DLL SEXP XGGetRNAIntAsDouble() {
@@ -1373,7 +1676,8 @@ SEXP XGBoosterPredictGeneric(SEXP handle, SEXP input_data, SEXP json_config,
           base_margin);
         DMatrixHandle proxy_dmat_handle = proxy_dmat.get()? proxy_dmat->get_handle() : nullptr;
 
-        const std::string df_str = MakeArrayInterfaceFromRDataFrame(input_data);
+        // TODO(categorical): Update prediction path to accept factor_levels for re-coding
+        const std::string df_str = MakeArrayInterfaceFromRDataFrame(input_data, R_NilValue, nullptr);
 
         xgboost::StringView json_str(c_json_config);
         xgboost::Json new_json = xgboost::Json::Load(json_str);
@@ -1428,10 +1732,82 @@ XGB_DLL SEXP XGBoosterPredictFromCSR_R(SEXP handle, SEXP lst, SEXP missing,
                                  PredictionInputType::CSRMatrix, missing, base_margin);
 }
 
-XGB_DLL SEXP XGBoosterPredictFromColumnar_R(SEXP handle, SEXP R_df, SEXP missing,
+XGB_DLL SEXP XGBoosterPredictFromColumnar_R(SEXP handle, SEXP R_df, SEXP factor_levels,
+                                            SEXP ref_categories, SEXP missing,
                                             SEXP json_config, SEXP base_margin) {
-  return XGBoosterPredictGeneric(handle, R_df, json_config,
-                                 PredictionInputType::DataFrame, missing, base_margin);
+  SEXP r_out_result = R_NilValue;
+  R_API_BEGIN();
+
+  // Build the columnar JSON interface
+  CategoricalBuffers buffers;
+  std::string columns_json = MakeArrayInterfaceFromRDataFrame(R_df, factor_levels, &buffers);
+
+  // If we have reference categories, wrap the JSON
+  std::string final_json;
+  if (!Rf_isNull(ref_categories)) {
+    // ref_categories is an external pointer to CategoriesHandle
+    CategoriesHandle cats_handle = static_cast<CategoriesHandle>(R_ExternalPtrAddr(ref_categories));
+    if (cats_handle != nullptr) {
+      // Create wrapper JSON with ref_categories pointer
+      xgboost::Json jwrap{xgboost::Object{}};
+      jwrap["ref_categories"] = xgboost::Integer{reinterpret_cast<std::int64_t>(cats_handle)};
+      jwrap["columns"] = xgboost::Json::Load(columns_json);
+      final_json = xgboost::Json::Dump(jwrap);
+    } else {
+      final_json = columns_json;
+    }
+  } else {
+    final_json = columns_json;
+  }
+
+  // Handle base_margin via proxy DMatrix if needed
+  std::unique_ptr<ProxyDmatrixWrapper> proxy_dmat;
+  if (!Rf_isNull(base_margin)) {
+    proxy_dmat = std::make_unique<ProxyDmatrixWrapper>();
+    std::string base_margin_str = MakeArrayInterfaceFromRVector(base_margin);
+    CHECK_CALL(XGDMatrixSetInfoFromInterface(proxy_dmat->get_handle(),
+                                             "base_margin", base_margin_str.c_str()));
+  }
+  DMatrixHandle proxy_dmat_handle = proxy_dmat.get() ? proxy_dmat->get_handle() : nullptr;
+
+  // Build config JSON
+  const char* c_json_config = CHAR(Rf_asChar(json_config));
+  xgboost::StringView json_str(c_json_config);
+  xgboost::Json new_json = xgboost::Json::Load(json_str);
+  // Add missing value to config
+  new_json["missing"] = Rf_asReal(missing);
+  std::string new_c_json = xgboost::Json::Dump(new_json);
+
+  // Call prediction
+  bst_ulong const* out_shape;
+  bst_ulong out_dim;
+  float const* out_result;
+  int res_code;
+  {
+    res_code = XGBoosterPredictFromColumnar(
+        R_ExternalPtrAddr(handle), final_json.c_str(), new_c_json.c_str(),
+        proxy_dmat_handle, &out_shape, &out_dim, &out_result);
+  }
+  CHECK_CALL(res_code);
+
+  // Copy results to R
+  SEXP r_out_shape = Rf_protect(Rf_allocVector(INTSXP, out_dim));
+  size_t len = 1;
+  int* r_out_shape_ = INTEGER(r_out_shape);
+  for (size_t i = 0; i < out_dim; ++i) {
+    r_out_shape_[out_dim - i - 1] = out_shape[i];
+    len *= out_shape[i];
+  }
+  r_out_result = Rf_protect(Rf_allocVector(REALSXP, len));
+  std::copy(out_result, out_result + len, REAL(r_out_result));
+
+  if (out_dim > 1) {
+    Rf_setAttrib(r_out_result, R_DimSymbol, r_out_shape);
+  }
+
+  R_API_END();
+  Rf_unprotect(2);
+  return r_out_result;
 }
 
 XGB_DLL SEXP XGBoosterLoadModel_R(SEXP handle, SEXP fname) {

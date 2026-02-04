@@ -395,6 +395,10 @@ predict.xgb.Booster <- function(object, newdata, missing = NA, outputmargin = FA
         # note: since here it turns it into a non-data-frame list,
         # needs to keep track of the number of rows it had for later
         n_row <- nrow(newdata)
+        # Capture factor levels before transformation for categorical re-coding
+        df_factor_levels <- lapply(newdata, function(col) {
+          if (is.factor(col)) levels(col) else NULL
+        })
         newdata <- lapply(
           newdata,
           function(x) {
@@ -506,8 +510,11 @@ predict.xgb.Booster <- function(object, newdata, missing = NA, outputmargin = FA
       XGBoosterPredictFromCSR_R, xgb.get.handle(object), csr_data, missing, json_conf, base_margin
     )
   } else if (use_as_df) {
+    # Get reference categories from booster for re-coding
+    ref_categories <- .xgb.get.categories.handle(object)
     arr <- .Call(
-      XGBoosterPredictFromColumnar_R, xgb.get.handle(object), newdata, missing, json_conf, base_margin
+      XGBoosterPredictFromColumnar_R, xgb.get.handle(object), newdata,
+      df_factor_levels, ref_categories, missing, json_conf, base_margin
     )
   }
 
@@ -1334,4 +1341,44 @@ print.xgb.Booster <- function(x, ...) {
   }
 
   return(invisible(x))
+}
+
+#' @export
+xgb.get.categories.xgb.Booster <- function(object) {
+  cats_list <- .Call(XGBoosterGetCategoriesExport_R, xgb.get.handle(object))
+
+  if (is.null(cats_list)) {
+    return(NULL)
+  }
+
+  n <- length(cats_list)
+  feature_names <- xgb.feature_names(object)
+  if (is.null(feature_names)) {
+    feature_names <- paste0("f", seq_len(n) - 1)
+  }
+
+  # Infer feature types from cats_list
+  feature_types <- sapply(cats_list, function(x) {
+    if (is.null(x)) "q" else "c"
+  })
+
+  df <- data.frame(
+    feature_idx = seq_len(n) - 1L,
+    feature_name = feature_names,
+    feature_type = feature_types,
+    stringsAsFactors = FALSE
+  )
+  df$categories <- cats_list
+
+  return(df)
+}
+
+#' @export
+#' @rdname xgb.get.categories.handle
+xgb.get.categories.handle.xgb.Booster <- function(object) {
+  handle <- .Call(XGBoosterGetCategoriesHandle_R, xgb.get.handle(object))
+  if (!is.null(handle)) {
+    class(handle) <- "xgb.CategoriesHandle"
+  }
+  handle
 }

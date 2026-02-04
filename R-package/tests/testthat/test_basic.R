@@ -809,6 +809,41 @@ test_that("Can predict on data.frame objects", {
   expect_equal(pred_mat, unname(pred_df))
 })
 
+test_that("Can predict on data.frame with categorical features", {
+  train_df <- data.frame(
+    color = factor(c("red", "blue", "green", "red", "blue", "green")),
+    size = factor(c("small", "medium", "large", "medium", "small", "large")),
+    value = c(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+  )
+  label <- c(0, 1, 0, 0, 1, 0)
+
+  dm <- xgb.DMatrix(train_df, label = label, nthread = n_threads)
+  model <- xgb.train(
+    params = xgb.params(
+      tree_method = "hist",
+      objective = "binary:logistic",
+      nthread = n_threads
+    ),
+    data = dm,
+    nrounds = 5
+  )
+
+  # Predict with DMatrix and data.frame should match
+  pred_dm <- predict(model, dm)
+  pred_df <- predict(model, train_df)
+  expect_equal(as.vector(pred_dm), as.vector(pred_df))
+
+  # Predict with different factor level ordering should work
+  test_df <- data.frame(
+    color = factor(c("green", "blue"), levels = c("green", "blue", "red")),
+    size = factor(c("large", "small"), levels = c("large", "medium", "small")),
+    value = c(2.5, 3.5)
+  )
+  pred_test <- predict(model, test_df)
+  expect_length(pred_test, 2)
+  expect_true(all(pred_test >= 0 & pred_test <= 1))
+})
+
 test_that("'base_margin' gives the same result in DMatrix as in inplace_predict", {
   data("mtcars")
   y <- mtcars$mpg

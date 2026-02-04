@@ -181,10 +181,16 @@ xgb.DMatrix <- function(
       nthread
     )
   } else if (is.data.frame(data)) {
+    # Check if feature_types is a reference categories handle for training continuation
+    ref_categories <- NULL
+    if (inherits(feature_types, "xgb.CategoriesHandle")) {
+      ref_categories <- feature_types
+      feature_types <- NULL  # Reset for normal processing
+    }
     tmp <- .process.df.for.dmatrix(data, feature_types)
     feature_types <- tmp$feature_types
     handle <- .Call(
-      XGDMatrixCreateFromDF_R, tmp$lst, missing, nthread
+      XGDMatrixCreateFromDF_R, tmp$lst, tmp$factor_levels, missing, nthread, ref_categories
     )
     rm(tmp)
   } else {
@@ -249,7 +255,12 @@ xgb.DMatrix <- function(
     return(col)
   })
 
-  return(list(lst = lst, feature_types = feature_types))
+  # Capture factor levels for categorical re-coding
+  factor_levels <- lapply(df, function(col) {
+    if (is.factor(col)) levels(col) else NULL
+  })
+
+  return(list(lst = lst, feature_types = feature_types, factor_levels = factor_levels))
 }
 
 .set.dmatrix.fields <- function(
@@ -580,7 +591,11 @@ xgb.ProxyDMatrix <- function(proxy_handle, data_iterator, env_keep_alive) {
     lst$feature_types <- tmp$feature_types
     data <- NULL
     env_keep_alive$keepalive <- tmp
-    .Call(XGProxyDMatrixSetDataColumnar_R, proxy_handle, tmp$lst)
+    # Note: For QuantileDMatrix/ExtMemDMatrix, we pass NULL for factor_levels
+    # because the C++ categorical buffers cannot outlive the .Call() scope.
+    # This means categories won't be stored for iterator-based DMatrix creation.
+    # Users should use xgb.DMatrix() for full categorical support.
+    .Call(XGProxyDMatrixSetDataColumnar_R, proxy_handle, tmp$lst, NULL)
   } else if (is.matrix(lst$data)) {
     env_keep_alive$keepalive <- lst
     .Call(XGProxyDMatrixSetDataDense_R, proxy_handle, lst$data)
@@ -1357,4 +1372,113 @@ print.xgb.DMatrix <- function(x, verbose = FALSE, ...) {
   }
   cat("\n")
   invisible(x)
+}
+
+#' Get Categories from XGBoost Object
+#'
+#' Retrieves category information for all features from a DMatrix or Booster.
+#' This function is primarily intended for testing and training continuation.
+#' Getting categories has non-trivial overhead, so it should be used sparingly.
+#'
+#' @param object An xgb.DMatrix or xgb.Booster object
+#' @return A data.frame with columns:
+#'   \itemize{
+#'     \item \code{feature_idx}: Integer, 0-based feature index
+#'     \item \code{feature_name}: Character, feature name
+#'     \item \code{feature_type}: Character, "c" for categorical, "q" for numeric
+#'     \item \code{categories}: List column, character vector of category names
+#'       for categorical features, NULL for numeric features
+#'   }
+#'   Returns NULL if no categorical features exist.
+#' @examples
+#' \dontrun{
+#' df <- data.frame(
+#'   color = factor(c("red", "blue", "red")),
+#'   size = c(1.0, 2.0, 3.0)
+#' )
+#' dm <- xgb.DMatrix(df, label = c(0, 1, 0))
+#' cats <- xgb.get.categories(dm)
+#' # cats$categories[[1]] returns c("blue", "red")
+#' }
+#' @export
+xgb.get.categories <- function(object) {
+  UseMethod("xgb.get.categories")
+}
+
+#' @export
+xgb.get.categories.xgb.DMatrix <- function(object) {
+  cats_list <- .Call(XGDMatrixGetCategoriesExport_R, object)
+
+  if (is.null(cats_list)) {
+    return(NULL)
+  }
+
+  n <- length(cats_list)
+  feature_names <- colnames(object)
+  if (is.null(feature_names)) {
+    feature_names <- paste0("f", seq_len(n) - 1)
+  }
+
+  # Infer feature types from cats_list
+  feature_types <- sapply(cats_list, function(x) {
+    if (is.null(x)) "q" else "c"
+  })
+
+  df <- data.frame(
+    feature_idx = seq_len(n) - 1L,
+    feature_name = feature_names,
+    feature_type = feature_types,
+    stringsAsFactors = FALSE
+  )
+  df$categories <- cats_list
+
+  return(df)
+}
+
+#' Get Categories Handle for Training Continuation
+#'
+#' Gets an opaque handle to the category encoding used in a DMatrix or Booster.
+#' This handle can be passed as \code{feature_types} when creating a new DMatrix
+#' to ensure consistent category encoding for training continuation.
+#'
+#' @param object An \code{xgb.DMatrix} or \code{xgb.Booster} object.
+#' @return An opaque handle of class \code{xgb.CategoriesHandle}, or NULL if no
+#'   categorical features exist.
+#'
+#' @details
+#' When continuing training with new data, it's important that categorical features
+#' use the same encoding as the original training data. This function returns a
+#' handle that captures the category encoding, which can be passed to
+#' \code{xgb.DMatrix} via the \code{feature_types} parameter.
+#'
+#' @examples
+#' \dontrun{
+#' # Train initial model
+#' df1 <- data.frame(color = factor(c("red", "blue")), size = c(1.0, 2.0))
+#' dm1 <- xgb.DMatrix(df1, label = c(0, 1))
+#' bst <- xgb.train(list(objective = "binary:logistic"), dm1, nrounds = 5)
+#'
+#' # Continue training with new data using same category encoding
+#' cats <- xgb.get.categories.handle(bst)
+#' df2 <- data.frame(color = factor(c("green", "red")), size = c(3.0, 4.0))
+#' dm2 <- xgb.DMatrix(df2, label = c(1, 0), feature_types = cats)
+#' bst <- xgb.train(list(objective = "binary:logistic"), dm2, nrounds = 5, xgb_model = bst)
+#' }
+#' @export
+xgb.get.categories.handle <- function(object) {
+  UseMethod("xgb.get.categories.handle")
+}
+
+#' @export
+xgb.get.categories.handle.xgb.DMatrix <- function(object) {
+  handle <- .Call(XGDMatrixGetCategoriesHandle_R, object)
+  if (!is.null(handle)) {
+    class(handle) <- "xgb.CategoriesHandle"
+  }
+  handle
+}
+
+# Internal function (kept for backward compatibility)
+.xgb.get.categories.handle <- function(object) {
+  xgb.get.categories.handle(object)
 }

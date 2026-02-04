@@ -82,7 +82,8 @@ XGB_DLL SEXP XGDMatrixCreateFromMat_R(SEXP mat,
  * @param n_threads Number of threads used to construct DMatrix from dense matrix.
  * @return created dmatrix
  */
-XGB_DLL SEXP XGDMatrixCreateFromDF_R(SEXP df, SEXP missing, SEXP n_threads);
+XGB_DLL SEXP XGDMatrixCreateFromDF_R(SEXP df, SEXP factor_levels, SEXP missing, SEXP n_threads,
+                                     SEXP ref_categories);
 
 /*!
  * \brief create a matrix content from CSC format
@@ -194,7 +195,7 @@ XGB_DLL SEXP XGProxyDMatrixSetDataCSR_R(SEXP handle, SEXP lst);
  * \param handle R externalptr pointing to a ProxyDMatrix
  * \param lst R list or data.frame object containing its columns as numeric vectors
  */
-XGB_DLL SEXP XGProxyDMatrixSetDataColumnar_R(SEXP handle, SEXP lst);
+XGB_DLL SEXP XGProxyDMatrixSetDataColumnar_R(SEXP handle, SEXP lst, SEXP factor_levels);
 
 /*!
  * \brief Create a DMatrix from a DataIter with callbacks
@@ -237,6 +238,34 @@ XGB_DLL SEXP XGQuantileDMatrixCreateFromCallback_R(
  * \return NULL
  */
 XGB_DLL SEXP XGDMatrixFree_R(SEXP proxy_dmat);
+
+/*!
+ * \brief Get opaque categories handle from DMatrix for re-coding.
+ * \param handle R externalptr containing a DMatrix
+ * \return R externalptr containing CategoriesHandle, or R_NilValue if no categories
+ */
+XGB_DLL SEXP XGDMatrixGetCategoriesHandle_R(SEXP handle);
+
+/*!
+ * \brief Get categories from DMatrix as R list.
+ * \param handle R externalptr containing a DMatrix
+ * \return R list of character vectors (one per feature), or R_NilValue if no categories
+ */
+XGB_DLL SEXP XGDMatrixGetCategoriesExport_R(SEXP handle);
+
+/*!
+ * \brief Get opaque categories handle from Booster for re-coding.
+ * \param handle R externalptr containing a Booster
+ * \return R externalptr containing CategoriesHandle, or R_NilValue if no categories
+ */
+XGB_DLL SEXP XGBoosterGetCategoriesHandle_R(SEXP handle);
+
+/*!
+ * \brief Get categories from Booster as R list.
+ * \param handle R externalptr containing a Booster
+ * \return R list of character vectors (one per feature), or R_NilValue if no categories
+ */
+XGB_DLL SEXP XGBoosterGetCategoriesExport_R(SEXP handle);
 
 /*!
  * \brief Get the value that represents missingness in R integers as a numeric non-missing value.
@@ -415,7 +444,8 @@ XGB_DLL SEXP XGBoosterPredictFromCSR_R(SEXP handle, SEXP lst, SEXP missing,
  *
  * \return A list containing 2 vectors, first one for shape while second one for prediction result.
  */
-XGB_DLL SEXP XGBoosterPredictFromColumnar_R(SEXP handle, SEXP R_df, SEXP missing,
+XGB_DLL SEXP XGBoosterPredictFromColumnar_R(SEXP handle, SEXP R_df, SEXP factor_levels,
+                                            SEXP ref_categories, SEXP missing,
                                             SEXP json_config, SEXP base_margin);
 
 /*!

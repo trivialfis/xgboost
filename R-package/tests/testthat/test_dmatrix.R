@@ -781,3 +781,155 @@ test_that("xgb.DMatrix: can read CSV", {
     matrix(c(2, 3, 3, 2), nrow = 2, byrow = TRUE)
   )
 })
+
+test_that("xgb.DMatrix: categorical features from data.frame", {
+  df <- data.frame(
+    color = factor(c("red", "blue", "green", "red", "blue")),
+    size = c(1.0, 2.0, 3.0, 4.0, 5.0),
+    shape = factor(c("circle", "square", "circle", "triangle", "square"))
+  )
+  label <- c(0, 1, 0, 1, 0)
+
+  dm <- xgb.DMatrix(df, label = label, nthread = n_threads)
+  expect_s3_class(dm, "xgb.DMatrix")
+  expect_equal(nrow(dm), 5)
+  expect_equal(ncol(dm), 3)
+
+  # Check feature types
+  ft <- getinfo(dm, "feature_type")
+  expect_equal(ft, c("c", "float", "c"))
+
+  # Check categories are stored
+
+  cats <- xgb.get.categories(dm)
+  expect_true(is.data.frame(cats))
+  expect_equal(nrow(cats), 3)
+
+  # Categories are sorted alphabetically
+  expect_equal(cats$categories[[1]], c("blue", "green", "red"))
+  expect_null(cats$categories[[2]])  # numeric column
+  expect_equal(cats$categories[[3]], c("circle", "square", "triangle"))
+
+  # Feature types in categories df
+  expect_equal(cats$feature_type, c("c", "q", "c"))
+})
+
+test_that("xgb.DMatrix: training with categorical features", {
+  df <- data.frame(
+    color = factor(c("red", "blue", "green", "red", "blue", "green")),
+    value = c(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+  )
+  label <- c(0, 1, 0, 0, 1, 0)
+
+  dm <- xgb.DMatrix(df, label = label, nthread = n_threads)
+  params <- list(
+    objective = "binary:logistic",
+    max_depth = 2,
+    nthread = n_threads
+  )
+  bst <- xgb.train(params, dm, nrounds = 5, verbose = 0)
+  expect_s3_class(bst, "xgb.Booster")
+
+  # Categories should be transferred to booster
+  cats_bst <- xgb.get.categories(bst)
+  expect_true(is.data.frame(cats_bst))
+  expect_equal(cats_bst$categories[[1]], c("blue", "green", "red"))
+
+  # Predictions should work
+  pred <- predict(bst, dm)
+  expect_length(pred, 6)
+  expect_true(all(pred >= 0 & pred <= 1))
+})
+
+test_that("xgb.DMatrix: prediction with data.frame re-coding", {
+  # Train with one factor level order
+  train_df <- data.frame(
+    color = factor(c("red", "blue", "green", "red")),
+    value = c(1.0, 2.0, 3.0, 4.0)
+  )
+  train_label <- c(0, 1, 0, 0)
+
+  dm <- xgb.DMatrix(train_df, label = train_label, nthread = n_threads)
+  params <- list(
+    objective = "binary:logistic",
+    max_depth = 2,
+    nthread = n_threads
+  )
+  bst <- xgb.train(params, dm, nrounds = 5, verbose = 0)
+
+  # Predict with DMatrix
+  pred_dm <- predict(bst, dm)
+
+  # Predict with data.frame (same data)
+  pred_df <- predict(bst, train_df)
+
+  # Should produce same results
+  expect_equal(as.vector(pred_dm), as.vector(pred_df))
+
+  # Test with different factor order
+  test_df <- data.frame(
+    color = factor(c("green", "blue"), levels = c("green", "blue")),
+    value = c(2.5, 3.5)
+  )
+
+  # Prediction should work with automatic re-coding
+  pred_test <- predict(bst, test_df)
+  expect_length(pred_test, 2)
+  expect_true(all(pred_test >= 0 & pred_test <= 1))
+})
+
+test_that("xgb.DMatrix: categories handle for training continuation", {
+  # Train initial model
+  train_df <- data.frame(
+    color = factor(c("red", "blue", "green", "red")),
+    value = c(1.0, 2.0, 3.0, 4.0)
+  )
+  train_label <- c(0, 1, 0, 0)
+
+  dm1 <- xgb.DMatrix(train_df, label = train_label, nthread = n_threads)
+  params <- list(
+    objective = "binary:logistic",
+    max_depth = 2,
+    nthread = n_threads
+  )
+  bst <- xgb.train(params, dm1, nrounds = 5, verbose = 0)
+
+  # Get categories handle
+  cats_handle <- xgb.get.categories.handle(bst)
+  expect_true(inherits(cats_handle, "xgb.CategoriesHandle"))
+
+  # Create new DMatrix with reference categories
+  new_df <- data.frame(
+    color = factor(c("green", "blue"), levels = c("green", "blue")),
+    value = c(5.0, 6.0)
+  )
+  new_label <- c(1, 0)
+
+  dm2 <- xgb.DMatrix(new_df, label = new_label, feature_types = cats_handle, nthread = n_threads)
+  expect_s3_class(dm2, "xgb.DMatrix")
+
+  # Continue training
+  bst2 <- xgb.train(params, dm2, nrounds = 3, verbose = 0, xgb_model = bst)
+  expect_s3_class(bst2, "xgb.Booster")
+
+  # Categories should be preserved
+  cats <- xgb.get.categories(bst2)
+  expect_equal(cats$categories[[1]], c("blue", "green", "red"))
+})
+
+test_that("xgb.DMatrix: xgb.get.categories returns NULL for non-categorical", {
+  # Matrix input (no categorical features)
+  x <- matrix(1:10, nrow = 5)
+  dm <- xgb.DMatrix(x, nthread = n_threads)
+  cats <- xgb.get.categories(dm)
+  expect_null(cats)
+
+  # Data frame with only numeric columns also returns NULL
+  df <- data.frame(
+    a = c(1.0, 2.0, 3.0),
+    b = c(4.0, 5.0, 6.0)
+  )
+  dm2 <- xgb.DMatrix(df, nthread = n_threads)
+  cats2 <- xgb.get.categories(dm2)
+  expect_null(cats2)
+})

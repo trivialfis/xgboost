@@ -40,7 +40,7 @@ extern SEXP XGBoosterUnserializeFromBuffer_R(SEXP handle, SEXP raw);
 extern SEXP XGBoosterPredictFromDMatrix_R(SEXP, SEXP, SEXP);
 extern SEXP XGBoosterPredictFromDense_R(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP XGBoosterPredictFromCSR_R(SEXP, SEXP, SEXP, SEXP, SEXP);
-extern SEXP XGBoosterPredictFromColumnar_R(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP XGBoosterPredictFromColumnar_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP XGBoosterSaveModel_R(SEXP, SEXP);
 extern SEXP XGBoosterSetAttr_R(SEXP, SEXP, SEXP);
 extern SEXP XGBoosterSetParam_R(SEXP, SEXP, SEXP);
@@ -54,17 +54,21 @@ extern SEXP XGDMatrixCreateFromURI_R(SEXP, SEXP, SEXP);
 extern SEXP XGDMatrixCreateFromMat_R(SEXP, SEXP, SEXP);
 extern SEXP XGDMatrixGetFloatInfo_R(SEXP, SEXP);
 extern SEXP XGDMatrixGetUIntInfo_R(SEXP, SEXP);
-extern SEXP XGDMatrixCreateFromDF_R(SEXP, SEXP, SEXP);
+extern SEXP XGDMatrixCreateFromDF_R(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP XGDMatrixGetStrFeatureInfo_R(SEXP, SEXP);
 extern SEXP XGDMatrixNumCol_R(SEXP);
 extern SEXP XGDMatrixNumRow_R(SEXP);
 extern SEXP XGProxyDMatrixCreate_R(void);
 extern SEXP XGProxyDMatrixSetDataDense_R(SEXP, SEXP);
 extern SEXP XGProxyDMatrixSetDataCSR_R(SEXP, SEXP);
-extern SEXP XGProxyDMatrixSetDataColumnar_R(SEXP, SEXP);
+extern SEXP XGProxyDMatrixSetDataColumnar_R(SEXP, SEXP, SEXP);
 extern SEXP XGDMatrixCreateFromCallback_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP XGQuantileDMatrixCreateFromCallback_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP XGDMatrixFree_R(SEXP);
+extern SEXP XGDMatrixGetCategoriesHandle_R(SEXP);
+extern SEXP XGDMatrixGetCategoriesExport_R(SEXP);
+extern SEXP XGBoosterGetCategoriesHandle_R(SEXP);
+extern SEXP XGBoosterGetCategoriesExport_R(SEXP);
 extern SEXP XGGetRNAIntAsDouble(void);
 extern SEXP XGDMatrixGetQuantileCut_R(SEXP);
 extern SEXP XGDMatrixNumNonMissing_R(SEXP);
@@ -104,7 +108,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"XGBoosterPredictFromDMatrix_R", (DL_FUNC) &XGBoosterPredictFromDMatrix_R, 3},
   {"XGBoosterPredictFromDense_R", (DL_FUNC) &XGBoosterPredictFromDense_R, 5},
   {"XGBoosterPredictFromCSR_R",   (DL_FUNC) &XGBoosterPredictFromCSR_R,   5},
-  {"XGBoosterPredictFromColumnar_R", (DL_FUNC) &XGBoosterPredictFromColumnar_R, 5},
+  {"XGBoosterPredictFromColumnar_R", (DL_FUNC) &XGBoosterPredictFromColumnar_R, 7},
   {"XGBoosterSaveModel_R",        (DL_FUNC) &XGBoosterSaveModel_R,        2},
   {"XGBoosterSetAttr_R",          (DL_FUNC) &XGBoosterSetAttr_R,          3},
   {"XGBoosterSetParam_R",         (DL_FUNC) &XGBoosterSetParam_R,         3},
@@ -118,17 +122,21 @@ static const R_CallMethodDef CallEntries[] = {
   {"XGDMatrixCreateFromMat_R",    (DL_FUNC) &XGDMatrixCreateFromMat_R,    3},
   {"XGDMatrixGetFloatInfo_R",     (DL_FUNC) &XGDMatrixGetFloatInfo_R,     2},
   {"XGDMatrixGetUIntInfo_R",      (DL_FUNC) &XGDMatrixGetUIntInfo_R,      2},
-  {"XGDMatrixCreateFromDF_R",     (DL_FUNC) &XGDMatrixCreateFromDF_R,     3},
+  {"XGDMatrixCreateFromDF_R",     (DL_FUNC) &XGDMatrixCreateFromDF_R,     5},
   {"XGDMatrixGetStrFeatureInfo_R", (DL_FUNC) &XGDMatrixGetStrFeatureInfo_R, 2},
   {"XGDMatrixNumCol_R",           (DL_FUNC) &XGDMatrixNumCol_R,           1},
   {"XGDMatrixNumRow_R",           (DL_FUNC) &XGDMatrixNumRow_R,           1},
   {"XGProxyDMatrixCreate_R",      (DL_FUNC) &XGProxyDMatrixCreate_R,      0},
   {"XGProxyDMatrixSetDataDense_R", (DL_FUNC) &XGProxyDMatrixSetDataDense_R, 2},
   {"XGProxyDMatrixSetDataCSR_R",  (DL_FUNC) &XGProxyDMatrixSetDataCSR_R,  2},
-  {"XGProxyDMatrixSetDataColumnar_R", (DL_FUNC) &XGProxyDMatrixSetDataColumnar_R, 2},
+  {"XGProxyDMatrixSetDataColumnar_R", (DL_FUNC) &XGProxyDMatrixSetDataColumnar_R, 3},
   {"XGDMatrixCreateFromCallback_R", (DL_FUNC) &XGDMatrixCreateFromCallback_R, 7},
   {"XGQuantileDMatrixCreateFromCallback_R", (DL_FUNC) &XGQuantileDMatrixCreateFromCallback_R, 8},
   {"XGDMatrixFree_R",             (DL_FUNC) &XGDMatrixFree_R,             1},
+  {"XGDMatrixGetCategoriesHandle_R", (DL_FUNC) &XGDMatrixGetCategoriesHandle_R, 1},
+  {"XGDMatrixGetCategoriesExport_R", (DL_FUNC) &XGDMatrixGetCategoriesExport_R, 1},
+  {"XGBoosterGetCategoriesHandle_R", (DL_FUNC) &XGBoosterGetCategoriesHandle_R, 1},
+  {"XGBoosterGetCategoriesExport_R", (DL_FUNC) &XGBoosterGetCategoriesExport_R, 1},
   {"XGGetRNAIntAsDouble",         (DL_FUNC) &XGGetRNAIntAsDouble,         0},
   {"XGDMatrixGetQuantileCut_R",   (DL_FUNC) &XGDMatrixGetQuantileCut_R,   1},
   {"XGDMatrixNumNonMissing_R",    (DL_FUNC) &XGDMatrixNumNonMissing_R,    1},
