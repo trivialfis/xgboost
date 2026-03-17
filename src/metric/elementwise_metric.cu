@@ -120,6 +120,7 @@ struct EvalRowRMSLE {
   char const* Name() const { return "rmsle"; }
 
   XGBOOST_DEVICE bst_float EvalRow(bst_float label, bst_float pred) const {
+    pred = std::max(pred, -1.0f + 1e-6f);
     bst_float diff = std::log1p(label) - std::log1p(pred);
     return diff * diff;
   }

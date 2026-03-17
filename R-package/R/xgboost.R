@@ -923,7 +923,7 @@ check.early.stopping.rounds <- function(early_stopping_rounds, eval_set) {
 #'
 #' Supported values are:
 #' - `"reg:squarederror"`: regression with squared loss.
-#' - `"reg:squaredlogerror"`: regression with squared log loss \eqn{\frac{1}{2}[log(pred + 1) - log(label + 1)]^2}.  All input labels are required to be greater than -1.  Also, see metric `rmsle` for possible issue  with this objective.
+#' - `"reg:squaredlogerror"`: regression with squared log loss \eqn{\frac{1}{2}[log(pred + 1) - log(label + 1)]^2}.  All input labels are required to be greater than -1.
 #' - `"reg:pseudohubererror"`: regression with Pseudo Huber loss, a twice differentiable alternative to absolute loss.
 #' - `"reg:absoluteerror"`: Regression with L1 error. When tree model is used, leaf value is refreshed after tree construction. If used in distributed training, the leaf value is calculated as the mean value from all workers, which is not guaranteed to be optimal.
 #' - `"reg:quantileerror"`: Quantile loss, also known as "pinball loss". See later sections for its parameter and [Quantile Regression](https://xgboost.readthedocs.io/en/latest/python/examples/quantile_regression.html#sphx-glr-python-examples-quantile-regression-py) for a worked example.

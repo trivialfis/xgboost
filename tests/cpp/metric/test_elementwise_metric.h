@@ -88,6 +88,9 @@ inline void VerifyRMSLE(DataSplitMode data_split_mode, DeviceOrd device) {
   EXPECT_NEAR(GetMetricEval(metric, {0.1f, 0.2f, 0.4f, 0.8f, 1.6f}, {1.0f, 1.0f, 1.0f, 1.0f, 1.0f},
                             {0, 1, 2, 9, 8}, {}, data_split_mode),
               0.2415f, 1e-4);
+  auto clipped = GetMetricEval(metric, {-1.0f + 1e-6f}, {1.0f}, {}, {}, data_split_mode);
+  EXPECT_NEAR(GetMetricEval(metric, {-1.0f}, {1.0f}, {}, {}, data_split_mode), clipped, 1e-5);
+  EXPECT_NEAR(GetMetricEval(metric, {-2.0f}, {1.0f}, {}, {}, data_split_mode), clipped, 1e-5);
   delete metric;
 
   CheckDeterministicMetricElementWise(StringView{"rmsle"}, device.ordinal);
