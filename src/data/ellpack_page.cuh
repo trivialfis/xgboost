@@ -6,7 +6,9 @@
 
 #include <thrust/binary_search.h>
 
-#include <limits>  // for numeric_limits
+#include <limits>   // for numeric_limits
+#include <memory>   // for unique_ptr
+#include <utility>  // for pair
 
 #include "../common/categorical.h"
 #include "../common/compressed_iterator.h"
@@ -241,6 +243,26 @@ class EllpackPageImpl {
    * @returns The number of elements copied.
    */
   bst_idx_t Copy(Context const* ctx, EllpackPageImpl const* page, bst_idx_t offset);
+
+  /**
+   * @brief Create a new page containing exactly the rows in `ranges`.
+   *
+   * The `ranges` are **page-local** half-open row intervals `[begin, end)` into this page;
+   * the selected rows are concatenated in order into a fresh page and rebased so that its
+   * `base_rowid` equals `out_base`. The new page shares this page's `cuts_` and preserves
+   * `row_stride` / `n_symbols` / `is_dense`, so the per-row bins are bit-identical to the
+   * source rows. This is the (copy-based) physical-slice fallback used for non-contiguous
+   * fold splits; the contiguous fused-CV path performs zero-copy logical slicing via the
+   * row partitioner instead.
+   *
+   * Invariants relied upon: the destination buffer is zero-initialized by
+   * `InitCompressedData`, `AtomicWriteSymbol` is an atomic-OR so each destination symbol is
+   * written exactly once (the ranges are disjoint and concatenated), and the shared cuts
+   * guarantee `row_stride` / `NumSymbols` parity with the source.
+   */
+  [[nodiscard]] std::unique_ptr<EllpackPageImpl> Slice(
+      Context const* ctx, common::Span<std::pair<bst_idx_t, bst_idx_t> const> ranges,
+      bst_idx_t out_base) const;
 
   /** @return Number of instances in the page. */
   [[nodiscard]] bst_idx_t Size() const;

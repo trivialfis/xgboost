@@ -288,6 +288,17 @@ class RowPartitioner {
    */
   RowPartitioner() = default;
   void Reset(Context const* ctx, bst_idx_t n_samples, bst_idx_t base_rowid);
+  /**
+   * @brief Seed the partitioner from an explicit list of **global** row indices.
+   *
+   * Unlike the contiguous `Reset`, the row set need not be `[base_rowid, base_rowid +
+   * n_samples)`; it can be any subset (e.g. a cross-validation fold's training rows over a
+   * shared, un-copied Ellpack page). The root segment covers all the provided rows.
+   *
+   * @param ridx Device span of global row indices. Values are cast to the 32-bit partitioner
+   *             index type; a `CHECK` guards against indices that do not fit.
+   */
+  void Reset(Context const* ctx, common::Span<bst_idx_t const> ridx);
 
   ~RowPartitioner();
   RowPartitioner(const RowPartitioner&) = delete;
@@ -472,6 +483,33 @@ class RowPartitionerBatches {
       partitioners_[k]->Reset(ctx, n_samples, base_ridx);
       CHECK_LE(n_samples, std::numeric_limits<cuda_impl::RowIndexT>::max());
       n_max_samples = std::max(n_samples, n_max_samples);
+    }
+    this->ridx_tmp_.resize(n_max_samples);
+  }
+
+  /**
+   * @brief Seed each batch partitioner from an explicit per-batch list of global row
+   *        indices (used by the fused cross-validation path for zero-copy logical slicing).
+   *
+   * The shared scratch `ridx_tmp_` is sized to the **largest per-batch training-row count**,
+   * not the full batch sizes, since only a fold's training rows are partitioned.
+   *
+   * @param batch_ridx One device span of global row indices per source batch.
+   */
+  void Reset(Context const* ctx, std::vector<common::Span<bst_idx_t const>> const& batch_ridx) {
+    std::size_t n_batches = batch_ridx.size();
+    CHECK_GE(n_batches, 1);
+    if (partitioners_.size() != n_batches) {
+      partitioners_.clear();
+    }
+
+    bst_idx_t n_max_samples = 0;
+    for (std::size_t k = 0; k < n_batches; ++k) {
+      if (partitioners_.size() != n_batches) {
+        partitioners_.emplace_back(std::make_unique<RowPartitioner>());
+      }
+      partitioners_[k]->Reset(ctx, batch_ridx[k]);
+      n_max_samples = std::max(static_cast<bst_idx_t>(batch_ridx[k].size()), n_max_samples);
     }
     this->ridx_tmp_.resize(n_max_samples);
   }

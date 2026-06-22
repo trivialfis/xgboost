@@ -3,7 +3,10 @@
  */
 #include <xgboost/base.h>
 
+#include <cstdint>  // for uint32_t
 #include <utility>
+#include <variant>  // for visit
+#include <vector>   // for vector
 
 #include "../../../src/common/categorical.h"          // for AsCat
 #include "../../../src/common/compressed_iterator.h"  // for CompressedByteT
@@ -14,6 +17,7 @@
 #include "../../../src/data/ellpack_page.h"
 #include "../../../src/data/gradient_index.h"  // for GHistIndexMatrix
 #include "../../../src/tree/param.h"           // for TrainParam
+#include "../filesystem.h"                     // for TemporaryDirectory
 #include "../helpers.h"
 #include "../histogram_helpers.h"
 #include "gtest/gtest.h"
@@ -445,4 +449,89 @@ TEST(EllpackPage, IsDense) {
   test(0.0);
   test(0.5);
 }
+
+namespace {
+// Read all gidx symbols (row-major, row_stride per row) into a host vector.
+std::vector<std::uint32_t> ReadSymbols(Context const* ctx, EllpackPageImpl const* page) {
+  std::vector<common::CompressedByteT> buf;
+  auto acc_var = page->GetHostEllpack(ctx, &buf);
+  std::size_t n = static_cast<std::size_t>(page->n_rows) * page->info.row_stride;
+  std::vector<std::uint32_t> out(n);
+  std::visit(
+      [&](auto&& acc) {
+        for (std::size_t i = 0; i < n; ++i) {
+          out[i] = acc.gidx_iter[i];
+        }
+      },
+      acc_var);
+  return out;
+}
+
+void CheckSlice(Context const* ctx, EllpackPageImpl const* src,
+                std::vector<std::pair<bst_idx_t, bst_idx_t>> const& ranges, bst_idx_t out_base) {
+  auto src_sym = ReadSymbols(ctx, src);
+  auto sliced =
+      src->Slice(ctx, common::Span<std::pair<bst_idx_t, bst_idx_t> const>{ranges.data(),
+                                                                          ranges.size()},
+                 out_base);
+  ASSERT_EQ(sliced->base_rowid, out_base);
+  ASSERT_EQ(sliced->info.row_stride, src->info.row_stride);
+  ASSERT_EQ(sliced->NumSymbols(), src->NumSymbols());
+  ASSERT_EQ(sliced->IsDense(), src->IsDense());
+  bst_idx_t total = 0;
+  for (auto const& r : ranges) {
+    total += r.second - r.first;
+  }
+  ASSERT_EQ(sliced->n_rows, total);
+
+  auto dst_sym = ReadSymbols(ctx, sliced.get());
+  auto rs = src->info.row_stride;
+  bst_idx_t dst_row = 0;
+  for (auto const& r : ranges) {
+    for (bst_idx_t row = r.first; row < r.second; ++row, ++dst_row) {
+      for (bst_idx_t f = 0; f < rs; ++f) {
+        ASSERT_EQ(dst_sym[dst_row * rs + f], src_sym[row * rs + f])
+            << "row " << row << " feature " << f;
+      }
+    }
+  }
+}
+}  // anonymous namespace
+
+TEST(EllpackPage, SliceInMemory) {
+  auto ctx = MakeCUDACtx(0);
+  for (float sparsity : {0.0f, 0.2f, 0.6f}) {
+    auto page = BuildEllpackPage(&ctx, 64, 8, sparsity);
+    CheckSlice(&ctx, page.get(), {{0, 64}}, 0);            // full
+    CheckSlice(&ctx, page.get(), {{10, 30}}, 0);           // single range
+    CheckSlice(&ctx, page.get(), {{0, 10}, {40, 64}}, 5);  // two runs, rebased
+    CheckSlice(&ctx, page.get(), {}, 0);                   // empty
+  }
+}
+
+namespace {
+void TestSliceExtMem(bool on_host) {
+  auto ctx = MakeCUDACtx(0);
+  common::TemporaryDirectory tmpdir;
+  auto p_fmat = RandomDataGenerator{256, 16, 0.0f}
+                    .Batches(4)
+                    .Bins(64)
+                    .Device(ctx.Device())
+                    .OnHost(on_host)
+                    .GenerateExtMemQuantileDMatrix(tmpdir.Str() + "/cache", false);
+  auto param = BatchParam{64, tree::TrainParam::DftSparseThreshold()};
+  for (auto const& page : p_fmat->GetBatches<EllpackPage>(&ctx, param)) {
+    auto impl = page.Impl();
+    bst_idx_t n = impl->n_rows;
+    ASSERT_GE(n, 4);
+    CheckSlice(&ctx, impl, {{0, n}}, 0);
+    CheckSlice(&ctx, impl, {{1, 3}, {n - 2, n}}, 100);
+    break;  // The first page is sufficient to exercise the slice path.
+  }
+}
+}  // anonymous namespace
+
+TEST(EllpackPage, SliceExtMemDisk) { TestSliceExtMem(false); }
+
+TEST(EllpackPage, SliceExtMemHost) { TestSliceExtMem(true); }
 }  // namespace xgboost

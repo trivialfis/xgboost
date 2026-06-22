@@ -34,6 +34,18 @@ class ExtMemQuantileDMatrix : public QuantileDMatrix {
 
   [[nodiscard]] std::int32_t NumBatches() const override { return n_batches_; }
 
+  /**
+   * @brief Number of times an Ellpack page has been fetched from the page source.
+   *
+   * Exposed for tests (e.g. the fused cross-validation page-reuse check). Returns 0 if the
+   * Ellpack source has not been initialized.
+   */
+  [[nodiscard]] bst_idx_t EllpackFetchCount() const {
+    return std::visit(
+        [](auto &&source) -> bst_idx_t { return source ? source->FetchCount() : bst_idx_t{0}; },
+        ellpack_page_source_);
+  }
+
  private:
   void InitFromCPU(
       Context const *ctx,

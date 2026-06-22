@@ -2,6 +2,7 @@
  * Copyright 2019-2025, XGBoost Contributors
  */
 #include <gtest/gtest.h>
+#include <thrust/copy.h>    // for copy
 #include <thrust/device_vector.h>
 #include <thrust/sort.h>    // for sort
 #include <thrust/unique.h>  // for unique
@@ -56,6 +57,42 @@ void TestUpdatePositionBatch() {
 }
 
 TEST(RowPartitioner, Batch) { TestUpdatePositionBatch(); }
+
+// Seed a partitioner from an explicit, non-contiguous global row-index list (two runs),
+// emulating a cross-validation fold's training rows over a shared page, then split it.
+void TestResetFromRowList() {
+  auto ctx = MakeCUDACtx(0);
+  // Two runs: [0, 3) and [7, 10); skips the validation block [3, 7).
+  std::vector<bst_idx_t> h_ridx{0, 1, 2, 7, 8, 9};
+  thrust::device_vector<bst_idx_t> d_ridx = h_ridx;
+
+  RowPartitioner rp;
+  rp.Reset(&ctx, common::Span<bst_idx_t const>{d_ridx.data().get(), d_ridx.size()});
+
+  auto rows = rp.GetRowsHost(0);
+  std::vector<RowPartitioner::RowIndexT> expected{0, 1, 2, 7, 8, 9};
+  EXPECT_EQ(rows, expected);
+
+  std::vector<int> extra_data = {0};
+  dh::DeviceUVector<cuda_impl::RowIndexT> ridx_tmp(h_ridx.size());
+  // Send rows with global index > 4 left (the {7,8,9} run), the rest right.
+  rp.UpdatePositionBatch(
+      &ctx, {0}, {1}, {2}, extra_data, dh::ToSpan(ridx_tmp),
+      [=] __device__(RowPartitioner::RowIndexT ridx, int, int) { return ridx > 4; });
+
+  auto left = rp.GetRowsHost(1);
+  auto right = rp.GetRowsHost(2);
+  EXPECT_EQ(left.size(), 3);
+  EXPECT_EQ(right.size(), 3);
+  for (auto r : left) {
+    EXPECT_GT(r, 4);
+  }
+  for (auto r : right) {
+    EXPECT_LT(r, 5);
+  }
+}
+
+TEST(RowPartitioner, ResetFromRowList) { TestResetFromRowList(); }
 
 void TestSortPositionBatch(const std::vector<int>& ridx_in, const std::vector<Segment>& segments) {
   auto ctx = MakeCUDACtx(0);

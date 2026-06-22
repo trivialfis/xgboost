@@ -10,7 +10,8 @@
 #include <algorithm>          // for copy
 #include <cuda/std/iterator>  // for distance
 #include <limits>             // for numeric_limits
-#include <utility>            // for move
+#include <memory>             // for unique_ptr
+#include <utility>            // for move, pair
 #include <vector>             // for vector
 
 #include "../common/algorithm.cuh"          // for InclusiveScan
@@ -522,6 +523,64 @@ struct CopyPage {
     cbw.AtomicWriteSymbol(dst_data_d, src_iterator_d[element_id], element_id + offset);
   }
 };
+
+// A functor that copies a contiguous window of symbols from a source page into a
+// destination page, mapping source element `src_offset + i` to destination element
+// `dst_offset + i`. Used by `EllpackPageImpl::Slice` to gather row windows.
+template <typename IterT>
+struct CopyRangePage {
+  common::CompressedBufferWriter cbw;
+  common::CompressedByteT* dst_data_d;
+  IterT src_iterator_d;
+  std::size_t src_offset;
+  std::size_t dst_offset;
+
+  CopyRangePage(EllpackPageImpl* dst, EllpackAccessorImpl<IterT> src, std::size_t src_offset,
+                std::size_t dst_offset)
+      : cbw{dst->NumSymbols()},
+        dst_data_d{dst->gidx_buffer.data()},
+        src_iterator_d{src.gidx_iter},
+        src_offset{src_offset},
+        dst_offset{dst_offset} {}
+
+  __device__ void operator()(std::size_t i) {
+    cbw.AtomicWriteSymbol(dst_data_d, src_iterator_d[src_offset + i], dst_offset + i);
+  }
+};
+
+std::unique_ptr<EllpackPageImpl> EllpackPageImpl::Slice(
+    Context const* ctx, common::Span<std::pair<bst_idx_t, bst_idx_t> const> ranges,
+    bst_idx_t out_base) const {
+  auto row_stride = this->info.row_stride;
+  bst_idx_t total_rows = 0;
+  for (auto const& r : ranges) {
+    CHECK_LE(r.first, r.second);
+    CHECK_LE(r.second, this->n_rows) << "Slice range exceeds the page row count.";
+    total_rows += r.second - r.first;
+  }
+
+  auto out = std::make_unique<EllpackPageImpl>(ctx, this->cuts_, this->is_dense, row_stride,
+                                               total_rows);
+  out->SetBaseRowId(out_base);
+  CHECK_EQ(out->NumSymbols(), this->NumSymbols());
+
+  bst_idx_t dst_row = 0;
+  this->Visit(ctx, {}, [&](auto&& src) {
+    for (auto const& r : ranges) {
+      bst_idx_t n_win_rows = r.second - r.first;
+      if (n_win_rows == 0) {
+        continue;
+      }
+      std::size_t n_elements = n_win_rows * row_stride;
+      std::size_t src_offset = static_cast<std::size_t>(r.first) * row_stride;
+      std::size_t dst_offset = static_cast<std::size_t>(dst_row) * row_stride;
+      thrust::for_each_n(ctx->CUDACtx()->CTP(), thrust::make_counting_iterator(0ul), n_elements,
+                         CopyRangePage{out.get(), src, src_offset, dst_offset});
+      dst_row += n_win_rows;
+    }
+  });
+  return out;
+}
 
 // Copy the data from the given EllpackPage to the current page.
 bst_idx_t EllpackPageImpl::Copy(Context const* ctx, EllpackPageImpl const* page, bst_idx_t offset) {

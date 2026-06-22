@@ -101,9 +101,23 @@ class GradientQuantiserGroup {
   /** @brief Construct from a gradient matrix (n_samples x n_targets). */
   GradientQuantiserGroup(Context const* ctx, linalg::MatrixView<GradientPair const> gpair,
                          MetaInfo const& info);
+  /**
+   * @brief Construct with an explicit row count for the rounding factor.
+   *
+   * The rounding factor used for deterministic summation depends on the number of rows.
+   * For the fused cross-validation path each fold's gradient is stored in a global-sized
+   * buffer (with validation entries zeroed); passing `total_rows = fold_rows` keeps the
+   * rounding factor — and therefore the quantised gradients — bit-identical to a baseline
+   * trained on a standalone matrix of just the fold's rows.
+   */
+  GradientQuantiserGroup(Context const* ctx, linalg::MatrixView<GradientPair const> gpair,
+                         MetaInfo const& info, std::size_t total_rows);
   /** @brief Convenience constructor from a vector (single-target). */
   GradientQuantiserGroup(Context const* ctx, linalg::VectorView<GradientPair const> gpair,
                          MetaInfo const& info);
+  /** @brief Single-target constructor with an explicit row count (see above). */
+  GradientQuantiserGroup(Context const* ctx, linalg::VectorView<GradientPair const> gpair,
+                         MetaInfo const& info, std::size_t total_rows);
 
   [[nodiscard]] common::Span<GradientQuantiser const> DeviceSpan() const {
     return dh::ToSpan(this->d_quantizers_);

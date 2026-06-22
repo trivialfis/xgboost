@@ -1649,6 +1649,32 @@ XGB_DLL int XGBoosterFeatureScore(BoosterHandle handle, const char *config,
                                   bst_ulong *out_n_features, char const ***out_features,
                                   bst_ulong *out_dim, bst_ulong const **out_shape,
                                   float const **out_scores);
+
+/**
+ * @brief Experimental: run fused K-fold cross-validation over a single
+ *        `ExtMemQuantileDMatrix` with the GPU `hist` tree method.
+ *
+ * Instead of building K independent matrices and training K independent boosters, this
+ * builds one matrix and grows all K folds' trees simultaneously, reusing the shared quantile
+ * cuts and reusing each fetched Ellpack page across all folds (one fetch per tree level for
+ * all folds combined, plus one shared validation-prediction pass per round). This is a
+ * proof-of-concept: it supports the contiguous-block K-fold split, scalar leaf,
+ * `reg:squarederror` + `rmse`, and `subsample = colsample_* = 1.0`. Any shuffling of rows
+ * is the caller's responsibility (the layout uses contiguous, unshuffled blocks).
+ *
+ * @param dmat       The shared DMatrix over all train and validation rows.
+ * @param config     JSON encoded configuration. Required fields:
+ *                   `num_folds` (integer) and `num_boost_round` (integer). Optional:
+ *                   `metric` (string, defaults to the objective's default), and `params`
+ *                   (an object of training parameters, e.g.
+ *                   `{"device": "cuda", "objective": "reg:squarederror", "max_depth": 6}`).
+ * @param out_result Output, set to a JSON string with fields `metric` (string),
+ *                   `test-mean` (array of doubles) and `test-std` (array of doubles), one
+ *                   entry per boosting round. The string is owned by XGBoost.
+ *
+ * @return 0 when success, -1 when failure happens
+ */
+XGB_DLL int XGBoosterCVExtMem(DMatrixHandle dmat, char const *config, char const **out_result);
 /**@}*/  // End of Booster
 
 /**

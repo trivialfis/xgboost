@@ -30,6 +30,8 @@
 #include "../data/proxy_dmatrix.h"       // for DMatrixProxy
 #include "../data/simple_dmatrix.h"      // for SimpleDMatrix
 #include "../encoder/types.h"            // for Overloaded
+#include "../tree/cv_fold_info.h"        // for CVFoldInfo
+#include "../tree/fused_cv_trainer.h"    // for TrainFusedCV, CVResults
 #include "c_api_error.h"                 // for xgboost_CHECK_C_ARG_PTR, API_END, API_BEGIN
 #include "c_api_utils.h"                 // for RequiredArg, OptionalArg, GetMissing, CastDM...
 #include "dmlc/base.h"                   // for BeginPtr
@@ -1959,5 +1961,79 @@ XGB_DLL int XGBoosterFeatureScore(BoosterHandle handle, char const *config,
   *out_shape = dmlc::BeginPtr(shape);
   *out_scores = scores.data();
   *out_features = dmlc::BeginPtr(feature_names_c);
+  API_END();
+}
+
+XGB_DLL int XGBoosterCVExtMem(DMatrixHandle dmat, char const *config, char const **out_result) {
+  API_BEGIN();
+  xgboost_CHECK_C_ARG_PTR(config);
+  xgboost_CHECK_C_ARG_PTR(out_result);
+  auto p_fmat = CastDMatrixHandle(dmat);
+  auto jconfig = Json::Load(StringView{config});
+
+  auto num_folds = static_cast<std::int32_t>(RequiredArg<Integer>(jconfig, "num_folds", __func__));
+  auto num_boost_round =
+      static_cast<std::int32_t>(RequiredArg<Integer>(jconfig, "num_boost_round", __func__));
+  std::string metric = OptionalArg<String>(jconfig, "metric", std::string{});
+
+  // Flatten the `params` object into string key/value training arguments.
+  Args params;
+  bool has_device = false;
+  if (!IsA<Null>(jconfig["params"])) {
+    for (auto const &kv : get<Object const>(jconfig["params"])) {
+      std::string value;
+      auto const &v = kv.second;
+      if (IsA<String>(v)) {
+        value = get<String const>(v);
+      } else if (IsA<Integer>(v)) {
+        value = std::to_string(get<Integer const>(v));
+      } else if (IsA<Number>(v)) {
+        value = std::to_string(get<Number const>(v));
+      } else if (IsA<Boolean>(v)) {
+        value = get<Boolean const>(v) ? "1" : "0";
+      } else {
+        LOG(FATAL) << "Unsupported value type for parameter `" << kv.first << "`.";
+      }
+      if (kv.first == "device") {
+        has_device = true;
+      }
+      params.emplace_back(kv.first, value);
+    }
+  }
+  // Fused CV is GPU-only; default the device when the caller did not set one.
+  if (!has_device) {
+    params.emplace_back("device", "cuda");
+  }
+
+#if defined(XGBOOST_USE_CUDA)
+  Context ctx;
+  ctx.UpdateAllowUnknown(params);
+  auto folds = tree::CVFoldInfo::MakeContiguous(p_fmat->Info().num_row_, num_folds);
+  auto results = tree::TrainFusedCV(&ctx, p_fmat.get(), folds, params, num_boost_round, metric);
+
+  Json out{Object{}};
+  out["metric"] = String{results.metric};
+  Json mean{Array{}};
+  Json stdv{Array{}};
+  auto &mean_vec = get<Array>(mean);
+  auto &std_vec = get<Array>(stdv);
+  mean_vec.reserve(results.test_mean.size());
+  std_vec.reserve(results.test_std.size());
+  for (std::size_t i = 0; i < results.test_mean.size(); ++i) {
+    mean_vec.emplace_back(Number{static_cast<float>(results.test_mean[i])});
+    std_vec.emplace_back(Number{static_cast<float>(results.test_std[i])});
+  }
+  out["test-mean"] = std::move(mean);
+  out["test-std"] = std::move(stdv);
+
+  auto &ret_str = p_fmat->GetThreadLocal().ret_str;
+  Json::Dump(out, &ret_str);
+  *out_result = ret_str.c_str();
+#else
+  common::AssertGPUSupport();
+  (void)num_boost_round;
+  (void)metric;
+  *out_result = nullptr;
+#endif  // defined(XGBOOST_USE_CUDA)
   API_END();
 }

@@ -85,14 +85,21 @@ GradientQuantiser BuildQuantiserFromPair(Pair const& p, std::size_t total_rows) 
 
 GradientQuantiserGroup::GradientQuantiserGroup(Context const* ctx,
                                                linalg::MatrixView<GradientPair const> gpair,
-                                               MetaInfo const& info) {
+                                               MetaInfo const& info)
+    : GradientQuantiserGroup(ctx, gpair, info, gpair.Shape(0)) {}
+
+GradientQuantiserGroup::GradientQuantiserGroup(Context const* ctx,
+                                               linalg::MatrixView<GradientPair const> gpair,
+                                               MetaInfo const& info, std::size_t total_rows) {
   auto n_targets = gpair.Shape(1);
   CHECK_GE(n_targets, 1);
 
   // Local reduction per target — these are fast device-local operations.
   using ReduceT = typename GradientPairPrecise::ValueT;
   std::vector<Pair> h_pairs(n_targets);
-  std::size_t n_samples = gpair.Shape(0);
+  // Use the caller-provided row count for the rounding factor. For the standard path this
+  // is `gpair.Shape(0)`; for fused cross-validation it is the fold's training-row count.
+  std::size_t n_samples = total_rows;
   for (bst_target_t t = 0; t < n_targets; ++t) {
     h_pairs[t] = MakeQuantiserForTarget(ctx, gpair.Slice(linalg::All(), t));
   }
@@ -125,6 +132,13 @@ GradientQuantiserGroup::GradientQuantiserGroup(Context const* ctx,
                                                MetaInfo const& info)
     : GradientQuantiserGroup(
           ctx, linalg::MakeTensorView(ctx, gpair.Values(), gpair.Size(), bst_target_t{1}), info) {}
+
+GradientQuantiserGroup::GradientQuantiserGroup(Context const* ctx,
+                                               linalg::VectorView<GradientPair const> gpair,
+                                               MetaInfo const& info, std::size_t total_rows)
+    : GradientQuantiserGroup(
+          ctx, linalg::MakeTensorView(ctx, gpair.Values(), gpair.Size(), bst_target_t{1}), info,
+          total_rows) {}
 
 void CalcQuantizedGpairs(Context const* ctx, linalg::MatrixView<GradientPair const> gpairs,
                          common::Span<GradientQuantiser const> roundings,
