@@ -246,6 +246,38 @@ def _prediction_output(
     return array
 
 
+def _prediction_type_code(
+    output_margin: bool,
+    pred_leaf: bool,
+    pred_contribs: bool,
+    approx_contribs: bool,
+    pred_interactions: bool,
+) -> int:
+    """Map the :py:meth:`Booster.predict` flags to the integer prediction ``type`` used by
+    the C API. At most one type of prediction can be requested at a time.
+
+    """
+    predt_type = 0
+    n_types = 0
+
+    def assign_type(t: int) -> int:
+        nonlocal n_types
+        n_types += 1
+        if n_types > 1:
+            raise ValueError("One type of prediction at a time.")
+        return t
+
+    if output_margin:
+        predt_type = assign_type(1)
+    if pred_contribs:
+        predt_type = assign_type(2 if not approx_contribs else 3)
+    if pred_interactions:
+        predt_type = assign_type(4 if not approx_contribs else 5)
+    if pred_leaf:
+        predt_type = assign_type(6)
+    return predt_type
+
+
 class DataIter(ABC):  # pylint: disable=too-many-instance-attributes
     """The interface for user defined data iterator. The iterator facilitates
     distributed training, :py:class:`QuantileDMatrix`, and external memory support using
@@ -2501,26 +2533,18 @@ class Booster:
             fn = data.feature_names
             self._validate_features(fn)
         args = {
-            "type": 0,
+            "type": _prediction_type_code(
+                output_margin,
+                pred_leaf,
+                pred_contribs,
+                approx_contribs,
+                pred_interactions,
+            ),
             "training": training,
             "iteration_begin": int(iteration_range[0]),
             "iteration_end": int(iteration_range[1]),
             "strict_shape": strict_shape,
         }
-
-        def assign_type(t: int) -> None:
-            if args["type"] != 0:
-                raise ValueError("One type of prediction at a time.")
-            args["type"] = t
-
-        if output_margin:
-            assign_type(1)
-        if pred_contribs:
-            assign_type(2 if not approx_contribs else 3)
-        if pred_interactions:
-            assign_type(4 if not approx_contribs else 5)
-        if pred_leaf:
-            assign_type(6)
         preds = ctypes.POINTER(ctypes.c_float)()
         shape = ctypes.POINTER(c_bst_ulong)()
         dims = c_bst_ulong()
@@ -2535,6 +2559,54 @@ class Booster:
             )
         )
         return _prediction_output(shape, dims, preds, False)
+
+    def _predict_shape(
+        self,
+        *,
+        n_samples: int,
+        output_margin: bool = False,
+        pred_leaf: bool = False,
+        pred_contribs: bool = False,
+        approx_contribs: bool = False,
+        pred_interactions: bool = False,
+        iteration_range: IterationRange = (0, 0),
+        strict_shape: bool = False,
+    ) -> Tuple[int, ...]:
+        """Compute the output shape of :py:meth:`predict` without running the prediction.
+
+        The output shape is fully determined by the model, the number of input rows, and the
+        prediction options; it does not depend on the input feature count.  The prediction
+        options accept the same flags as :py:meth:`predict`.
+
+        .. versionadded:: 3.4.0
+
+        """
+        args = {
+            "type": _prediction_type_code(
+                output_margin,
+                pred_leaf,
+                pred_contribs,
+                approx_contribs,
+                pred_interactions,
+            ),
+            "iteration_begin": int(iteration_range[0]),
+            "iteration_end": int(iteration_range[1]),
+            "strict_shape": strict_shape,
+        }
+        shape = ctypes.POINTER(c_bst_ulong)()
+        dims = c_bst_ulong()
+        _check_call(
+            _LIB.XGBoosterPredictShape(
+                self.handle,
+                from_pystr_to_cstr(json.dumps(args)),
+                c_bst_ulong(int(n_samples)),
+                ctypes.byref(shape),
+                ctypes.byref(dims),
+            )
+        )
+        return tuple(
+            int(v) for v in ctypes2numpy(shape, dims.value, np.uint64).flatten()
+        )
 
     # pylint: disable=too-many-statements
     @_deprecate_positional_args

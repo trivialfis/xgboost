@@ -19,9 +19,10 @@
 #include <xgboost/task.h>      // for ObjInfo
 
 #include <algorithm>  // for max
-#include <cstdint>    // for int32_t, uint32_t, uint8_t
+#include <cstdint>    // for int32_t, uint32_t, uint8_t, uint64_t
 #include <map>        // for map
 #include <memory>     // for shared_ptr, unique_ptr
+#include <optional>   // for optional
 #include <string>     // for string
 #include <utility>    // for move
 #include <vector>     // for vector
@@ -131,6 +132,28 @@ class Learner : public Model, public Configurable, public dmlc::Serializable {
   virtual void InplacePredict(std::shared_ptr<DMatrix> p_m, PredictionType type, float missing,
                               HostDeviceVector<float>** out_preds, bst_layer_t layer_begin,
                               bst_layer_t layer_end) = 0;
+
+  /*!
+   * \brief Calculate the shape of the prediction output.
+   *
+   *   The output shape is fully determined by the model plus the number of input rows and
+   *   the prediction options; it does not depend on the input feature count (the feature
+   *   count for contribution/interaction comes from the model).
+   *
+   * \param type            Prediction type.
+   * \param strict_shape    Whether to use the stricter output shape.
+   * \param iteration_begin Beginning of boosted tree layer used for prediction.
+   * \param iteration_end   End of booster layer. 0 means do not limit trees.
+   * \param n_samples       Number of input rows (only sets the leading output dimension).
+   * \param chunksize       Known per-row output width (post-prediction), or std::nullopt to
+   *                        compute it from model metadata (no prediction needed).
+   * \param out_shape       Output shape (borrowed storage, e.g. thread-local).
+   * \param out_dim         Output dimension.
+   */
+  virtual void CalcPredictShape(PredictionType type, bool strict_shape,
+                                bst_layer_t iteration_begin, bst_layer_t iteration_end,
+                                std::uint64_t n_samples, std::optional<std::uint64_t> chunksize,
+                                std::vector<std::uint64_t>* out_shape, std::uint64_t* out_dim) = 0;
 
   /*!
    * \brief Calculate feature score.  See doc in C API for outputs.

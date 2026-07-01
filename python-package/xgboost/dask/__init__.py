@@ -1007,26 +1007,34 @@ async def _direct_predict_impl(  # pylint: disable=too-many-branches
     return predictions
 
 
-def _infer_predict_output(
-    booster: Booster, features: int, is_df: bool, inplace: bool, **kwargs: Any
+def _predict_output_shape(
+    booster: Booster,
+    *,
+    iteration_range: IterationRange,
+    strict_shape: bool,
+    is_df: bool,
+    **predict_flags: Any,
 ) -> Tuple[Tuple[int, ...], Dict[int, str]]:
-    """Create a dummy test sample to infer output shape for prediction."""
-    assert isinstance(features, int)
-    rng = numpy.random.RandomState(1994)
-    test_sample = rng.randn(1, features)
-    if inplace:
-        kwargs = kwargs.copy()
-        if kwargs.pop("predict_type") == "margin":
-            kwargs["output_margin"] = True
-    m = DMatrix(test_sample, enable_categorical=True)
-    # generated DMatrix doesn't have feature name, so no validation.
-    test_predt = booster.predict(m, validate_features=False, **kwargs)
-    n_columns = test_predt.shape[1] if len(test_predt.shape) > 1 else 1
+    """Compute the prediction output shape from the model without a probe prediction.
+
+    ``predict_flags`` are the boolean flags accepted by :py:meth:`Booster.predict`
+    (``output_margin``, ``pred_leaf``, ``pred_contribs``, ``approx_contribs``,
+    ``pred_interactions``).
+
+    """
+    # pylint: disable=protected-access
+    shape = booster._predict_shape(
+        n_samples=1,
+        iteration_range=iteration_range,
+        strict_shape=strict_shape,
+        **predict_flags,
+    )
+    n_columns = shape[1] if len(shape) > 1 else 1
     meta: Dict[int, str] = {}
-    if _can_output_df(is_df, test_predt.shape):
+    if _can_output_df(is_df, shape):
         for i in range(n_columns):
             meta[i] = "f4"
-    return test_predt.shape, meta
+    return shape, meta
 
 
 async def _get_model_future(
@@ -1100,17 +1108,16 @@ async def _predict_async(
     if isinstance(data, (da.Array, dd.DataFrame)):
         _output_shape, meta = await client.compute(
             client.submit(
-                _infer_predict_output,
+                _predict_output_shape,
                 _booster,
-                features=data.shape[1],
                 is_df=isinstance(data, dd.DataFrame),
-                inplace=False,
+                iteration_range=iteration_range,
+                strict_shape=strict_shape,
                 output_margin=output_margin,
                 pred_leaf=pred_leaf,
                 pred_contribs=pred_contribs,
                 approx_contribs=approx_contribs,
                 pred_interactions=pred_interactions,
-                strict_shape=strict_shape,
             )
         )
         return await _direct_predict_impl(
@@ -1124,17 +1131,16 @@ async def _predict_async(
 
     output_shape, _ = await client.compute(
         client.submit(
-            _infer_predict_output,
-            booster=_booster,
-            features=data.num_col(),
+            _predict_output_shape,
+            _booster,
             is_df=False,
-            inplace=False,
+            iteration_range=iteration_range,
+            strict_shape=strict_shape,
             output_margin=output_margin,
             pred_leaf=pred_leaf,
             pred_contribs=pred_contribs,
             approx_contribs=approx_contribs,
             pred_interactions=pred_interactions,
-            strict_shape=strict_shape,
         )
     )
     # Prediction on dask DMatrix.
@@ -1307,14 +1313,12 @@ async def _inplace_predict_async(  # pylint: disable=too-many-branches
     # await turns future into value.
     shape, meta = await client.compute(
         client.submit(
-            _infer_predict_output,
+            _predict_output_shape,
             booster,
-            features=data.shape[1],
             is_df=isinstance(data, dd.DataFrame),
-            inplace=True,
-            predict_type=predict_type,
             iteration_range=iteration_range,
             strict_shape=strict_shape,
+            output_margin=predict_type == "margin",
         )
     )
     return await _direct_predict_impl(

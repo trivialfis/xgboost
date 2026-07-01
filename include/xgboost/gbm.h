@@ -66,6 +66,16 @@ class GradientBooster : public Model, public Configurable {
    */
   [[nodiscard]] virtual std::int32_t BoostedRounds() const = 0;
   /**
+   * @brief Number of trees used for leaf prediction in the layer range [begin, end).
+   *
+   *   This equals the per-row width of leaf-index prediction. Not supported by boosters
+   *   without trees (e.g. gblinear), for which leaf prediction is also unsupported.
+   */
+  [[nodiscard]] virtual bst_tree_t NumTrees(bst_layer_t /*begin*/, bst_layer_t /*end*/) const {
+    LOG(FATAL) << "Leaf prediction is not supported by the current booster.";
+    return 0;
+  }
+  /**
    * \brief Whether the model has already been trained. When tree booster is chosen, then
    *        returns true when there are existing trees.
    */

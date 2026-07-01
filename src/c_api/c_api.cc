@@ -10,6 +10,7 @@
 #include <limits>        // for numeric_limits
 #include <map>           // for operator!=, _Rb_tree_const_iterator, _Rb_tre...
 #include <memory>        // for shared_ptr, allocator, __shared_ptr_access
+#include <optional>      // for nullopt
 #include <string>        // for char_traits, basic_string, operator==, string
 #include <system_error>  // for errc
 #include <utility>       // for pair
@@ -1346,16 +1347,39 @@ XGB_DLL int XGBoosterPredictFromDMatrix(BoosterHandle handle, DMatrixHandle dmat
 
   auto &shape = learner->GetThreadLocal().prediction_shape;
   auto chunksize = p_m->Info().num_row_ == 0 ? 0 : entry.predictions.Size() / p_m->Info().num_row_;
-  auto rounds = iteration_end - iteration_begin;
-  rounds = rounds == 0 ? learner->BoostedRounds() : rounds;
   // Determine shape
   bool strict_shape = RequiredArg<Boolean>(config, "strict_shape", __func__);
 
   xgboost_CHECK_C_ARG_PTR(out_dim);
   xgboost_CHECK_C_ARG_PTR(out_shape);
 
-  CalcPredictShape(strict_shape, type, p_m->Info().num_row_, p_m->Info().num_col_, chunksize,
-                   learner->Groups(), rounds, &shape, out_dim);
+  learner->CalcPredictShape(type, strict_shape, iteration_begin, iteration_end,
+                            p_m->Info().num_row_, chunksize, &shape, out_dim);
+  *out_shape = dmlc::BeginPtr(shape);
+  API_END();
+}
+
+XGB_DLL int XGBoosterPredictShape(BoosterHandle handle, char const *c_json_config,
+                                  xgboost::bst_ulong n_samples,
+                                  xgboost::bst_ulong const **out_shape,
+                                  xgboost::bst_ulong *out_dim) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  xgboost_CHECK_C_ARG_PTR(c_json_config);
+  auto config = Json::Load(StringView{c_json_config});
+
+  auto *learner = static_cast<Learner *>(handle);
+  auto type = PredictionType(RequiredArg<Integer>(config, "type", __func__));
+  auto iteration_begin = RequiredArg<Integer>(config, "iteration_begin", __func__);
+  auto iteration_end = RequiredArg<Integer>(config, "iteration_end", __func__);
+  bool strict_shape = RequiredArg<Boolean>(config, "strict_shape", __func__);
+
+  xgboost_CHECK_C_ARG_PTR(out_dim);
+  xgboost_CHECK_C_ARG_PTR(out_shape);
+
+  auto &shape = learner->GetThreadLocal().prediction_shape;
+  learner->CalcPredictShape(type, strict_shape, iteration_begin, iteration_end, n_samples,
+                            std::nullopt, &shape, out_dim);
   *out_shape = dmlc::BeginPtr(shape);
   API_END();
 }
@@ -1369,20 +1393,19 @@ void InplacePredictImpl(std::shared_ptr<DMatrix> p_m, char const *c_json_config,
   HostDeviceVector<float> *p_predt{nullptr};
   auto type = PredictionType(RequiredArg<Integer>(config, "type", __func__));
   float missing = GetMissing(config);
-  learner->InplacePredict(p_m, type, missing, &p_predt,
-                          RequiredArg<Integer>(config, "iteration_begin", __func__),
-                          RequiredArg<Integer>(config, "iteration_end", __func__));
+  auto iteration_begin = RequiredArg<Integer>(config, "iteration_begin", __func__);
+  auto iteration_end = RequiredArg<Integer>(config, "iteration_end", __func__);
+  learner->InplacePredict(p_m, type, missing, &p_predt, iteration_begin, iteration_end);
   CHECK(p_predt);
   auto &shape = learner->GetThreadLocal().prediction_shape;
   auto const &info = p_m->Info();
   auto n_samples = info.num_row_;
-  auto n_features = info.num_col_;
   auto chunksize = n_samples == 0 ? 0 : p_predt->Size() / n_samples;
   bool strict_shape = RequiredArg<Boolean>(config, "strict_shape", __func__);
 
   xgboost_CHECK_C_ARG_PTR(out_dim);
-  CalcPredictShape(strict_shape, type, n_samples, n_features, chunksize, learner->Groups(),
-                   learner->BoostedRounds(), &shape, out_dim);
+  learner->CalcPredictShape(type, strict_shape, iteration_begin, iteration_end, n_samples,
+                            chunksize, &shape, out_dim);
   CHECK_GE(p_predt->Size(), n_samples);
 
   xgboost_CHECK_C_ARG_PTR(out_result);

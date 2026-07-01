@@ -146,6 +146,10 @@ class SoftmaxMultiClassObj : public ObjFunction {
   void EvalTransform(HostDeviceVector<float>* io_preds) override {
     this->Transform(io_preds, true);
   }
+  [[nodiscard]] bst_target_t ValueOutputLength(bst_target_t n_groups) const override {
+    // softmax collapses the per-class margins to a single class-index column; softprob keeps them.
+    return output_prob_ ? n_groups : 1;
+  }
   const char* DefaultEvalMetric() const override { return "mlogloss"; }
 
   void Transform(HostDeviceVector<float>* io_preds, bool prob) const {

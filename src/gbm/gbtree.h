@@ -202,6 +202,10 @@ class GBTree : public GradientBooster {
              bool* out_of_bound) const override;
 
   [[nodiscard]] std::int32_t BoostedRounds() const override { return this->model_.BoostedRounds(); }
+  [[nodiscard]] bst_tree_t NumTrees(bst_layer_t begin, bst_layer_t end) const override {
+    auto [tree_begin, tree_end] = detail::LayerToTree(model_, begin, end);
+    return tree_end - tree_begin;
+  }
   [[nodiscard]] bool ModelFitted() const override {
     return !model_.trees.empty() || !model_.trees_to_update.empty();
   }

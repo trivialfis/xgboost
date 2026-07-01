@@ -71,6 +71,100 @@ def test_predict_shape():
     assert interaction.shape[3] == X.shape[1] + 1
 
 
+def _train_for_shape(
+    objective: str,
+    *,
+    n_classes: int = 0,
+    multi_strategy: str = "one_output_per_tree",
+    n_targets: int = 1,
+    num_parallel_tree: int = 1,
+) -> "tuple[xgb.Booster, np.ndarray]":
+    rng = np.random.RandomState(1994)
+    X = rng.randn(64, 7)
+    if n_classes:
+        y: np.ndarray = rng.randint(0, n_classes, size=X.shape[0])
+    elif objective == "binary:logistic":
+        y = rng.randint(0, 2, size=X.shape[0])
+    elif n_targets > 1:
+        y = rng.randn(X.shape[0], n_targets)
+    else:
+        y = rng.randn(X.shape[0])
+    params = {
+        "objective": objective,
+        "num_parallel_tree": num_parallel_tree,
+        "tree_method": "hist",
+    }
+    if n_classes:
+        params["num_class"] = n_classes
+    if multi_strategy != "one_output_per_tree":
+        params["multi_strategy"] = multi_strategy
+    booster = xgb.train(params, xgb.DMatrix(X, label=y), num_boost_round=4)
+    return booster, X
+
+
+@pytest.mark.parametrize(
+    "objective,kwargs",
+    [
+        ("reg:squarederror", {}),
+        ("binary:logistic", {}),
+        ("multi:softprob", {"n_classes": 3}),
+        ("multi:softmax", {"n_classes": 3}),
+        ("reg:squarederror", {"multi_strategy": "multi_output_tree", "n_targets": 3}),
+        ("reg:squarederror", {"num_parallel_tree": 3}),
+    ],
+)
+def test_predict_shape_api(objective: str, kwargs: dict) -> None:
+    """The analytic ``Booster._predict_shape`` must match the shape of a real prediction
+    for every supported combination of prediction type, ``strict_shape`` and
+    ``iteration_range`` -- including vector-leaf (multi-output tree) models.
+
+    """
+    booster, X = _train_for_shape(objective, **kwargs)
+    vector_leaf = kwargs.get("multi_strategy") == "multi_output_tree"
+    m = xgb.DMatrix(X)
+
+    flag_sets: List[dict] = [
+        {},
+        {"output_margin": True},
+        {"pred_contribs": True},
+        {"pred_contribs": True, "approx_contribs": True},
+        {"pred_interactions": True},
+        {"pred_interactions": True, "approx_contribs": True},
+        {"pred_leaf": True},
+    ]
+
+    for flags in flag_sets:
+        # Vector leaf: skip the combinations that raise at predict-time (approximate
+        # contributions and all interactions are not implemented for multi-output trees).
+        if vector_leaf and (
+            flags.get("approx_contribs") or flags.get("pred_interactions")
+        ):
+            continue
+        for strict_shape in (False, True):
+            ranges = [(0, 0)]
+            # leaf/contrib/interaction only support an iteration end (begin must be 0).
+            if not (
+                flags.get("pred_leaf")
+                or flags.get("pred_contribs")
+                or flags.get("pred_interactions")
+            ):
+                ranges.append((1, 3))
+            for iteration_range in ranges:
+                predicted = booster.predict(
+                    m,
+                    strict_shape=strict_shape,
+                    iteration_range=iteration_range,
+                    **flags,
+                ).shape
+                computed = booster._predict_shape(
+                    n_samples=X.shape[0],
+                    strict_shape=strict_shape,
+                    iteration_range=iteration_range,
+                    **flags,
+                )
+                assert predicted == computed, (flags, strict_shape, iteration_range)
+
+
 def test_base_margin_vs_base_score() -> None:
     run_base_margin_vs_base_score("cpu")
 

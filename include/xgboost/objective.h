@@ -108,6 +108,16 @@ class ObjFunction : public Configurable {
     }
     return 1;
   }
+  /**
+   * @brief Number of columns produced by value (transformed) prediction, given the model's
+   *        number of output groups.
+   *
+   *   Defaults to identity. Overridden by objectives whose `PredTransform` changes the output
+   *   width: `multi:softmax` collapses the per-class margins into a single class-index column.
+   */
+  [[nodiscard]] virtual bst_target_t ValueOutputLength(bst_target_t n_groups) const {
+    return n_groups;
+  }
   /** @brief Getter of the context. */
   [[nodiscard]] Context const* Ctx() const { return this->ctx_; }
 

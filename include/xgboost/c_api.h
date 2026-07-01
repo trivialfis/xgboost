@@ -1227,6 +1227,28 @@ XGB_DLL int XGBoosterPredictFromDMatrix(BoosterHandle handle, DMatrixHandle dmat
  */
 
 /**
+ * @brief Calculate the shape of the prediction output for the given number of input rows,
+ *        without running the prediction.
+ *
+ *   The output shape is fully determined by the model, the number of input rows, and the
+ *   prediction options; it does not depend on the input feature count. This is useful for
+ *   pre-allocating outputs or for distributed frameworks that need the output shape before
+ *   dispatching prediction (avoiding a probe prediction).
+ *
+ * @param handle    Booster handle.
+ * @param config    JSON encoded configuration. It accepts the shape-relevant fields of
+ *                  @ref XGBoosterPredictFromDMatrix : "type", "iteration_begin",
+ *                  "iteration_end" and "strict_shape". Other fields are ignored.
+ * @param n_samples Number of input rows (sets the leading output dimension).
+ * @param out_shape Shape of the output prediction (copy before use).
+ * @param out_dim   Dimension of the output prediction.
+ *
+ * @return 0 when success, -1 when failure happens
+ */
+XGB_DLL int XGBoosterPredictShape(BoosterHandle handle, char const *config, bst_ulong n_samples,
+                                  bst_ulong const **out_shape, bst_ulong *out_dim);
+
+/**
  * @brief Inplace prediction from CPU dense matrix.
  *
  * \note If the booster is configured to run on a CUDA device, XGBoost falls back to run

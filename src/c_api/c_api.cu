@@ -166,10 +166,10 @@ int InplacePreidctCUDA(BoosterHandle handle, char const *data, char const *c_jso
   HostDeviceVector<float> *p_predt{nullptr};
   auto type = PredictionType(RequiredArg<Integer>(config, "type", __func__));
   float missing = GetMissing(config);
+  auto iteration_begin = RequiredArg<Integer>(config, "iteration_begin", __func__);
+  auto iteration_end = RequiredArg<Integer>(config, "iteration_end", __func__);
 
-  learner->InplacePredict(p_m, type, missing, &p_predt,
-                          RequiredArg<Integer>(config, "iteration_begin", __func__),
-                          RequiredArg<Integer>(config, "iteration_end", __func__));
+  learner->InplacePredict(p_m, type, missing, &p_predt, iteration_begin, iteration_end);
   CHECK(p_predt);
   if (learner->Ctx()->IsCUDA()) {
     CHECK(p_predt->DeviceCanRead() && !p_predt->HostCanRead());
@@ -185,8 +185,8 @@ int InplacePreidctCUDA(BoosterHandle handle, char const *data, char const *c_jso
   xgboost_CHECK_C_ARG_PTR(out_shape);
   xgboost_CHECK_C_ARG_PTR(out_dim);
 
-  CalcPredictShape(strict_shape, type, n_samples, p_m->Info().num_col_, chunksize,
-                   learner->Groups(), learner->BoostedRounds(), &shape, out_dim);
+  learner->CalcPredictShape(type, strict_shape, iteration_begin, iteration_end, n_samples,
+                            chunksize, &shape, out_dim);
   *out_shape = dmlc::BeginPtr(shape);
   *out_result = p_predt->ConstDevicePointer();
   API_END();

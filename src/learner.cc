@@ -22,6 +22,7 @@
 #include <limits>         // for numeric_limits
 #include <memory>         // for allocator, unique_ptr, shared_ptr, operator==
 #include <mutex>          // for mutex, lock_guard
+#include <optional>       // for optional
 #include <sstream>        // for operator<<, basic_ostream, basic_ostream::opera...
 #include <stack>          // for stack
 #include <string>         // for basic_string, char_traits, operator<, string
@@ -38,6 +39,7 @@
 #include "common/io.h"                    // for PeekableInStream, ReadAll, FixedSizeStream, Mem...
 #include "common/observer.h"              // for TrainingObserver
 #include "common/param_array.h"           // for ParamArray
+#include "common/prediction_shape.h"      // for CalcPredictShape
 #include "common/timer.h"                 // for Monitor
 #include "common/version.h"               // for Version
 #include "xgboost/base.h"                 // for Args, GradientPair, bst_feature_t
@@ -1264,6 +1266,57 @@ class LearnerImpl : public LearnerIO {
       LOG(FATAL) << "Unsupported prediction type:" << static_cast<int>(type);
     }
     *out_preds = &out_predictions.predictions;
+  }
+
+  void CalcPredictShape(PredictionType type, bool strict_shape, bst_layer_t iteration_begin,
+                        bst_layer_t iteration_end, std::uint64_t n_samples,
+                        std::optional<std::uint64_t> chunksize,
+                        std::vector<std::uint64_t>* out_shape, std::uint64_t* out_dim) override {
+    this->Configure();
+    this->CheckModelInitialized();
+
+    std::uint64_t n_groups = this->learner_model_param_.num_output_group;
+    // The output width for contribution/interaction comes from the model, not the input.
+    std::uint64_t n_features = this->learner_model_param_.num_feature;
+    bst_layer_t end = iteration_end == 0 ? this->BoostedRounds() : iteration_end;
+    CHECK_LE(iteration_begin, end);
+    std::uint64_t rounds = static_cast<std::uint64_t>(end) - iteration_begin;
+
+    std::uint64_t chunk;
+    if (chunksize) {
+      chunk = *chunksize;
+    } else {
+      switch (type) {
+        case PredictionType::kMargin:
+          chunk = n_groups;
+          break;
+        case PredictionType::kValue:
+          chunk = obj_->ValueOutputLength(n_groups);
+          break;
+        case PredictionType::kContribution:
+        case PredictionType::kApproxContribution:
+          chunk = n_groups * (n_features + 1);
+          break;
+        case PredictionType::kInteraction:
+        case PredictionType::kApproxInteraction:
+          chunk = n_groups * (n_features + 1) * (n_features + 1);
+          break;
+        case PredictionType::kLeaf:
+          chunk = this->gbm_->NumTrees(iteration_begin, end);
+          break;
+        default:
+          LOG(FATAL) << "Unknown prediction type: " << static_cast<int>(type);
+      }
+    }
+
+    // Vector leaf: the leaf "group" dimension collapses to 1 (a single multi-output tree per
+    // forest slot), unlike scalar multi-class/target which builds one tree group per output.
+    std::uint64_t groups =
+        (type == PredictionType::kLeaf && this->learner_model_param_.IsVectorLeaf()) ? 1u
+                                                                                     : n_groups;
+
+    xgboost::CalcPredictShape(strict_shape, type, n_samples, n_features, chunk, groups, rounds,
+                              out_shape, out_dim);
   }
 
   void CalcFeatureScore(std::string const& importance_type, common::Span<int32_t const> trees,
