@@ -27,6 +27,26 @@ void RowPartitioner::Reset(Context const* ctx, bst_idx_t n_samples, bst_idx_t ba
   this->pinned2_.GetSpan<std::int32_t>(1 << 13);
 }
 
+void RowPartitioner::Reset(Context const* ctx, common::Span<RowIndexT const> ridx) {
+  ridx_segments_.clear();
+  ridx_.resize(ridx.size());
+  tmp_.clear();
+  n_nodes_ = 1;  // Root
+
+  ridx_segments_.emplace_back(
+      NodePositionInfo{Segment{0, static_cast<cuda_impl::RowIndexT>(ridx.size())}});
+
+  // The indices are already global; copy them verbatim into the root segment.
+  if (!ridx.empty()) {
+    dh::safe_cuda(cudaMemcpyAsync(ridx_.data(), ridx.data(), ridx.size_bytes(), cudaMemcpyDefault,
+                                  ctx->CUDACtx()->Stream()));
+  }
+
+  // Pre-allocate some host memory
+  this->pinned_.GetSpan<std::int32_t>(1 << 11);
+  this->pinned2_.GetSpan<std::int32_t>(1 << 13);
+}
+
 RowPartitioner::~RowPartitioner() = default;
 
 common::Span<const RowPartitioner::RowIndexT> RowPartitioner::GetRows(bst_node_t nidx) {

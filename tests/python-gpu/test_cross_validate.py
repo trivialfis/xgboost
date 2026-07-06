@@ -29,18 +29,35 @@ def xyw_extqdm() -> XywExtQdm:
 
 @pytest.mark.skipif(**tm.no_cupy())
 def test_cv_tree_method(xyw_extqdm: XywExtQdm) -> None:
-    X, y, w, Xy = xyw_extqdm
     k_folds = 3
-
+    _, _, _, Xy = xyw_extqdm
     cv_folds = xcv.FoldModels(data=Xy, k_folds=k_folds)
 
+    tree_method = xcv.FoldTreeMethod(
+        cv_folds,
+        Xy,
+        params={"max_bin": 16, "learning_rate": 0.2, "max_cached_hist_node": 4},
+    )
+    assert isinstance(tree_method.handle, ctypes.c_void_p)
+    assert tree_method.handle.value is not None
+
+    eta_tree_method = xcv.FoldTreeMethod(cv_folds, Xy, params={"eta": 0.1})
+    assert isinstance(eta_tree_method.handle, ctypes.c_void_p)
+    assert eta_tree_method.handle.value is not None
+
+    with pytest.raises(xgb.core.XGBoostError, match="tree_method"):
+        xcv.FoldTreeMethod(cv_folds, Xy, params={"tree_method": "hist"})
+
+    with pytest.raises(xgb.core.XGBoostError, match="updater"):
+        xcv.FoldTreeMethod(cv_folds, Xy, params={"updater": "grow_gpu_hist"})
+
+    fold_info = xcv.FoldInfoBatches(Xy, k_folds=k_folds)
     predts = xcv.FoldPredictions()
-    folds = xcv.FoldInfoBatches(Xy, k_folds=k_folds)
-    assert cv_folds.init_prediction(Xy, folds, out=predts) is predts
+    assert cv_folds.init_prediction(Xy, fold_info, out=predts) is predts
     gpairs = xcv.FoldGpairs()
-    assert cv_folds.get_gradient(Xy, 0, folds, predts, out=gpairs) is gpairs
-    tree_method = xcv.FoldTreeMethod(cv_folds, Xy, params={"max_depth": 1})
-    tree_method.update(cv_folds, Xy, folds, gpairs)
+    assert cv_folds.get_gradient(Xy, 0, fold_info, predts, out=gpairs) is gpairs
+    eta_tree_method.update(cv_folds, Xy, fold_info, gpairs)
+    eta_tree_method.update(cv_folds, Xy, fold_info, gpairs)
 
 
 @pytest.mark.skipif(**tm.no_cupy())

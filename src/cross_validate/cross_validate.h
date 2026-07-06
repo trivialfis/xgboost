@@ -56,6 +56,8 @@ class FoldModels {
 
   [[nodiscard]] static FoldModels LoadModel(Json const& in);
   void SaveModel(Json* out) const;
+
+  [[nodiscard]] auto const* Ctx() const noexcept(true) { return &this->ctx_; }
 };
 
 struct FoldInfo {

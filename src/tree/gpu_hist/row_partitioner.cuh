@@ -288,6 +288,14 @@ class RowPartitioner {
    */
   RowPartitioner() = default;
   void Reset(Context const* ctx, bst_idx_t n_samples, bst_idx_t base_rowid);
+  /**
+   * @brief Seed the partitioner from an explicit list of (global) row indices.
+   *
+   * Used by the fused cross-validation updater, where each fold's root node contains only
+   * a subset of a batch's rows. The indices are stored as-is (already global), forming a
+   * single root segment `[0, ridx.size())`.
+   */
+  void Reset(Context const* ctx, common::Span<RowIndexT const> ridx);
 
   ~RowPartitioner();
   RowPartitioner(const RowPartitioner&) = delete;
@@ -472,6 +480,33 @@ class RowPartitionerBatches {
       partitioners_[k]->Reset(ctx, n_samples, base_ridx);
       CHECK_LE(n_samples, std::numeric_limits<cuda_impl::RowIndexT>::max());
       n_max_samples = std::max(n_samples, n_max_samples);
+    }
+    this->ridx_tmp_.resize(n_max_samples);
+  }
+
+  /**
+   * @brief Seed one partitioner per batch from explicit (global) row-index lists.
+   *
+   * Used by the fused cross-validation updater. `batch_ridx[i]` holds the global training
+   * row indices of the current fold within source batch `i`. The shared `ridx_tmp_` scratch
+   * is sized to the largest per-batch training-row count (not the full batch size).
+   */
+  void Reset(Context const* ctx,
+             std::vector<common::Span<cuda_impl::RowIndexT const>> const& batch_ridx) {
+    std::size_t n_batches = batch_ridx.size();
+    CHECK_GE(n_batches, 1);
+    if (partitioners_.size() != n_batches) {
+      partitioners_.clear();
+    }
+
+    bst_idx_t n_max_samples = 0;
+    for (std::size_t k = 0; k < n_batches; ++k) {
+      if (partitioners_.size() != n_batches) {
+        // First run.
+        partitioners_.emplace_back(std::make_unique<RowPartitioner>());
+      }
+      partitioners_[k]->Reset(ctx, batch_ridx[k]);
+      n_max_samples = std::max<bst_idx_t>(batch_ridx[k].size(), n_max_samples);
     }
     this->ridx_tmp_.resize(n_max_samples);
   }
