@@ -77,7 +77,6 @@ _LIB.XGBCvFoldModelsGetGradient.argtypes = [
 _LIB.XGBCvFoldTreeMethodCreate.restype = ctypes.c_int
 _LIB.XGBCvFoldTreeMethodCreate.argtypes = [
     ctypes.c_void_p,
-    ctypes.c_void_p,
     ctypes.c_char_p,
     ctypes.POINTER(ctypes.c_void_p),
 ]
@@ -169,12 +168,11 @@ class FoldTreeMethod:
     """Optimizer used for fused cross-validation."""
 
     def __init__(
-        self, cv_folds: FoldModels, data: ExtMemQuantileDMatrix, params: dict[str, Any]
+        self, data: ExtMemQuantileDMatrix, params: dict[str, Any]
     ) -> None:
         hdl = ctypes.c_void_p()
         _check_call(
             _LIB.XGBCvFoldTreeMethodCreate(
-                cv_folds.handle,
                 data.handle,
                 make_jcargs(**(params or {})),
                 ctypes.byref(hdl),

@@ -241,15 +241,13 @@ XGB_DLL int XGBCvFoldModelsGetGradient(FoldModelsHandle c_cv_folds, DMatrixHandl
   API_END();
 }
 
-XGB_DLL int XGBCvFoldTreeMethodCreate(FoldModelsHandle c_cv_folds, DMatrixHandle dtrain,
-                                      char const* c_config, TreeMethodHandle* out) {
+XGB_DLL int XGBCvFoldTreeMethodCreate(DMatrixHandle dtrain, char const* c_config,
+                                      TreeMethodHandle* out) {
   API_BEGIN();
-  xgboost_CHECK_C_ARG_PTR(c_cv_folds);
   xgboost_CHECK_C_ARG_PTR(dtrain);
   xgboost_CHECK_C_ARG_PTR(c_config);
   xgboost_CHECK_C_ARG_PTR(out);
   auto p_fmat = CastDMatrixHandle(dtrain);
-  auto cv_folds = static_cast<cv::FoldModels*>(c_cv_folds);  // fixme: unused
   Json config{Json::Load(StringView{c_config})};
   auto args = cv::JsonToArgs(config);
   auto ptr = std::make_unique<cv::FoldTreeMethod>(std::move(p_fmat));
