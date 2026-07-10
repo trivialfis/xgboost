@@ -185,7 +185,6 @@ class FoldTreeMethod {
     CHECK_EQ(p_fmat, p_fmat_.get())
         << "CV tree method update must use the training DMatrix supplied at construction.";
     auto k_folds = folds->KFolds();
-    CHECK_EQ(folds->KFolds(), k_folds);
     CHECK_EQ(finfo.KFolds(), k_folds);
     CHECK_EQ(gpairs.KFolds(), k_folds);
 
