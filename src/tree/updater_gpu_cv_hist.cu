@@ -30,12 +30,11 @@ void CalcRootSumFolds(Context const* ctx,
   }
 }
 
-FusedCvHistTreeMaker::FusedCvHistTreeMaker(Context const* ctx, TrainParam param,
-                                           HistMakerTrainParam const* hist_param,
-                                           std::shared_ptr<common::ColumnSampler> column_sampler,
-                                           std::vector<bst_idx_t> batch_ptr,
-                                           std::shared_ptr<common::HistogramCuts const> cuts,
-                                           bool dense_compressed, std::size_t k_folds)
+FusedCvHistTreeMaker::FusedCvHistTreeMaker(
+    Context const* ctx, TrainParam param, HistMakerTrainParam const* hist_param,
+    common::Span<std::shared_ptr<common::ColumnSampler>> column_samplers,
+    std::vector<bst_idx_t> batch_ptr, std::shared_ptr<common::HistogramCuts const> cuts,
+    bool dense_compressed)
     : ctx_{ctx},
       param_{std::move(param)},
       hist_param_{hist_param},
@@ -44,12 +43,9 @@ FusedCvHistTreeMaker::FusedCvHistTreeMaker(Context const* ctx, TrainParam param,
                                                       DftMtHistShmemBytes(ctx->Ordinal()))},
       dense_compressed_{dense_compressed},
       batch_ptr_{std::move(batch_ptr)},
-      k_folds_{k_folds},
-      column_sampler_{std::move(column_sampler)} {
-  CHECK_GT(k_folds_, 0);
+      column_samplers_{std::move(column_samplers)} {
   CHECK_GE(batch_ptr_.size(), 2);
-  CHECK(column_sampler_);
-  for (std::size_t k = 0; k < k_folds_; ++k) {
+  for (std::size_t k = 0, k_folds = this->KFolds(); k < k_folds; ++k) {
     folds_.emplace_back(std::make_unique<CvFoldDeviceState>());
   }
 }
@@ -57,8 +53,8 @@ FusedCvHistTreeMaker::FusedCvHistTreeMaker(Context const* ctx, TrainParam param,
 void FusedCvHistTreeMaker::Reset(DMatrix* p_fmat, cv::FoldInfoBatches const& finfo,
                                  cv::FoldGpairs const& gpairs) {
   auto const& info = p_fmat->Info();
-  CHECK_EQ(finfo.KFolds(), k_folds_);
-  CHECK_EQ(gpairs.gpairs.size(), k_folds_);
+  CHECK_EQ(finfo.KFolds(), this->KFolds());
+  CHECK_EQ(gpairs.gpairs.size(), this->KFolds());
   auto n_batches = finfo.Size();
   CHECK_EQ(n_batches, batch_ptr_.size() - 1);
 
@@ -69,15 +65,18 @@ void FusedCvHistTreeMaker::Reset(DMatrix* p_fmat, cv::FoldInfoBatches const& fin
   auto device = ctx_->Device();
   info.feature_types.SetDevice(device);
   cuts_->SetDevice(device);
-  column_sampler_->Init(ctx_, info.num_col_, info.feature_weights, param_.colsample_bynode,
+  std::for_each(this->column_samplers_.begin(), this->column_samplers_.end(),
+                [&](std::shared_ptr<common::ColumnSampler> cs) {
+                  cs->Init(ctx_, info.num_col_, info.feature_weights, param_.colsample_bynode,
                         param_.colsample_bylevel, param_.colsample_bytree);
+                });
 
   // Number of targets is taken from the fold gradients. Single-target is n_targets == 1.
   n_targets_ = static_cast<bst_target_t>(gpairs.gpairs.at(0).Shape(1));
   CHECK_GE(n_targets_, 1);
   auto n_targets = static_cast<std::size_t>(n_targets_);
 
-  for (std::size_t k = 0; k < k_folds_; ++k) {
+  for (std::size_t k = 0, k_folds = this->KFolds(); k < k_folds; ++k) {
     auto& fold = *folds_[k];
     CHECK_EQ(gpairs.gpairs[k].Shape(1), n_targets_) << "Inconsistent target count across folds.";
     auto fold_size = gpairs.gpairs[k].Shape(0);
@@ -160,7 +159,7 @@ void FusedCvHistTreeMaker::BuildRootHist(DMatrix* p_fmat) {
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(true))) {
     auto acc = page.Impl()->GetDeviceEllpack(ctx_, {});
     auto fg = feature_groups_->DeviceAccessor(device);
-    for (std::size_t k = 0; k < k_folds_; ++k) {
+    for (std::size_t k = 0, k_folds = this->KFolds(); k < k_folds; ++k) {
       auto& fold = *folds_[k];
       auto ridx = fold.partitioners.At(i)->GetRows(RegTree::kRoot);
       if (ridx.empty()) {
@@ -206,7 +205,7 @@ MultiExpandEntry FusedCvHistTreeMaker::EvaluateRoot(DMatrix const* p_fmat, std::
   }
 
   // Evaluate the root split.
-  auto sampled_features = column_sampler_->GetFeatureSet(ctx_, 0);
+  auto sampled_features = this->column_samplers_[k]->GetFeatureSet(ctx_, p_tree->GetDepth(kRoot));
   sampled_features->SetDevice(device);
   auto feature_set = sampled_features->ConstDeviceSpan();
   MultiEvaluateSplitInputs input{kRoot, 0, dh::ToSpan(fold.root_sum), feature_set,
@@ -222,7 +221,8 @@ MultiExpandEntry FusedCvHistTreeMaker::EvaluateRoot(DMatrix const* p_fmat, std::
 
 std::vector<MultiExpandEntry> FusedCvHistTreeMaker::InitRoots(DMatrix* p_fmat,
                                                               std::vector<RegTree*> const& trees) {
-  CHECK_EQ(trees.size(), k_folds_);
+  auto k_folds = this->KFolds();
+  CHECK_EQ(trees.size(), k_folds);
 
   // 1. Allocate the root histogram for every fold.
   for (auto const& fold : folds_) {
@@ -232,7 +232,7 @@ std::vector<MultiExpandEntry> FusedCvHistTreeMaker::InitRoots(DMatrix* p_fmat,
   // 2. Root sum (n_targets wide) for every fold.
   std::vector<linalg::MatrixView<GradientPairInt64>> views;
   std::vector<common::Span<GradientPairInt64>> sums;
-  for (std::size_t k = 0; k < k_folds_; ++k) {
+  for (std::size_t k = 0; k < k_folds; ++k) {
     folds_[k]->root_sum.resize(n_targets_);
     views.push_back(folds_[k]->d_gpair.View(ctx_->Device()));
     sums.push_back(dh::ToSpan(folds_[k]->root_sum));
@@ -243,8 +243,8 @@ std::vector<MultiExpandEntry> FusedCvHistTreeMaker::InitRoots(DMatrix* p_fmat,
   this->BuildRootHist(p_fmat);
 
   // 4. Evaluate the root split for every fold.
-  std::vector<MultiExpandEntry> entries(k_folds_);
-  for (std::size_t k = 0; k < k_folds_; ++k) {
+  std::vector<MultiExpandEntry> entries(k_folds);
+  for (std::size_t k = 0; k < k_folds; ++k) {
     entries[k] = this->EvaluateRoot(p_fmat, k, trees[k]);
   }
   return entries;

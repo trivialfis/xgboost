@@ -79,9 +79,8 @@ class FusedCvHistTreeMaker {
   std::unique_ptr<FeatureGroups> feature_groups_;      // shared (depends only on cuts)
   bool dense_compressed_{false};
   std::vector<bst_idx_t> batch_ptr_;  // source-batch prefix-sum (global row offsets)
-  std::size_t k_folds_{0};
-  bst_target_t n_targets_{1};                              // set in Reset from the fold gradients
-  std::shared_ptr<common::ColumnSampler> column_sampler_;  // shared (colsample == 1 in POC)
+  bst_target_t n_targets_{1};  // set in Reset from the fold gradients
+  common::Span<std::shared_ptr<common::ColumnSampler>> column_samplers_;
 
   std::vector<std::unique_ptr<CvFoldDeviceState>> folds_;
 
@@ -95,10 +94,9 @@ class FusedCvHistTreeMaker {
 
  public:
   FusedCvHistTreeMaker(Context const* ctx, TrainParam param, HistMakerTrainParam const* hist_param,
-                       std::shared_ptr<common::ColumnSampler> column_sampler,
+                       common::Span<std::shared_ptr<common::ColumnSampler>> column_samplers,
                        std::vector<bst_idx_t> batch_ptr,
-                       std::shared_ptr<common::HistogramCuts const> cuts, bool dense_compressed,
-                       std::size_t k_folds);
+                       std::shared_ptr<common::HistogramCuts const> cuts, bool dense_compressed);
 
   // Per-iteration setup: quantise gradients, build the global d_gpair, seed partitioners,
   // reset histograms/evaluators.
@@ -108,7 +106,7 @@ class FusedCvHistTreeMaker {
   std::vector<MultiExpandEntry> InitRoots(DMatrix* p_fmat, std::vector<RegTree*> const& trees);
 
   // Accessors for testing.
-  [[nodiscard]] std::size_t KFolds() const { return this->k_folds_; }
+  [[nodiscard]] std::size_t KFolds() const { return this->column_samplers_.size(); }
   [[nodiscard]] bst_target_t NTargets() const { return this->n_targets_; }
   [[nodiscard]] common::Span<GradientPairInt64 const> RootHistogram(std::size_t k);
   [[nodiscard]] RowPartitionerBatches& Partitioners(std::size_t k);

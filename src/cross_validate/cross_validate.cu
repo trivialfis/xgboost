@@ -143,16 +143,12 @@ class FoldTreeMethod {
   Context const* ctx_{nullptr};
   tree::TrainParam param_;
   tree::HistMakerTrainParam hist_param_;
-  std::shared_ptr<common::ColumnSampler> column_sampler_;
+  std::vector<std::shared_ptr<common::ColumnSampler>> column_samplers_;
   std::unique_ptr<tree::cuda_impl::FusedCvHistTreeMaker> impl_;
 
  public:
-  FoldTreeMethod(std::shared_ptr<DMatrix> p_fmat, std::size_t k_folds)
-      : p_fmat_{std::move(p_fmat)},
-        column_sampler_{std::make_shared<common::ColumnSampler>()} {
-    CHECK(p_fmat_);
+  explicit FoldTreeMethod(std::shared_ptr<DMatrix> p_fmat) : p_fmat_{std::move(p_fmat)} {
     ctx_ = p_fmat_->Ctx();
-    CHECK(ctx_);
   }
 
   void Configure(Args args) {
@@ -173,9 +169,13 @@ class FoldTreeMethod {
     auto [cuts, dense_compressed] = tree::InitBatchCuts(ctx_, p_fmat, batch);
     auto batch_ptr = p_fmat->BatchPtr();
 
+    this->column_samplers_.clear();
+    for (std::size_t k = 0; k < k_folds; ++k) {
+      this->column_samplers_.emplace_back(std::make_shared<common::ColumnSampler>());
+    }
+
     impl_ = std::make_unique<tree::cuda_impl::FusedCvHistTreeMaker>(
-        ctx_, param_, &hist_param_, column_sampler_, std::move(batch_ptr), cuts, dense_compressed,
-        k_folds);
+        ctx_, param_, &hist_param_, column_samplers_, std::move(batch_ptr), cuts, dense_compressed);
   }
 
   void Update(FoldModels* folds, DMatrix* p_fmat, FoldInfoBatches const& finfo,
@@ -249,10 +249,10 @@ XGB_DLL int XGBCvFoldTreeMethodCreate(FoldModelsHandle c_cv_folds, DMatrixHandle
   xgboost_CHECK_C_ARG_PTR(c_config);
   xgboost_CHECK_C_ARG_PTR(out);
   auto p_fmat = CastDMatrixHandle(dtrain);
-  auto cv_folds = static_cast<cv::FoldModels*>(c_cv_folds);
+  auto cv_folds = static_cast<cv::FoldModels*>(c_cv_folds);  // fixme: unused
   Json config{Json::Load(StringView{c_config})};
   auto args = cv::JsonToArgs(config);
-  auto ptr = std::make_unique<cv::FoldTreeMethod>(std::move(p_fmat), cv_folds->KFolds());
+  auto ptr = std::make_unique<cv::FoldTreeMethod>(std::move(p_fmat));
   ptr->Configure(std::move(args));
   *out = ptr.release();
   API_END();

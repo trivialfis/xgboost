@@ -154,10 +154,13 @@ void RunFusedCvRoot(std::size_t k_folds, std::size_t n_batches, bst_target_t n_t
 
   auto batch = HistBatch(param);
   auto [cuts, dense_compressed] = InitBatchCuts(&ctx, p_fmat.get(), batch);
-  auto column_sampler = std::make_shared<common::ColumnSampler>();
+  std::vector<std::shared_ptr<common::ColumnSampler>> col_samplers;
+  for (std::size_t i = 0; i < k_folds; ++i) {
+    col_samplers.emplace_back(std::make_shared<common::ColumnSampler>());
+  }
 
-  FusedCvHistTreeMaker maker{&ctx,           param, &hist_param,      column_sampler,
-                             data.batch_ptr, cuts,  dense_compressed, k_folds};
+  FusedCvHistTreeMaker maker{&ctx,           param, &hist_param,     col_samplers,
+                             data.batch_ptr, cuts,  dense_compressed};
 
   std::vector<RegTree> trees;
   auto tree_ptrs = MakeTreePtrs(&trees, k_folds, n_targets, n_features);
