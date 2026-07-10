@@ -266,8 +266,4 @@ GradientPairPrecise FusedCvHistTreeMaker::RootSum(std::size_t k, bst_target_t t)
   ctx_->CUDACtx()->Stream().Sync();
   return (*fold.quantiser)[t].ToFloatingPoint(rs);
 }
-
-GradientQuantiser const& FusedCvHistTreeMaker::Quantiser(std::size_t k, bst_target_t t) const {
-  return (*folds_.at(k)->quantiser)[t];
-}
 }  // namespace xgboost::tree::cuda_impl

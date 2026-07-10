@@ -114,7 +114,5 @@ class FusedCvHistTreeMaker {
   [[nodiscard]] RowPartitionerBatches& Partitioners(std::size_t k);
   // Dequantised root sum for target t of fold k.
   [[nodiscard]] GradientPairPrecise RootSum(std::size_t k, bst_target_t t = 0) const;
-  // Per-target quantiser for fold k (used to dequantise the root histogram in tests).
-  [[nodiscard]] GradientQuantiser const& Quantiser(std::size_t k, bst_target_t t = 0) const;
 };
 }  // namespace xgboost::tree::cuda_impl
