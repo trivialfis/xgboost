@@ -35,15 +35,9 @@ namespace xgboost::tree {
  * @param entries Local expand entries on this worker.
  * @return Global expand entries gathered from all workers.
  */
-template <typename ExpandEntry>
-std::enable_if_t<std::is_same_v<ExpandEntry, CPUExpandEntry> ||
-                     std::is_same_v<ExpandEntry, MultiExpandEntry>,
-                 std::vector<ExpandEntry>>
-AllgatherColumnSplit(Context const *ctx, std::vector<ExpandEntry> const &entries) {
+inline std::vector<CPUExpandEntry> AllgatherColumnSplit(
+    Context const *ctx, std::vector<CPUExpandEntry> const &entries) {
   auto const n_entries = entries.size();
-
-  // First, gather all the primitive fields.
-  std::vector<ExpandEntry> local_entries(n_entries);
 
   // Collect and serialize all entries
   std::vector<std::vector<char>> serialized_entries;
@@ -57,12 +51,12 @@ AllgatherColumnSplit(Context const *ctx, std::vector<ExpandEntry> const &entries
     serialized_entries.emplace_back(std::move(out));
   }
   auto all_serialized = collective::VectorAllgatherV(ctx, serialized_entries);
-  CHECK_GE(all_serialized.size(), local_entries.size());
+  CHECK_GE(all_serialized.size(), n_entries);
 
-  std::vector<ExpandEntry> all_entries(all_serialized.size());
+  std::vector<CPUExpandEntry> all_entries(all_serialized.size());
   std::transform(all_serialized.cbegin(), all_serialized.cend(), all_entries.begin(),
                  [](std::vector<char> const &e) {
-                   ExpandEntry entry;
+                   CPUExpandEntry entry;
                    auto je = Json::Load(StringView{e.data(), e.size()}, std::ios::binary);
                    entry.Load(je);
                    return entry;
@@ -476,7 +470,6 @@ class HistMultiEvaluator {
   FeatureInteractionConstraintHost interaction_constraints_;
   std::shared_ptr<common::ColumnSampler> column_sampler_;
   Context const *ctx_;
-  bool is_col_split_{false};
 
  private:
   static double MultiCalcSplitGain(TrainParam const &param,
@@ -675,18 +668,6 @@ class HistMultiEvaluator {
         entries[nidx_in_set].split.Update(tloc_candidates[n_threads * nidx_in_set + tidx].split);
       }
     }
-
-    if (is_col_split_) {
-      // With column-wise data split, we gather the best splits from all the workers and update the
-      // expand entries accordingly.
-      auto all_entries = AllgatherColumnSplit(ctx_, entries);
-      for (auto worker = 0; worker < collective::GetWorldSize(); ++worker) {
-        for (std::size_t nidx_in_set = 0; nidx_in_set < entries.size(); ++nidx_in_set) {
-          entries[nidx_in_set].split.Update(
-              all_entries[worker * entries.size() + nidx_in_set].split);
-        }
-      }
-    }
   }
 
   linalg::Vector<float> InitRoot(linalg::VectorView<GradientPairPrecise const> root_sum) {
@@ -778,10 +759,7 @@ class HistMultiEvaluator {
 
   explicit HistMultiEvaluator(Context const *ctx, MetaInfo const &info, TrainParam const *param,
                               std::shared_ptr<common::ColumnSampler> sampler)
-      : param_{param},
-        column_sampler_{std::move(sampler)},
-        ctx_{ctx},
-        is_col_split_{info.IsColumnSplit()} {
+      : param_{param}, column_sampler_{std::move(sampler)}, ctx_{ctx} {
     interaction_constraints_.Configure(*param, info.num_col_);
     column_sampler_->Init(ctx, info.num_col_, info.feature_weights, param_->colsample_bynode,
                           param_->colsample_bylevel, param_->colsample_bytree);

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021-2025, XGBoost contributors.
+ * Copyright 2021-2026, XGBoost contributors.
  */
 #include <gtest/gtest.h>
 #include <xgboost/gradient.h>      // for GradientContainer
@@ -216,7 +216,7 @@ class TestApproxColumnSplit : public ::testing::TestWithParam<std::tuple<bool, f
  public:
   void Run() {
     auto [categorical, sparsity] = GetParam();
-    TestColumnSplit(1u, categorical, "grow_histmaker", sparsity);
+    TestColumnSplit(categorical, "grow_histmaker", sparsity);
   }
 };
 }  // namespace

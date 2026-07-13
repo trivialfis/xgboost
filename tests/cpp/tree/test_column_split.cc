@@ -1,5 +1,5 @@
 /**
- * Copyright 2024, XGBoost Contributors
+ * Copyright 2024-2026, XGBoost Contributors
  */
 #include "test_column_split.h"
 
@@ -13,16 +13,16 @@
 #include "../collective/test_worker.h"  // for TestDistributedGlobal
 
 namespace xgboost::tree {
-void TestColumnSplit(bst_target_t n_targets, bool categorical, std::string name, float sparsity) {
+void TestColumnSplit(bool categorical, std::string name, float sparsity) {
   auto constexpr kRows = 32;
   auto constexpr kCols = 16;
 
-  RegTree expected_tree{n_targets, static_cast<bst_feature_t>(kCols)};
+  RegTree expected_tree{1u, static_cast<bst_feature_t>(kCols)};
   ObjInfo task{ObjInfo::kRegression};
   Context ctx;
   {
     auto p_dmat = GenerateCatDMatrix(kRows, kCols, sparsity, categorical);
-    auto gpair = GenerateRandomGradients(&ctx, kRows, n_targets);
+    auto gpair = GenerateRandomGradients(&ctx, kRows, 1);
     std::unique_ptr<TreeUpdater> updater{TreeUpdater::Create(name, &ctx, &task)};
     std::vector<HostDeviceVector<bst_node_t>> position(1);
     TrainParam param;
@@ -38,7 +38,7 @@ void TestColumnSplit(bst_target_t n_targets, bool categorical, std::string name,
     collective::GetWorkerLocalThreads(kWorldSize, &ctx);
 
     auto p_dmat = GenerateCatDMatrix(kRows, kCols, sparsity, categorical);
-    auto gpair = GenerateRandomGradients(&ctx, kRows, n_targets);
+    auto gpair = GenerateRandomGradients(&ctx, kRows, 1);
 
     ObjInfo task{ObjInfo::kRegression};
     std::unique_ptr<TreeUpdater> updater{TreeUpdater::Create(name, &ctx, &task)};
@@ -47,7 +47,7 @@ void TestColumnSplit(bst_target_t n_targets, bool categorical, std::string name,
     std::unique_ptr<DMatrix> sliced{
         p_dmat->SliceCol(collective::GetWorldSize(), collective::GetRank())};
 
-    RegTree tree{n_targets, static_cast<bst_feature_t>(kCols)};
+    RegTree tree{1u, static_cast<bst_feature_t>(kCols)};
     TrainParam param;
     param.Init(Args{});
     updater->Configure(Args{});

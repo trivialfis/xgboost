@@ -1,15 +1,15 @@
 /**
- * Copyright 2023-2024, XGBoost Contributors
+ * Copyright 2023-2026, XGBoost Contributors
  */
 #pragma once
 
-#include <xgboost/data.h>          // for FeatureType, DMatrix
+#include <xgboost/data.h>  // for FeatureType, DMatrix
 
 #include <cstddef>  // for size_t
 #include <memory>   // for shared_ptr
 #include <vector>   // for vector
 
-#include "../helpers.h"                 // for RandomDataGenerator
+#include "../helpers.h"  // for RandomDataGenerator
 
 namespace xgboost::tree {
 inline std::shared_ptr<DMatrix> GenerateCatDMatrix(std::size_t rows, std::size_t cols,
@@ -29,5 +29,5 @@ inline std::shared_ptr<DMatrix> GenerateCatDMatrix(std::size_t rows, std::size_t
   }
 }
 
-void TestColumnSplit(bst_target_t n_targets, bool categorical, std::string name, float sparsity);
+void TestColumnSplit(bool categorical, std::string name, float sparsity);
 }  // namespace xgboost::tree

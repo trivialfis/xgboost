@@ -785,6 +785,7 @@ class GPUHistMaker : public TreeUpdater {
     for (xgboost::RegTree* p_tree : trees) {
       this->InitData(param, p_fmat, p_tree);
       if (p_tree->IsMultiTarget()) {
+        CHECK(!p_fmat->Info().IsColumnSplit()) << "Column-split data" << MTNotImplemented();
         p_mtimpl_->UpdateTree(in_gpair, p_fmat, task_, p_tree, &out_position[t_idx]);
       } else {
         CHECK_EQ(in_gpair->gpair.Shape(1), 1);

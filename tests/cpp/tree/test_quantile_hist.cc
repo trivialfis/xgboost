@@ -111,9 +111,7 @@ TEST(QuantileHist, MultiPartitioner) { TestPartitioner<MultiExpandEntry>(3); }
 
 namespace {
 
-template <typename ExpandEntry>
-void VerifyColumnSplitPartitioner(bst_target_t n_targets, size_t n_samples,
-                                  bst_feature_t n_features, size_t base_rowid,
+void VerifyColumnSplitPartitioner(size_t n_samples, bst_feature_t n_features, size_t base_rowid,
                                   std::shared_ptr<DMatrix> Xy, float min_value, float mid_value,
                                   CommonRowPartitioner const& expected_mid_partitioner) {
   auto dmat =
@@ -122,7 +120,7 @@ void VerifyColumnSplitPartitioner(bst_target_t n_targets, size_t n_samples,
   Context ctx;
   ctx.InitAllowUnknown(Args{});
 
-  std::vector<ExpandEntry> candidates{{0, 0}};
+  std::vector<CPUExpandEntry> candidates{{0, 0}};
   candidates.front().split.loss_chg = 0.4;
   auto cuts = common::SketchOnDMatrix(&ctx, dmat.get(), 64);
 
@@ -131,33 +129,21 @@ void VerifyColumnSplitPartitioner(bst_target_t n_targets, size_t n_samples,
     common::ColumnMatrix column_indices;
     column_indices.InitFromSparse(page, gmat, 0.5, ctx.Threads());
     {
-      RegTree tree{n_targets, n_features};
+      RegTree tree{1u, n_features};
       CommonRowPartitioner partitioner{&ctx, n_samples, base_rowid, true};
-      if constexpr (std::is_same_v<ExpandEntry, CPUExpandEntry>) {
-        GetSplit(&tree, min_value, &candidates);
-        partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                tree.HostScView());
-      } else {
-        GetMultiSplitForTest(&tree, min_value, &candidates);
-        partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                tree.HostMtView());
-      }
+      GetSplit(&tree, min_value, &candidates);
+      partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
+                                              tree.HostScView());
       ASSERT_EQ(partitioner.Size(), 3);
       ASSERT_EQ(partitioner[1].Size(), 0);
       ASSERT_EQ(partitioner[2].Size(), n_samples);
     }
     {
-      RegTree tree{n_targets, n_features};
+      RegTree tree{1u, n_features};
       CommonRowPartitioner partitioner{&ctx, n_samples, base_rowid, true};
-      if constexpr (std::is_same_v<ExpandEntry, CPUExpandEntry>) {
-        GetSplit(&tree, mid_value, &candidates);
-        partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                tree.HostScView());
-      } else {
-        GetMultiSplitForTest(&tree, mid_value, &candidates);
-        partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                tree.HostMtView());
-      }
+      GetSplit(&tree, mid_value, &candidates);
+      partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
+                                              tree.HostScView());
       auto left_nidx = tree.LeftChild(RegTree::kRoot);
 
       {
@@ -183,12 +169,11 @@ void VerifyColumnSplitPartitioner(bst_target_t n_targets, size_t n_samples,
   }
 }
 
-template <typename ExpandEntry>
-void TestColumnSplitPartitioner(bst_target_t n_targets) {
+void TestColumnSplitPartitioner() {
   std::size_t n_samples = 1024, base_rowid = 0;
   bst_feature_t n_features = 16;
   auto Xy = RandomDataGenerator{n_samples, n_features, 0}.GenerateDMatrix(true);
-  std::vector<ExpandEntry> candidates{{0, 0}};
+  std::vector<CPUExpandEntry> candidates{{0, 0}};
   candidates.front().split.loss_chg = 0.4;
 
   Context ctx;
@@ -206,36 +191,28 @@ void TestColumnSplitPartitioner(bst_target_t n_targets) {
 
     auto ptr = gmat.cut.Ptrs()[split_ind + 1];
     mid_value = gmat.cut.Values().at(ptr / 2);
-    RegTree tree{n_targets, n_features};
-    if constexpr (std::is_same_v<ExpandEntry, CPUExpandEntry>) {
-      GetSplit(&tree, mid_value, &candidates);
-      mid_partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                  tree.HostScView());
-    } else {
-      GetMultiSplitForTest(&tree, mid_value, &candidates);
-      mid_partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
-                                                  tree.HostMtView());
-    }
+    RegTree tree{1u, n_features};
+    GetSplit(&tree, mid_value, &candidates);
+    mid_partitioner.UpdatePosition<false, true>(&ctx, gmat, column_indices, candidates,
+                                                tree.HostScView());
   }
 
   auto constexpr kWorkers = 4;
   collective::TestDistributedGlobal(kWorkers, [&] {
-    VerifyColumnSplitPartitioner<ExpandEntry>(n_targets, n_samples, n_features, base_rowid, Xy,
-                                              min_value, mid_value, mid_partitioner);
+    VerifyColumnSplitPartitioner(n_samples, n_features, base_rowid, Xy, min_value, mid_value,
+                                 mid_partitioner);
   });
 }
 }  // anonymous namespace
 
-TEST(QuantileHist, PartitionerColumnSplit) { TestColumnSplitPartitioner<CPUExpandEntry>(1); }
-
-TEST(QuantileHist, MultiPartitionerColumnSplit) { TestColumnSplitPartitioner<MultiExpandEntry>(3); }
+TEST(QuantileHist, PartitionerColumnSplit) { TestColumnSplitPartitioner(); }
 
 namespace {
-class TestHistColumnSplit : public ::testing::TestWithParam<std::tuple<bst_target_t, bool, float>> {
+class TestHistColumnSplit : public ::testing::TestWithParam<std::tuple<bool, float>> {
  public:
   void Run() {
-    auto [n_targets, categorical, sparsity] = GetParam();
-    TestColumnSplit(n_targets, categorical, "grow_quantile_histmaker", sparsity);
+    auto [categorical, sparsity] = GetParam();
+    TestColumnSplit(categorical, "grow_quantile_histmaker", sparsity);
   }
 };
 }  // anonymous namespace
@@ -243,17 +220,10 @@ class TestHistColumnSplit : public ::testing::TestWithParam<std::tuple<bst_targe
 TEST_P(TestHistColumnSplit, Basic) { this->Run(); }
 
 INSTANTIATE_TEST_SUITE_P(ColumnSplit, TestHistColumnSplit, ::testing::ValuesIn([]() {
-                           std::vector<std::tuple<bst_target_t, bool, float>> params;
+                           std::vector<std::tuple<bool, float>> params;
                            for (auto categorical : {true, false}) {
                              for (auto sparsity : {0.0f, 0.6f}) {
-                               for (bst_target_t n_targets : {1u, 3u}) {
-                                 // Categorical features are not yet supported for
-                                 // multi-target trees.
-                                 if (categorical && n_targets > 1) {
-                                   continue;
-                                 }
-                                 params.emplace_back(n_targets, categorical, sparsity);
-                               }
+                               params.emplace_back(categorical, sparsity);
                              }
                            }
                            return params;

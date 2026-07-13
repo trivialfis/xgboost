@@ -33,65 +33,6 @@ struct ExpandEntryImpl {
   [[nodiscard]] bool IsValid(TrainParam const& param, bst_node_t num_leaves) const {
     return static_cast<Impl const*>(this)->IsValidImpl(param, num_leaves);
   }
-
-  void Save(Json* p_out) const {
-    auto& out = *p_out;
-    auto self = static_cast<Impl const*>(this);
-
-    out["nid"] = Integer{this->nid};
-    out["depth"] = Integer{this->depth};
-
-    /**
-     * Handle split
-     */
-    out["split"] = Object{};
-    auto& split = out["split"];
-    split["loss_chg"] = self->split.loss_chg;
-    split["sindex"] = Integer{self->split.sindex};
-    split["split_value"] = self->split.split_value;
-
-    auto const& cat_bits = self->split.cat_bits;
-    auto s_cat_bits = common::Span{cat_bits.data(), cat_bits.size()};
-    split["cat_bits"] = U8Array{s_cat_bits.size_bytes()};
-    auto& j_cat_bits = get<U8Array>(split["cat_bits"]);
-    using T = typename decltype(self->split.cat_bits)::value_type;
-    auto erased =
-        common::EraseType<std::add_const_t<T>, std::add_const_t<std::uint8_t>>(s_cat_bits);
-    for (std::size_t i = 0; i < erased.size(); ++i) {
-      j_cat_bits[i] = erased[i];
-    }
-
-    split["is_cat"] = Boolean{self->split.is_cat};
-
-    self->SaveGrad(&split);
-  }
-
-  void Load(Json const& in) {
-    auto self = static_cast<Impl*>(this);
-
-    this->nid = get<Integer const>(in["nid"]);
-    this->depth = get<Integer const>(in["depth"]);
-
-    /**
-     * Handle split
-     */
-    auto const& split = in["split"];
-    self->split.loss_chg = get<Number const>(split["loss_chg"]);
-    self->split.sindex = get<Integer const>(split["sindex"]);
-    self->split.split_value = get<Number const>(split["split_value"]);
-
-    auto const& j_cat_bits = get<U8Array const>(split["cat_bits"]);
-    using T = typename decltype(self->split.cat_bits)::value_type;
-    auto restored = common::RestoreType<std::add_const_t<T>>(
-        common::Span{j_cat_bits.data(), j_cat_bits.size()});
-    self->split.cat_bits.resize(restored.size());
-    for (std::size_t i = 0; i < restored.size(); ++i) {
-      self->split.cat_bits[i] = restored[i];
-    }
-
-    self->split.is_cat = get<Boolean const>(split["is_cat"]);
-    self->LoadGrad(split);
-  }
 };
 
 struct CPUExpandEntry : public ExpandEntryImpl<CPUExpandEntry> {
@@ -101,6 +42,54 @@ struct CPUExpandEntry : public ExpandEntryImpl<CPUExpandEntry> {
   CPUExpandEntry(bst_node_t nidx, bst_node_t depth, SplitEntry split)
       : ExpandEntryImpl{nidx, depth}, split(std::move(split)) {}
   CPUExpandEntry(bst_node_t nidx, bst_node_t depth) : ExpandEntryImpl{nidx, depth} {}
+
+  void Save(Json* p_out) const {
+    auto& out = *p_out;
+    out["nid"] = Integer{this->nid};
+    out["depth"] = Integer{this->depth};
+
+    out["split"] = Object{};
+    auto& j_split = out["split"];
+    j_split["loss_chg"] = this->split.loss_chg;
+    j_split["sindex"] = Integer{this->split.sindex};
+    j_split["split_value"] = this->split.split_value;
+
+    auto const& cat_bits = this->split.cat_bits;
+    auto s_cat_bits = common::Span{cat_bits.data(), cat_bits.size()};
+    j_split["cat_bits"] = U8Array{s_cat_bits.size_bytes()};
+    auto& j_cat_bits = get<U8Array>(j_split["cat_bits"]);
+    using T = typename decltype(this->split.cat_bits)::value_type;
+    auto erased =
+        common::EraseType<std::add_const_t<T>, std::add_const_t<std::uint8_t>>(s_cat_bits);
+    for (std::size_t i = 0; i < erased.size(); ++i) {
+      j_cat_bits[i] = erased[i];
+    }
+
+    j_split["is_cat"] = Boolean{this->split.is_cat};
+    this->SaveGrad(&j_split);
+  }
+
+  void Load(Json const& in) {
+    this->nid = get<Integer const>(in["nid"]);
+    this->depth = get<Integer const>(in["depth"]);
+
+    auto const& j_split = in["split"];
+    this->split.loss_chg = get<Number const>(j_split["loss_chg"]);
+    this->split.sindex = get<Integer const>(j_split["sindex"]);
+    this->split.split_value = get<Number const>(j_split["split_value"]);
+
+    auto const& j_cat_bits = get<U8Array const>(j_split["cat_bits"]);
+    using T = typename decltype(this->split.cat_bits)::value_type;
+    auto restored = common::RestoreType<std::add_const_t<T>>(
+        common::Span{j_cat_bits.data(), j_cat_bits.size()});
+    this->split.cat_bits.resize(restored.size());
+    for (std::size_t i = 0; i < restored.size(); ++i) {
+      this->split.cat_bits[i] = restored[i];
+    }
+
+    this->split.is_cat = get<Boolean const>(j_split["is_cat"]);
+    this->LoadGrad(j_split);
+  }
 
   void SaveGrad(Json* p_out) const {
     auto& out = *p_out;
@@ -145,22 +134,6 @@ struct CPUExpandEntry : public ExpandEntryImpl<CPUExpandEntry> {
     os << "split:\n" << e.split << std::endl;
     return os;
   }
-
-  /**
-   * @brief Copy primitive fields into this, and collect cat_bits into a vector.
-   *
-   * This is used for allgather.
-   *
-   * @param that The other entry to copy from
-   * @param collected_cat_bits The vector to collect cat_bits
-   * @param cat_bits_sizes The sizes of the collected cat_bits
-   */
-  void CopyAndCollect(CPUExpandEntry const& that, std::vector<uint32_t>* collected_cat_bits,
-                      std::vector<std::size_t>* cat_bits_sizes) {
-    nid = that.nid;
-    depth = that.depth;
-    split.CopyAndCollect(that.split, collected_cat_bits, cat_bits_sizes);
-  }
 };
 
 struct MultiExpandEntry : public ExpandEntryImpl<MultiExpandEntry> {
@@ -168,32 +141,6 @@ struct MultiExpandEntry : public ExpandEntryImpl<MultiExpandEntry> {
 
   MultiExpandEntry() = default;
   MultiExpandEntry(bst_node_t nidx, bst_node_t depth) : ExpandEntryImpl{nidx, depth} {}
-
-  void SaveGrad(Json* p_out) const {
-    auto& out = *p_out;
-    auto save = [&](std::string const& name, std::vector<GradientPairPrecise> const& sum) {
-      out[name] = F64Array{sum.size() * 2};
-      auto& array = get<F64Array>(out[name]);
-      for (std::size_t i = 0, j = 0; i < sum.size(); i++, j += 2) {
-        array[j] = sum[i].GetGrad();
-        array[j + 1] = sum[i].GetHess();
-      }
-    };
-    save("left_sum", this->split.left_sum);
-    save("right_sum", this->split.right_sum);
-  }
-  void LoadGrad(Json const& in) {
-    auto load = [&](std::string const& name, std::vector<GradientPairPrecise>* p_sum) {
-      auto const& array = get<F64Array const>(in[name]);
-      auto& sum = *p_sum;
-      sum.resize(array.size() / 2);
-      for (std::size_t i = 0, j = 0; i < sum.size(); ++i, j += 2) {
-        sum[i] = GradientPairPrecise{array[j], array[j + 1]};
-      }
-    };
-    load("left_sum", &this->split.left_sum);
-    load("right_sum", &this->split.right_sum);
-  }
 
   [[nodiscard]] bool IsValidImpl(TrainParam const& param, bst_node_t num_leaves) const {
     if (split.loss_chg <= kRtEps) return false;
@@ -235,24 +182,6 @@ struct MultiExpandEntry : public ExpandEntryImpl<MultiExpandEntry> {
     }
     os << "]\n";
     return os;
-  }
-
-  /**
-   * @brief Copy primitive fields into this, and collect cat_bits and gradients into vectors.
-   *
-   * This is used for allgather.
-   *
-   * @param that The other entry to copy from
-   * @param collected_cat_bits The vector to collect cat_bits
-   * @param cat_bits_sizes The sizes of the collected cat_bits
-   * @param collected_gradients The vector to collect gradients
-   */
-  void CopyAndCollect(MultiExpandEntry const& that, std::vector<uint32_t>* collected_cat_bits,
-                      std::vector<std::size_t>* cat_bits_sizes,
-                      std::vector<GradientPairPrecise>* collected_gradients) {
-    nid = that.nid;
-    depth = that.depth;
-    split.CopyAndCollect(that.split, collected_cat_bits, cat_bits_sizes, collected_gradients);
   }
 };
 }  // namespace xgboost::tree

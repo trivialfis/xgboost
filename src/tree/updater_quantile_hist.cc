@@ -13,6 +13,7 @@
 #include <vector>     // for vector
 
 #include "../collective/aggregator.h"        // for GlobalSum
+#include "../collective/allreduce.h"         // for Allreduce
 #include "../collective/communicator-inl.h"  // for IsDistributed
 #include "../common/hist_util.h"             // for HistogramCuts, GHistRow
 #include "../common/linalg_op.h"             // for begin, cbegin, cend
@@ -202,10 +203,10 @@ class MultiTargetHistBuilder {
       }
       if (page_idx < partitioner_.size()) {
         partitioner_[page_idx].Reset(ctx_, page.Size(), page.base_rowid,
-                                     p_fmat->Info().IsColumnSplit());
+                                     /*is_col_split=*/false);
       } else {
         partitioner_.emplace_back(ctx_, page.Size(), page.base_rowid,
-                                  p_fmat->Info().IsColumnSplit());
+                                  /*is_col_split=*/false);
       }
       page_idx++;
     }
@@ -214,8 +215,7 @@ class MultiTargetHistBuilder {
     bst_target_t n_targets = gpair.Shape(1);
     histogram_builder_ = std::make_unique<MultiHistogramBuilder>();
     histogram_builder_->Reset(ctx_, n_total_bins, n_targets, HistBatch(param_),
-                              collective::IsDistributed(), p_fmat->Info().IsColumnSplit(),
-                              hist_param_);
+                              collective::IsDistributed(), /*is_col_split=*/false, hist_param_);
 
     evaluator_ = std::make_unique<HistMultiEvaluator>(ctx_, p_fmat->Info(), param_, col_sampler_);
     p_last_tree_ = p_tree;
@@ -234,10 +234,11 @@ class MultiTargetHistBuilder {
     cpu_impl::SumGradients(ctx_, gpair, root_sum.HostView());
     auto h_root_sum = root_sum.HostView();
     CHECK(h_root_sum.CContiguous());
-    auto rc = collective::GlobalSum(
-        ctx_, p_fmat->Info(),
+    auto rc = collective::Allreduce(
+        ctx_,
         linalg::MakeVec(reinterpret_cast<double *>(h_root_sum.Values().data()),
-                        h_root_sum.Size() * 2));
+                        h_root_sum.Size() * 2),
+        collective::Op::kSum);
     collective::SafeColl(rc);
 
     histogram_builder_->BuildRootHist(p_fmat, p_tree->HostMtView(), partitioner_, gpair, best,
@@ -367,10 +368,11 @@ class MultiTargetHistBuilder {
     auto leaf_sums = ReduceToRows(ctx_, h_leaf_sums_tloc);
     auto h_leaf_sums = leaf_sums.HostView();
     CHECK(h_leaf_sums.CContiguous());
-    auto rc = collective::GlobalSum(
-        ctx_, p_last_fmat_->Info(),
+    auto rc = collective::Allreduce(
+        ctx_,
         linalg::MakeVec(reinterpret_cast<double *>(h_leaf_sums.Values().data()),
-                        h_leaf_sums.Size() * 2));
+                        h_leaf_sums.Size() * 2),
+        collective::Op::kSum);
     collective::SafeColl(rc);
 
     // Calculate weights for each leaf
@@ -630,6 +632,7 @@ class QuantileHistMaker : public TreeUpdater {
               common::Span<HostDeviceVector<bst_node_t>> out_position,
               const std::vector<RegTree *> &trees) override {
     if (trees.front()->IsMultiTarget()) {
+      CHECK(!p_fmat->Info().IsColumnSplit()) << "Column-split data" << MTNotImplemented();
       CHECK(hist_param_.GetInitialised());
       if (!param->monotone_constraints.empty()) {
         LOG(FATAL) << "Monotonic constraint" << MTNotImplemented();
