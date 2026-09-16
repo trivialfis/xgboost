@@ -3,11 +3,13 @@
  */
 #include <dmlc/registry.h>
 
-#include <cstddef>  // for size_t
-#include <vector>   // for vector
+#include <cstddef>      // for size_t
+#include <type_traits>  // for is_same_v
+#include <vector>       // for vector
 
 #include "../common/cuda_context.cuh"       // for CUDAContext
 #include "../common/cuda_stream.h"          // for Event
+#include "../common/cufile_stream.h"        // for CuFileReadStream
 #include "../common/io.h"                   // for AlignedResourceReadStream, AlignedFileWriteStream
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
 #include "../common/ref_resource_view.h"    // for ReadVec, WriteVec
@@ -20,9 +22,8 @@ DMLC_REGISTRY_FILE_TAG(ellpack_page_raw_format);
 
 namespace {
 // Function to support system without HMM or ATS
-template <typename T>
-[[nodiscard]] bool ReadDeviceVec(Context const* ctx, common::AlignedResourceReadStream* fi,
-                                 common::RefResourceView<T>* vec) {
+template <typename T, typename Stream>
+[[nodiscard]] bool ReadDeviceVec(Context const* ctx, Stream* fi, common::RefResourceView<T>* vec) {
   xgboost_NVTX_FN_RANGE();
 
   std::uint64_t n{0};
@@ -35,14 +36,18 @@ template <typename T>
 
   auto expected_bytes = sizeof(T) * n;
 
-  auto [ptr, n_bytes] = fi->Consume(expected_bytes);
-  if (n_bytes != expected_bytes) {
-    return false;
+  if constexpr (std::is_same_v<Stream, common::CuFileReadStream>) {
+    *vec = common::MakeFixedVecWithCudaMalloc<T>(n);
+    return fi->ReadAsync(vec->data(), expected_bytes, ctx->CUDACtx()->Stream());
+  } else {
+    auto [ptr, n_bytes] = fi->Consume(expected_bytes);
+    if (n_bytes != expected_bytes) {
+      return false;
+    }
+    *vec = common::MakeFixedVecWithCudaMalloc<T>(n);
+    dh::safe_cuda(
+        cudaMemcpyAsync(vec->data(), ptr, n_bytes, cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
   }
-
-  *vec = common::MakeFixedVecWithCudaMalloc<T>(n);
-  dh::safe_cuda(
-      cudaMemcpyAsync(vec->data(), ptr, n_bytes, cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
   return true;
 }
 }  // namespace
@@ -52,8 +57,8 @@ template <typename T>
     return false;        \
   }
 
-[[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page,
-                                              common::AlignedResourceReadStream* fi) {
+template <typename Stream>
+[[nodiscard]] bool EllpackPageRawFormat::ReadImpl(EllpackPage* page, Stream* fi) {
   xgboost_NVTX_FN_RANGE();
   auto* impl = page->Impl();
 
@@ -61,10 +66,14 @@ template <typename T>
   RET_IF_NOT(fi->Read(&impl->is_dense));
   RET_IF_NOT(fi->Read(&impl->info.row_stride));
 
-  if (this->param_.prefetch_copy || !has_hmm_ats_) {
+  if constexpr (std::is_same_v<Stream, common::CuFileReadStream>) {
     RET_IF_NOT(ReadDeviceVec(ctx_, fi, &impl->gidx_buffer));
   } else {
-    RET_IF_NOT(common::ReadVec(fi, &impl->gidx_buffer));
+    if (this->param_.prefetch_copy || !has_hmm_ats_) {
+      RET_IF_NOT(ReadDeviceVec(ctx_, fi, &impl->gidx_buffer));
+    } else {
+      RET_IF_NOT(common::ReadVec(fi, &impl->gidx_buffer));
+    }
   }
   RET_IF_NOT(fi->Read(&impl->base_rowid));
   bst_idx_t n_symbols{0};
@@ -73,8 +82,21 @@ template <typename T>
 
   impl->SetCuts(this->cuts_);
 
-  ctx_->CUDACtx()->Stream().Sync();
+  if constexpr (std::is_same_v<Stream, common::CuFileReadStream>) {
+    fi->Sync();
+  } else {
+    ctx_->CUDACtx()->Stream().Sync();
+  }
   return true;
+}
+
+[[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page,
+                                              common::AlignedResourceReadStream* fi) {
+  return this->ReadImpl(page, fi);
+}
+
+[[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page, common::CuFileReadStream* fi) {
+  return this->ReadImpl(page, fi);
 }
 
 [[nodiscard]] std::size_t EllpackPageRawFormat::Write(EllpackPage const& page,

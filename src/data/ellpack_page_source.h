@@ -14,6 +14,7 @@
 
 #include "../common/compressed_iterator.h"  // for CompressedByteT
 #include "../common/cuda_rt_utils.h"        // for SupportsPageableMem, SupportsAts
+#include "../common/cufile_stream.h"        // for CuFileReadStream, InitCuFile
 #include "../common/hist_util.h"            // for HistogramCuts
 #include "../common/ref_resource_view.h"    // for RefResourceView
 #include "../data/batch_utils.h"            // for AutoHostRatio
@@ -232,19 +233,19 @@ class EllpackCacheStreamPolicy : public F<S> {
 };
 
 template <typename S, template <typename> typename F>
-class EllpackMmapStreamPolicy : public F<S> {
-  bool has_hmm_{curt::SupportsPageableMem()};
-
+class EllpackFileStreamPolicy : public F<S> {
  public:
   using WriterT = common::AlignedFileWriteStream;
-  using ReaderT = common::AlignedResourceReadStream;
+  using ReaderT = common::CuFileReadStream;
 
  public:
-  EllpackMmapStreamPolicy() = default;
+  EllpackFileStreamPolicy() { common::InitCuFile(); }
   // For testing with the HMM flag.
   template <
       typename std::enable_if_t<std::is_same_v<F<S>, EllpackFormatPolicy<EllpackPage>>>* = nullptr>
-  explicit EllpackMmapStreamPolicy(bool has_hmm) : F<S>{has_hmm}, has_hmm_{has_hmm} {}
+  explicit EllpackFileStreamPolicy(bool has_hmm) : F<S>{has_hmm} {
+    common::InitCuFile();
+  }
 
   [[nodiscard]] std::unique_ptr<WriterT> CreateWriter(StringView name, std::uint32_t iter) {
     std::unique_ptr<common::AlignedFileWriteStream> fo;
@@ -306,7 +307,7 @@ using EllpackPageHostSource =
 
 // Cache to disk
 using EllpackPageSource =
-    EllpackPageSourceImpl<EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>>;
+    EllpackPageSourceImpl<EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>>;
 
 /**
  * @brief Ellpack source directly interfaces with user-defined iterators.
@@ -362,7 +363,7 @@ using ExtEllpackPageHostSource =
 
 // Cache to disk
 using ExtEllpackPageSource =
-    ExtEllpackPageSourceImpl<EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>>;
+    ExtEllpackPageSourceImpl<EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>>;
 
 #if !defined(XGBOOST_USE_CUDA)
 template <typename S>

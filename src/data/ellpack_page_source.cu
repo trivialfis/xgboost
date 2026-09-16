@@ -14,7 +14,6 @@
 #include "../common/device_helpers.cuh"     // for CurrentDevice
 #include "../common/numa_topo.h"            // for NumaMemCanCross, GetNumaMemBind
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
-#include "../common/resource.cuh"           // for PrivateCudaMmapConstStream
 #include "../common/transform_iterator.h"   // for MakeIndexTransformIter
 #include "batch_utils.h"                    // for HostRatioIsAuto
 #include "ellpack_page.cuh"                 // for EllpackPageImpl
@@ -353,24 +352,20 @@ EllpackCacheStreamPolicy<EllpackPage, EllpackFormatPolicy>::CreateReader(StringV
                                                                          bst_idx_t length) const;
 
 /**
- * EllpackMmapStreamPolicy
+ * EllpackFileStreamPolicy
  */
 
 template <typename S, template <typename> typename F>
-[[nodiscard]] std::unique_ptr<typename EllpackMmapStreamPolicy<S, F>::ReaderT>
-EllpackMmapStreamPolicy<S, F>::CreateReader(StringView name, bst_idx_t offset,
+[[nodiscard]] std::unique_ptr<typename EllpackFileStreamPolicy<S, F>::ReaderT>
+EllpackFileStreamPolicy<S, F>::CreateReader(StringView name, bst_idx_t offset,
                                             bst_idx_t length) const {
-  if (has_hmm_) {
-    return std::make_unique<common::PrivateCudaMmapConstStream>(name, offset, length);
-  } else {
-    return std::make_unique<common::PrivateMmapConstStream>(name, offset, length);
-  }
+  return std::make_unique<ReaderT>(name, offset, length);
 }
 
 // Instantiation
 template std::unique_ptr<
-    typename EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>::ReaderT>
-EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>::CreateReader(StringView name,
+    typename EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>::ReaderT>
+EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>::CreateReader(StringView name,
                                                                         bst_idx_t offset,
                                                                         bst_idx_t length) const;
 
@@ -474,7 +469,7 @@ EllpackPageSourceImpl<DefaultFormatStreamPolicy<EllpackPage, EllpackFormatPolicy
 template void
 EllpackPageSourceImpl<EllpackCacheStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
 template void
-EllpackPageSourceImpl<EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
+EllpackPageSourceImpl<EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
 
 /**
  * ExtEllpackPageSourceImpl
@@ -528,7 +523,7 @@ ExtEllpackPageSourceImpl<DefaultFormatStreamPolicy<EllpackPage, EllpackFormatPol
 template void
 ExtEllpackPageSourceImpl<EllpackCacheStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
 template void
-ExtEllpackPageSourceImpl<EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
+ExtEllpackPageSourceImpl<EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy>>::Fetch();
 
 namespace detail {
 void EllpackFormatCheckNuma(StringView msg) {

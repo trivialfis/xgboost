@@ -323,7 +323,8 @@ class DataIter(ABC):  # pylint: disable=too-many-instance-attributes
     on_host :
         Whether the data should be cached on the host memory instead of the file system
         when using GPU with external memory. When set to true (the default), the
-        "external memory" is the CPU (host) memory. See
+        "external memory" is the CPU (host) memory. Setting this to false requires
+        Linux and ``libcufile.so`` for asynchronous reads of the GPU disk cache. See
         :doc:`/tutorials/external_memory` for more info.
 
         .. versionadded:: 3.0.0

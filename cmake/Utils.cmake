@@ -117,6 +117,7 @@ endfunction()
 
 # Set CUDA related flags to target.  Must be used after code `format_gencode_flags`.
 function(xgboost_set_cuda_flags target)
+  target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
   set(cuda_compile_options "")
   set(cuda_compile_definitions "")
   set(cuda_device_debug_options "")

@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <xgboost/data.h>
 
+#include "../../../src/common/cufile_stream.h"          // for CuFileReadStream
+#include "../../../src/common/ref_resource_view.cuh"    // for MakeFixedVecWithCudaMalloc
 #include "../../../src/data/batch_utils.h"              // for AutoHostRatio
 #include "../../../src/data/ellpack_page.cuh"           // for EllpackPage, GetRowStride
 #include "../../../src/data/ellpack_page_raw_format.h"  // for EllpackPageRawFormat
@@ -75,6 +77,10 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
     for (auto const &ellpack : m->GetBatches<EllpackPage>(&ctx, param)) {
       auto loaded = page.Impl();
       auto orig = ellpack.Impl();
+      if constexpr (std::is_same_v<typename FormatStreamPolicy::ReaderT,
+                                   common::CuFileReadStream>) {
+        ASSERT_EQ(loaded->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
+      }
       ASSERT_EQ(loaded->Cuts().Ptrs(), orig->Cuts().Ptrs());
       ASSERT_EQ(loaded->Cuts().Values(), orig->Cuts().Values());
       ASSERT_EQ(loaded->base_rowid, orig->base_rowid);
@@ -89,17 +95,27 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
 }  // anonymous namespace
 
 TEST_P(TestEllpackPageRawFormat, DiskIO) {
-  EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{false};
+  EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{false};
   this->Run(&policy, this->GetParam());
 }
 
 TEST_P(TestEllpackPageRawFormat, DiskIOHmm) {
-  if (curt::SupportsPageableMem()) {
-    EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{true};
-    this->Run(&policy, this->GetParam());
-  } else {
-    GTEST_SKIP_("HMM is not supported.");
+  EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{true};
+  this->Run(&policy, this->GetParam());
+}
+
+TEST(EllpackPageRawFormat, CuFileShortRead) {
+  auto ctx = MakeCUDACtx(0);
+  common::TemporaryDirectory tmpdir;
+  auto path = tmpdir.Str() + "/ellpack.page";
+  {
+    common::AlignedFileWriteStream fo{path, "wb"};
+    ASSERT_EQ(fo.Write(std::uint64_t{0}), 8);
   }
+  auto buffer = common::MakeFixedVecWithCudaMalloc<char>(16);
+  common::CuFileReadStream fi{path, 0, buffer.size()};
+  ASSERT_TRUE(fi.ReadAsync(buffer.data(), buffer.size(), ctx.CUDACtx()->Stream()));
+  EXPECT_THROW(fi.Sync(), dmlc::Error);
 }
 
 TEST_P(TestEllpackPageRawFormat, HostIO) {
