@@ -120,8 +120,14 @@ class CatIter(DataIter):  # pylint: disable=too-many-instance-attributes
         device: str,
         cache: Optional[str],
         n_targets: int = 1,
+        on_host: bool = True,
+        min_cache_page_bytes: int | None = None,
     ) -> None:
-        super().__init__(cache_prefix=cache)
+        super().__init__(
+            cache_prefix=cache,
+            on_host=on_host,
+            min_cache_page_bytes=min_cache_page_bytes,
+        )
         self.n_batches = n_batches
         self.device = device
 

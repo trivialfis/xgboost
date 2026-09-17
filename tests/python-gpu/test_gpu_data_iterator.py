@@ -138,24 +138,26 @@ def test_invalid_device_extmem_qdm() -> None:
         xgb.train({"device": "cpu"}, Xy)
 
 
-def test_concat_pages() -> None:
+@pytest.mark.parametrize("cache_host_ratio", [0.0, 0.5, 1.0])
+def test_concat_pages(cache_host_ratio: float) -> None:
     boosters = []
-    for min_cache_page_bytes in [0, 256, 386, np.iinfo(np.int64).max]:
-        it = tm.IteratorForTest(
-            *tm.make_batches(64, 16, 4, use_cupy=True),
-            cache=None,
-            min_cache_page_bytes=min_cache_page_bytes,
-            on_host=True,
-        )
-        Xy = xgb.ExtMemQuantileDMatrix(it)
-        booster = xgb.train(
-            {
-                "device": "cuda",
-                "objective": "reg:absoluteerror",
-            },
-            Xy,
-        )
-        boosters.append(booster.save_raw(raw_format="json"))
+    for on_host in [True, False]:
+        for min_cache_page_bytes in [0, 256, 1500, np.iinfo(np.int64).max]:
+            it = tm.IteratorForTest(
+                *tm.make_batches(64, 16, 4, use_cupy=True),
+                cache=None,
+                min_cache_page_bytes=min_cache_page_bytes,
+                on_host=on_host,
+            )
+            Xy = xgb.ExtMemQuantileDMatrix(it, cache_host_ratio=cache_host_ratio)
+            booster = xgb.train(
+                {
+                    "device": "cuda",
+                    "objective": "reg:absoluteerror",
+                },
+                Xy,
+            )
+            boosters.append(booster.save_raw(raw_format="json"))
 
     for model in boosters[1:]:
         assert str(model) == str(boosters[0])

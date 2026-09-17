@@ -9,6 +9,7 @@
 
 #include "../../../src/data/batch_utils.h"     // for AutoHostRatio
 #include "../../../src/data/ellpack_page.cuh"  // for EllpackPageImpl
+#include "../filesystem.h"                     // for TemporaryDirectory
 #include "../helpers.h"                        // for RandomDataGenerator, GMockThrow
 #include "test_extmem_quantile_dmatrix.h"      // for TestExtMemQdmBasic
 
@@ -58,7 +59,7 @@ INSTANTIATE_TEST_SUITE_P(ExtMemQuantileDMatrix, ExtMemQuantileDMatrixGpu,
                          ::testing::Combine(::testing::Values(0.0f, 0.2f, 0.4f, 0.8f),
                                             ::testing::Bool()));
 
-class EllpackHostCacheTest : public ::testing::TestWithParam<std::tuple<double, bool, float>> {
+class EllpackCacheTest : public ::testing::TestWithParam<std::tuple<double, bool, float, bool>> {
  public:
   static constexpr bst_idx_t NumSamples() { return 8192; }
   static constexpr bst_idx_t NumFeatures() { return 4; }
@@ -66,7 +67,7 @@ class EllpackHostCacheTest : public ::testing::TestWithParam<std::tuple<double, 
   // Assumes dense
   static constexpr bst_idx_t NumBytes() { return NumFeatures() * NumSamples(); }
 
-  void Run(float sparsity, bool is_concat, float cache_host_ratio) {
+  void Run(float sparsity, bool is_concat, float cache_host_ratio, bool on_host) {
     auto ctx = MakeCUDACtx(0);
     auto param = BatchParam{NumBins(), tree::TrainParam::DftSparseThreshold()};
     auto n_batches = 4;
@@ -84,7 +85,7 @@ class EllpackHostCacheTest : public ::testing::TestWithParam<std::tuple<double, 
                           .Batches(n_batches)
                           .Bins(param.max_bin)
                           .Device(ctx.Device())
-                          .OnHost(true)
+                          .OnHost(on_host)
                           .MinPageCacheBytes(min_page_cache_bytes)
                           .CacheHostRatio(cache_host_ratio)
                           .Ref(p_fmat)
@@ -118,18 +119,27 @@ class EllpackHostCacheTest : public ::testing::TestWithParam<std::tuple<double, 
       ASSERT_EQ(k, static_cast<std::size_t>(p_ext_fmat->NumBatches()));
       AssertEllpackEq(&ctx, impl_s, new_impl.get());
     }
+    // Reset partially consumed iterations and destroy with prefetch work outstanding.
+    for (auto prefetch : {1, 3, 2}) {
+      param.n_prefetch_batches = prefetch;
+      auto it = p_ext_fmat->GetBatches<EllpackPage>(&ctx, param).begin();
+      ASSERT_EQ(it.Page()->BaseRowId(), 0);
+      ++it;
+      ASSERT_EQ(it.Page()->BaseRowId(), batch_ptr[1]);
+    }
   }
 };
 
-TEST_P(EllpackHostCacheTest, Basic) {
-  auto [sparsity, is_concat, cache_host_ratio] = this->GetParam();
-  this->Run(sparsity, is_concat, cache_host_ratio);
+TEST_P(EllpackCacheTest, Basic) {
+  auto [sparsity, is_concat, cache_host_ratio, on_host] = this->GetParam();
+  this->Run(sparsity, is_concat, cache_host_ratio, on_host);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    ExtMemQuantileDMatrix, EllpackHostCacheTest,
+    ExtMemQuantileDMatrix, EllpackCacheTest,
     ::testing::Combine(::testing::Values(0.0f, 0.2f, 0.4f, 0.8f), ::testing::Bool(),
-                       ::testing::Values(0.0f, 0.5f, 1.0f, ::xgboost::cuda_impl::AutoHostRatio())));
+                       ::testing::Values(0.0f, 0.5f, 1.0f, ::xgboost::cuda_impl::AutoHostRatio()),
+                       ::testing::Bool()));
 
 TEST(EllpackHostCacheTest, Accessor) {
   auto ctx = MakeCUDACtx(0);
@@ -175,6 +185,40 @@ TEST(EllpackHostCacheTest, Accessor) {
       auto dacc = std::get_if<DoubleEllpackAccessor>(&acc);
       ASSERT_TRUE(dacc);
     }
+  }
+}
+
+TEST(EllpackCacheTest, SinglePage) {
+  auto ctx = MakeCUDACtx(0);
+  auto param = BatchParam{16, tree::TrainParam::DftSparseThreshold()};
+  common::TemporaryDirectory tmpdir;
+  for (bool on_host : {true, false}) {
+    {
+      auto matrix = RandomDataGenerator{128, 3, 0.0}
+                        .Batches(4)
+                        .Bins(param.max_bin)
+                        .Device(ctx.Device())
+                        .OnHost(on_host)
+                        .MinPageCacheBytes(1024 * 1024)
+                        .CacheHostRatio(1.0)
+                        .GenerateExtMemQuantileDMatrix(tmpdir.Str() + "/cache", true);
+      ASSERT_EQ(matrix->NumBatches(), 1);
+      common::CompressedByteT const* resident{nullptr};
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        for (auto const& page : matrix->GetBatches<EllpackPage>(&ctx, param)) {
+          ASSERT_EQ(page.Impl()->gidx_buffer.Resource()->Type(),
+                    common::ResourceHandler::kCudaMalloc);
+          if (resident) {
+            EXPECT_EQ(resident, page.Impl()->gidx_buffer.data());
+          }
+          resident = page.Impl()->gidx_buffer.data();
+        }
+      }
+      for (auto const& entry : std::filesystem::directory_iterator(tmpdir.Path())) {
+        EXPECT_EQ(std::filesystem::file_size(entry.path()), 0);
+      }
+    }
+    EXPECT_TRUE(std::filesystem::is_empty(tmpdir.Path()));
   }
 }
 }  // namespace xgboost::data

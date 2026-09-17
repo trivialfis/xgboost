@@ -8,13 +8,13 @@
 #include <cstdint>  // for int32_t
 #include <limits>   // for numeric_limits
 #include <memory>   // for shared_ptr
-#include <tuple>    // for tuple
+#include <string>   // for string
 #include <utility>  // for move
 #include <vector>   // for vector
 
 #include "../common/compressed_iterator.h"  // for CompressedByteT
 #include "../common/cuda_rt_utils.h"        // for SupportsPageableMem, SupportsAts
-#include "../common/cufile_stream.h"        // for CuFileReadStream, InitCuFile
+#include "../common/cufile_stream.h"        // for CuFileStream, InitCuFile
 #include "../common/hist_util.h"            // for HistogramCuts
 #include "../common/ref_resource_view.h"    // for RefResourceView
 #include "../data/batch_utils.h"            // for AutoHostRatio
@@ -29,7 +29,7 @@
 namespace xgboost::data {
 struct EllpackCacheInfo {
   BatchParam param;
-  // The size ratio the host cache vs. the total cache
+  // The fraction of the cache stored externally (host memory or file).
   double cache_host_ratio{::xgboost::cuda_impl::AutoHostRatio()};
   float missing{std::numeric_limits<float>::quiet_NaN()};
   std::vector<bst_idx_t> cache_mapping;
@@ -44,81 +44,64 @@ struct EllpackCacheInfo {
         cache_host_ratio{config.cache_host_ratio},
         missing{config.missing} {}
 
-  // Only effective for host-based cache.
   // The number of batches for the concatenated cache.
   [[nodiscard]] std::size_t NumBatchesCc() const { return this->buffer_rows.size(); }
 };
 
-// We need to decouple the storage and the view of the storage so that we can implement
-// concurrent read. As a result, there are two classes, one for cache storage, another one
-// for stream.
-//
-// This is a memory-based cache. It can be a mixed of the device memory and the host
-// memory.
-struct EllpackMemCache {
-  // The host portion of each page.
-  std::vector<std::unique_ptr<EllpackPageImpl>> h_pages;
-  // The device portion of each page.
+// Storage is shared; each prefetch reader has an independent cursor/request.
+// Page metadata and the device suffix are identical for host and file backends.
+struct EllpackCache {
+  // Metadata and, for the host backend, the external prefix.
+  std::vector<std::unique_ptr<EllpackPageImpl>> pages;
   using DPage = common::RefResourceView<common::CompressedByteT>;
   std::vector<DPage> d_pages;
 
-  using PagePtr = std::tuple<EllpackPageImpl const*, DPage const*>;
-  using PageRef = std::tuple<std::unique_ptr<EllpackPageImpl>&, DPage&>;
+  std::string const file_name;
+  // Physical file offsets, separate from logical cache page sizes.
+  std::vector<bst_idx_t> file_offsets{0};
+  // Keep the registration and IO stream alive while prefetch readers share them.
+  std::unique_ptr<common::CuFileStream> file;
 
-  std::vector<std::size_t> offsets;
-  // Size of each batch before concatenation.
-  std::vector<bst_idx_t> sizes_orig;
-  // Mapping of pages before concatenation to after concatenation.
-  std::vector<std::size_t> const cache_mapping;
-  // Cache info
-  std::vector<std::size_t> const buffer_bytes;
+  // Only one concatenated page is under construction at a time.
+  std::unique_ptr<EllpackPageImpl> pending;
+  bst_idx_t input_idx{0};
+  bst_idx_t pending_offset{0};
+  std::vector<bst_idx_t> const cache_mapping;
+  std::vector<bst_idx_t> const buffer_bytes;
   std::vector<bst_idx_t> const buffer_rows;
   double const cache_host_ratio;
 
-  explicit EllpackMemCache(EllpackCacheInfo cinfo);
-  ~EllpackMemCache();
+  explicit EllpackCache(EllpackCacheInfo cinfo, StringView file_name = {});
+  ~EllpackCache();
 
-  // The number of bytes of the entire cache.
-  [[nodiscard]] std::size_t SizeBytes() const noexcept(true);
-  // The number of bytes of the device cache.
-  [[nodiscard]] std::size_t DeviceSizeBytes() const noexcept(true);
-  // The number of bytes of each page.
-  [[nodiscard]] std::size_t SizeBytes(std::size_t i) const noexcept(true);
-  // The number of bytes of the gradient index (ellpack).
-  [[nodiscard]] std::size_t GidxSizeBytes(std::size_t i) const noexcept(true);
-  // The number of bytes of the gradient index (ellpack) of the entire cache.
-  [[nodiscard]] std::size_t GidxSizeBytes() const noexcept(true);
-  // The number of pages in the cache.
-  [[nodiscard]] std::size_t Size() const { return this->h_pages.size(); }
-  // Is the cache empty?
-  [[nodiscard]] bool Empty() const { return this->SizeBytes() == 0; }
-  // No page concatenation is performed. If there's page concatenation, then the number of
-  // pages in the cache must be smaller than the input number of pages.
-  [[nodiscard]] bool NoConcat() const { return this->NumBatchesOrig() == this->buffer_rows.size(); }
-  // The number of pages before concatenatioin.
-  [[nodiscard]] bst_idx_t NumBatchesOrig() const { return cache_mapping.size(); }
-  // Get the pointers to the k^th concatenated page.
-  [[nodiscard]] PagePtr At(std::int32_t k) const;
-  // Get a reference to the last concatenated page.
-  [[nodiscard]] PageRef Back();
+  [[nodiscard]] bool OnHost() const { return file_name.empty(); }
+  // Logical sizes include metadata and both external and device payloads.
+  [[nodiscard]] std::size_t SizeBytes() const;
+  [[nodiscard]] std::size_t SizeBytes(std::size_t i) const;
+  [[nodiscard]] std::size_t DeviceSizeBytes() const;
+  [[nodiscard]] std::size_t ExternalSizeBytes(std::size_t i) const;
+  [[nodiscard]] std::size_t GidxSizeBytes(std::size_t i) const;
+  [[nodiscard]] std::size_t GidxSizeBytes() const;
+  [[nodiscard]] std::size_t Size() const { return this->pages.size(); }
+  [[nodiscard]] bool NoConcat() const { return cache_mapping.size() == buffer_rows.size(); }
 };
 
 // Pimpl to hide CUDA calls from the host compiler.
-class EllpackHostCacheStreamImpl;
+class EllpackCacheStreamImpl;
 
 /**
- * @brief A view of the actual cache implemented by `EllpackHostCache`.
+ * @brief A view of shared ELLPACK cache storage.
  */
-class EllpackHostCacheStream {
-  std::unique_ptr<EllpackHostCacheStreamImpl> p_impl_;
+class EllpackCacheStream {
+  std::unique_ptr<EllpackCacheStreamImpl> p_impl_;
 
  public:
-  explicit EllpackHostCacheStream(std::shared_ptr<EllpackMemCache> cache);
-  ~EllpackHostCacheStream();
+  explicit EllpackCacheStream(std::shared_ptr<EllpackCache> cache);
+  ~EllpackCacheStream();
   /**
    * @brief Get a shared handler to the cache.
    */
-  std::shared_ptr<EllpackMemCache const> Share() const;
+  std::shared_ptr<EllpackCache const> Share() const;
   /**
    * @brief Stream seek.
    *
@@ -135,13 +118,11 @@ class EllpackHostCacheStream {
    */
   void Read(Context const* ctx, EllpackPage* page, bool prefetch_copy) const;
   /**
-   * @brief Add a new page to the host cache.
+   * @brief Append an input page and store the cache page when its group is complete.
    *
-   * This method might append the input page to a previously stored page to increase
-   * individual page size.
+   * Inputs in the same group are concatenated before storing the completed page.
    *
-   * @return Whether a new cache page is create. False if the new page is appended to the
-   * previous one.
+   * @return Whether a completed cache page was stored.
    */
   [[nodiscard]] bool Write(Context const* ctx, EllpackPage const& page);
 };
@@ -215,51 +196,33 @@ class EllpackFormatPolicy {
   void DestroyPage(std::shared_ptr<S>* page) const;
 };
 
-template <typename S, template <typename> typename F>
+template <typename S, template <typename> typename F, bool on_host = true>
 class EllpackCacheStreamPolicy : public F<S> {
-  std::shared_ptr<EllpackMemCache> p_cache_;
+  std::shared_ptr<EllpackCache> p_cache_;
 
  public:
-  using WriterT = EllpackHostCacheStream;
-  using ReaderT = EllpackHostCacheStream;
+  using WriterT = EllpackCacheStream;
+  using ReaderT = EllpackCacheStream;
 
- public:
-  EllpackCacheStreamPolicy() = default;
+  EllpackCacheStreamPolicy() {
+    if constexpr (!on_host) {
+      common::InitCuFile();
+    }
+  }
+  // For testing with the HMM flag.
+  explicit EllpackCacheStreamPolicy(bool has_hmm) : F<S>{has_hmm} {
+    if constexpr (!on_host) {
+      common::InitCuFile();
+    }
+  }
   [[nodiscard]] std::unique_ptr<WriterT> CreateWriter(StringView name, std::uint32_t iter);
-
   [[nodiscard]] std::unique_ptr<ReaderT> CreateReader(StringView name, bst_idx_t offset,
                                                       bst_idx_t length) const;
-  std::shared_ptr<EllpackMemCache const> Share() const { return p_cache_; }
+  std::shared_ptr<EllpackCache const> Share() const { return p_cache_; }
 };
 
 template <typename S, template <typename> typename F>
-class EllpackFileStreamPolicy : public F<S> {
- public:
-  using WriterT = common::AlignedFileWriteStream;
-  using ReaderT = common::CuFileReadStream;
-
- public:
-  EllpackFileStreamPolicy() { common::InitCuFile(); }
-  // For testing with the HMM flag.
-  template <
-      typename std::enable_if_t<std::is_same_v<F<S>, EllpackFormatPolicy<EllpackPage>>>* = nullptr>
-  explicit EllpackFileStreamPolicy(bool has_hmm) : F<S>{has_hmm} {
-    common::InitCuFile();
-  }
-
-  [[nodiscard]] std::unique_ptr<WriterT> CreateWriter(StringView name, std::uint32_t iter) {
-    std::unique_ptr<common::AlignedFileWriteStream> fo;
-    if (iter == 0) {
-      fo = std::make_unique<common::AlignedFileWriteStream>(name, "wb");
-    } else {
-      fo = std::make_unique<common::AlignedFileWriteStream>(name, "ab");
-    }
-    return fo;
-  }
-
-  [[nodiscard]] std::unique_ptr<ReaderT> CreateReader(StringView name, bst_idx_t offset,
-                                                      bst_idx_t length) const;
-};
+using EllpackFileStreamPolicy = EllpackCacheStreamPolicy<S, F, false>;
 
 /**
  * @brief Calculate the size of each internal cached page along with the mapping of old

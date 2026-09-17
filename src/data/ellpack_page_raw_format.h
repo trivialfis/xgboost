@@ -17,12 +17,11 @@
 
 namespace xgboost::common {
 class HistogramCuts;
-class CuFileReadStream;
 }  // namespace xgboost::common
 
 namespace xgboost::data {
 
-class EllpackHostCacheStream;
+class EllpackCacheStream;
 
 class EllpackPageRawFormat : public SparsePageFormat<EllpackPage> {
   std::shared_ptr<common::HistogramCuts const> cuts_;
@@ -31,9 +30,6 @@ class EllpackPageRawFormat : public SparsePageFormat<EllpackPage> {
   // Supports CUDA HMM or ATS
   bool has_hmm_ats_{false};
   Context const* ctx_;
-
-  template <typename Stream>
-  [[nodiscard]] bool ReadImpl(EllpackPage* page, Stream* fi);
 
  public:
   explicit EllpackPageRawFormat(Context const* ctx,
@@ -45,12 +41,11 @@ class EllpackPageRawFormat : public SparsePageFormat<EllpackPage> {
         has_hmm_ats_{has_hmm_ats},
         ctx_{ctx} {}
   [[nodiscard]] bool Read(EllpackPage* page, common::AlignedResourceReadStream* fi) override;
-  [[nodiscard]] bool Read(EllpackPage* page, common::CuFileReadStream* fi);
   [[nodiscard]] std::size_t Write(EllpackPage const& page,
                                   common::AlignedFileWriteStream* fo) override;
 
-  [[nodiscard]] bool Read(EllpackPage* page, EllpackHostCacheStream* fi) const;
-  [[nodiscard]] std::size_t Write(EllpackPage const& page, EllpackHostCacheStream* fo) const;
+  [[nodiscard]] bool Read(EllpackPage* page, EllpackCacheStream* fi) const;
+  [[nodiscard]] std::size_t Write(EllpackPage const& page, EllpackCacheStream* fo) const;
 };
 
 #if !defined(XGBOOST_USE_CUDA)

@@ -324,8 +324,8 @@ class DataIter(ABC):  # pylint: disable=too-many-instance-attributes
         Whether the data should be cached on the host memory instead of the file system
         when using GPU with external memory. When set to true (the default), the
         "external memory" is the CPU (host) memory. Setting this to false requires
-        Linux and ``libcufile.so`` for asynchronous reads of the GPU disk cache. See
-        :doc:`/tutorials/external_memory` for more info.
+        Linux and ``libcufile.so`` for asynchronous reads and writes of the GPU disk
+        cache. See :doc:`/tutorials/external_memory` for more info.
 
         .. versionadded:: 3.0.0
 
@@ -334,11 +334,10 @@ class DataIter(ABC):  # pylint: disable=too-many-instance-attributes
             This is an experimental parameter and subject to change.
 
     min_cache_page_bytes :
-        The minimum number of bytes of each cached pages. Only used for on-host cache
-        with GPU-based :py:class:`ExtMemQuantileDMatrix`. When using GPU-based external
-        memory with the data cached in the host memory, XGBoost can concatenate the
-        pages internally to increase the batch size for the GPU. The default page size
-        is about 1/16 of the total device memory. Users can manually set the value based
+        The minimum number of bytes of each cached page for GPU-based
+        :py:class:`ExtMemQuantileDMatrix`. XGBoost can concatenate pages internally
+        to increase the batch size for the GPU, with either host-memory or file caching.
+        The default page size is about 1/16 of the total device memory. Users can set it based
         on the actual hardware and datasets. Set this to 0 to disable page
         concatenation.
 
@@ -1663,9 +1662,13 @@ class ExtMemQuantileDMatrix(DMatrix, _RefMixIn):
             .. versionadded:: 3.1.0
 
             Used by the GPU implementation. For GPU-based inputs, XGBoost can split the
-            cache into host and device caches to reduce the data transfer overhead. This
-            parameter specifies the size of host cache compared to the size of the
-            entire cache: :math:`host / (host + device)`.
+            cache into external and device portions to reduce the data transfer overhead.
+            This parameter specifies the external fraction of the entire cache:
+            :math:`external / (external + device)`. The external portion is stored in host
+            memory when the iterator has ``on_host=True``, or in a file otherwise.
+            If concatenation produces a single cache page, that page is kept entirely
+            on the GPU regardless of this ratio. File caching still requires cuFile,
+            even when the resulting cache file is empty.
 
             See :ref:`extmem-adaptive-cache` for more info.
 

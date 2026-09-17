@@ -255,6 +255,8 @@ def check_extmem_qdm(  # pylint: disable=too-many-arguments
             onehot=False,
             device=device,
             cache="cache",
+            on_host=on_host,
+            min_cache_page_bytes=0,
         )
     else:
         it = IteratorForTest(
@@ -263,9 +265,15 @@ def check_extmem_qdm(  # pylint: disable=too-many-arguments
             ),
             cache="cache",
             on_host=on_host,
+            min_cache_page_bytes=0,
         )
 
-    Xy_it = ExtMemQuantileDMatrix(it, max_bin=n_bins, enable_categorical=is_cat)
+    Xy_it = ExtMemQuantileDMatrix(
+        it,
+        max_bin=n_bins,
+        enable_categorical=is_cat,
+        cache_host_ratio=1.0 if device == "cuda" else None,
+    )
     with pytest.raises(ValueError, match="Only the `hist`"):
         booster_it = train(
             {"device": device, "tree_method": "approx", "max_bin": n_bins},

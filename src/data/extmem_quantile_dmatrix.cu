@@ -100,14 +100,9 @@ void ExtMemQuantileDMatrix::InitFromCUDA(
   CHECK_EQ(n_total_samples, ext_info.accumulated_rows);
 
   this->n_batches_ = this->cache_info_.at(id)->Size();
-  if (this->on_host_) {
-    CHECK_EQ(this->n_batches_, n_batches);
-    this->batch_ptr_ = ext_info.CalcBatchPtr(cinfo.buffer_rows);
-    CHECK_EQ(this->n_batches_, this->batch_ptr_.size() - 1);
-  } else {
-    CHECK_EQ(this->n_batches_, ext_info.n_batches);
-    this->batch_ptr_ = ext_info.base_rowids;
-  }
+  CHECK_EQ(this->n_batches_, n_batches);
+  this->batch_ptr_ = ext_info.CalcBatchPtr(cinfo.buffer_rows);
+  CHECK_EQ(this->n_batches_, this->batch_ptr_.size() - 1);
   if (cuts->HasCategorical()) {
     CHECK(!this->info_.feature_types.Empty());
   }

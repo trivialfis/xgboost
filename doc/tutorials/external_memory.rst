@@ -167,11 +167,16 @@ version does. It also supports the use of :py:class:`~xgboost.ExtMemQuantileDMat
 the ``hist`` tree method is employed (default). For a GPU device, the main memory is the
 device memory, whereas the external memory can be either a disk or the CPU memory. XGBoost
 stages the cache on CPU memory by default. Users can change the backing storage to disk by
-specifying the ``on_host`` parameter in the :py:class:`~xgboost.DataIter`. However, using
-the disk is not recommended as it's likely to make the GPU slower than the CPU. The option
-is here for experimentation purposes only. In addition,
-:py:class:`~xgboost.ExtMemQuantileDMatrix` parameter ``min_cache_page_bytes`` controls the
-data placement and memory usage.
+setting ``on_host=False`` in the :py:class:`~xgboost.DataIter`. File caching requires
+Linux and ``libcufile.so``, loaded dynamically for asynchronous reads and writes of GPU
+buffers. Missing cuFile support raises an error. cuFile can use its compatibility mode
+on systems without native GPUDirect Storage support. Storage performance determines
+whether disk caching is practical for a workload.
+
+Both backends support page concatenation, controlled by the iterator's
+``min_cache_page_bytes`` parameter. Set it to zero to preserve input batch boundaries.
+Host memory can also be accessed directly on systems with HMM/ATS support; file payloads
+are read into device memory before use.
 
 Inputs to the :py:class:`~xgboost.ExtMemQuantileDMatrix` (through the iterator) must be on
 the GPU. It's crucial to use an asynchronous memory pool for all memory allocations when
@@ -278,12 +283,16 @@ Adaptive Cache
 ==============
 
 Starting with 3.1, XGBoost introduces an adaptive cache for GPU-based external memory
-training. The feature helps split the data cache into a host cache and a device cache. By
+training. The feature splits the data cache into an external portion (host memory or a
+file, selected by ``on_host``) and a device portion. By
 keeping a portion of the cache on the GPU, we can reduce the amount of data transfer
 during training when there's sufficient amount of GPU memory. The feature can be
 controlled by the ``cache_host_ratio`` parameter of the
 :py:class:`xgboost.ExtMemQuantileDMatrix`. Unless explicitly specified, the ratio is
-automatically estimated based on device memory size and the size of the dataset.
+automatically estimated based on device memory size and the size of the dataset. The
+ratio is the external fraction for both backends. If concatenation produces just one
+cache page, XGBoost keeps that page entirely on the GPU regardless of the ratio. A file
+cache can consequently be empty, but selecting file caching still requires cuFile.
 
 However, this parameter increases memory fragmentation as XGBoost needs large memory pages
 with irregular sizes. As a result, you might see out of memory error after the

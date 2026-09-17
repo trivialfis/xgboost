@@ -4,7 +4,10 @@
 #include <gtest/gtest.h>
 #include <xgboost/data.h>
 
-#include "../../../src/common/cufile_stream.h"          // for CuFileReadStream
+#include <filesystem>  // for file_size
+#include <future>      // for async, future
+
+#include "../../../src/common/cufile_stream.h"          // for CuFileStream
 #include "../../../src/common/ref_resource_view.cuh"    // for MakeFixedVecWithCudaMalloc
 #include "../../../src/data/batch_utils.h"              // for AutoHostRatio
 #include "../../../src/data/ellpack_page.cuh"           // for EllpackPage, GetRowStride
@@ -77,8 +80,7 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
     for (auto const &ellpack : m->GetBatches<EllpackPage>(&ctx, param)) {
       auto loaded = page.Impl();
       auto orig = ellpack.Impl();
-      if constexpr (std::is_same_v<typename FormatStreamPolicy::ReaderT,
-                                   common::CuFileReadStream>) {
+      if (!policy.Share()->OnHost()) {
         ASSERT_EQ(loaded->gidx_buffer.Resource()->Type(), common::ResourceHandler::kCudaMalloc);
       }
       ASSERT_EQ(loaded->Cuts().Ptrs(), orig->Cuts().Ptrs());
@@ -113,9 +115,170 @@ TEST(EllpackPageRawFormat, CuFileShortRead) {
     ASSERT_EQ(fo.Write(std::uint64_t{0}), 8);
   }
   auto buffer = common::MakeFixedVecWithCudaMalloc<char>(16);
-  common::CuFileReadStream fi{path, 0, buffer.size()};
-  ASSERT_TRUE(fi.ReadAsync(buffer.data(), buffer.size(), ctx.CUDACtx()->Stream()));
+  common::CuFileStream fi{path};
+  fi.ReadAsync(buffer.data(), buffer.size(), 0, ctx.CUDACtx()->Stream());
   EXPECT_THROW(fi.Sync(), dmlc::Error);
+}
+
+TEST(EllpackPageRawFormat, CuFileUnalignedIO) {
+  auto ctx = MakeCUDACtx(0);
+  common::TemporaryDirectory tmpdir;
+  auto path = tmpdir.Str() + "/ellpack.page";
+  std::vector<char> expected(49);
+  std::iota(expected.begin(), expected.end(), 1);
+  auto src = common::MakeFixedVecWithCudaMalloc<char>(expected.size());
+  auto dst = common::MakeFixedVecWithCudaMalloc<char>(expected.size());
+  auto stream = ctx.CUDACtx()->Stream();
+  dh::safe_cuda(
+      cudaMemcpyAsync(src.data(), expected.data(), expected.size(), cudaMemcpyDefault, stream));
+  {
+    common::CuFileStream writer{path, true};
+    std::size_t offset = 0;
+    for (std::size_t size : {13, 0, 29, 7}) {
+      writer.WriteAsync(src.data() + offset, size, offset, stream);
+      writer.Sync();
+      offset += size;
+    }
+  }
+  ASSERT_EQ(std::filesystem::file_size(path), expected.size());
+  common::CuFileStream reader{path};
+  std::size_t offset = 0;
+  for (std::size_t size : {13, 0, 29, 7}) {
+    reader.ReadAsync(dst.data() + offset, size, offset, stream);
+    reader.Sync();
+    offset += size;
+  }
+  std::vector<char> actual(expected.size());
+  dh::safe_cuda(cudaMemcpy(actual.data(), dst.data(), actual.size(), cudaMemcpyDefault));
+  EXPECT_EQ(actual, expected);
+
+  auto reversed = expected;
+  std::reverse(reversed.begin(), reversed.end());
+  dh::safe_cuda(cudaMemcpy(src.data(), reversed.data(), reversed.size(), cudaMemcpyDefault));
+  common::CuFileStream other{tmpdir.Str() + "/other.page", true};
+  other.WriteAsync(src.data(), reversed.size(), 0, stream);
+  other.Sync();
+  std::vector<std::future<void>> reads;
+  for (auto *file : {&reader, &other}) {
+    offset = 0;
+    auto const &data = file == &reader ? expected : reversed;
+    for (std::size_t size : {13, 29, 7}) {
+      reads.push_back(std::async(std::launch::async, [&, file, size, offset] {
+        curt::SetDevice(ctx.Device().ordinal);
+        common::CuFileStream input{*file};
+        auto buffer = common::MakeFixedVecWithCudaMalloc<char>(size);
+        std::vector<char> result(size);
+        std::vector<char> reference(data.begin() + offset, data.begin() + offset + size);
+        for (int repeat = 0; repeat < 16; ++repeat) {
+          input.ReadAsync(buffer.data(), size, offset, ctx.CUDACtx()->Stream());
+          input.Sync();
+          dh::safe_cuda(cudaMemcpy(result.data(), buffer.data(), size, cudaMemcpyDefault));
+          ASSERT_EQ(result, reference);
+        }
+      }));
+      offset += size;
+    }
+  }
+  for (auto &read : reads) {
+    read.get();
+  }
+}
+
+TEST_P(TestEllpackPageRawFormat, CacheGroups) {
+  auto ctx = MakeCUDACtx(0);
+  auto param = BatchParam{8, tree::TrainParam::DftSparseThreshold()};
+  param.prefetch_copy = this->GetParam();
+  auto matrix = RandomDataGenerator{16, 3, 0}.GenerateDMatrix();
+  auto cuts = matrix->GetBatches<EllpackPage>(&ctx, param).begin().Page()->Impl()->CutsShared();
+  using Writer = common::CompressedBufferWriter;
+  // Three-bit symbols with boundaries that do not fall on whole bytes.
+  bst_idx_t constexpr symbols = 5, stride = 3;
+  std::vector<bst_idx_t> rows{3, 7, 5, 1};
+  for (auto const &mapping : {std::vector<bst_idx_t>{0, 0, 1}, {0, 1, 1, 2}}) {
+    for (double ratio : {0.0, 0.5, 1.0}) {
+      auto test = [&](auto *policy) {
+        common::TemporaryDirectory tmpdir;
+        auto path = tmpdir.Str() + "/ellpack.page";
+        Cache index{false, path, ".ellpack", true};
+        EllpackCacheInfo cinfo{param, ratio, std::numeric_limits<float>::quiet_NaN()};
+        cinfo.cache_mapping = mapping;
+        cinfo.buffer_rows.resize(mapping.back() + 1);
+        cinfo.buffer_bytes.resize(mapping.back() + 1);
+        for (std::size_t i = 0; i < mapping.size(); ++i) {
+          cinfo.buffer_rows[mapping[i]] += rows[i];
+          cinfo.buffer_bytes[mapping[i]] += Writer::CalculateBufferSize(rows[i] * stride, symbols);
+        }
+        policy->SetCuts(&ctx, cuts, ctx.Device(), cinfo);
+        auto format = policy->CreatePageFormat(param);
+        bst_idx_t base = 0;
+        for (std::size_t i = 0; i < mapping.size(); ++i) {
+          EllpackPage page;
+          auto src = page.Impl();
+          src->n_rows = rows[i];
+          src->is_dense = true;
+          src->info.row_stride = stride;
+          src->SetBaseRowId(base);
+          src->SetNumSymbols(symbols);
+          src->SetCuts(cuts);
+          std::vector<common::CompressedByteT> buffer(
+              Writer::CalculateBufferSize(rows[i] * stride, symbols), 0);
+          Writer writer{symbols};
+          for (bst_idx_t j = 0; j < rows[i] * stride; ++j) {
+            writer.WriteSymbol(buffer.data(), (base * stride + j) % symbols, j);
+          }
+          src->gidx_buffer =
+              common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(buffer.size());
+          dh::safe_cuda(
+              cudaMemcpy(src->gidx_buffer.data(), buffer.data(), buffer.size(), cudaMemcpyDefault));
+          auto output = policy->CreateWriter(path, i);
+          auto size = format->Write(page, output.get());
+          bool complete = i + 1 == mapping.size() || mapping[i + 1] != mapping[i];
+          ASSERT_EQ(size != InvalidPageSize(), complete);
+          if (complete) {
+            index.Push(size);
+          }
+          base += rows[i];
+        }
+        index.Commit();
+        auto cache = policy->Share();
+        ASSERT_FALSE(cache->pending);
+        ASSERT_EQ(cache->file != nullptr, !cache->OnHost());
+        ASSERT_EQ(cache->Size(), cinfo.NumBatchesCc());
+        ASSERT_EQ(index.offset.back(), cache->SizeBytes());
+        if (!cache->OnHost()) {
+          ASSERT_EQ(std::filesystem::file_size(path), cache->file_offsets.back());
+          ASSERT_EQ(cache->file_offsets.back() + cache->DeviceSizeBytes(), cache->GidxSizeBytes());
+          EXPECT_EQ(cache->file_offsets.back() == 0, ratio == 0);
+        }
+        // Seek by logical offset, including pages whose external portion is empty.
+        for (int repeat = 0; repeat < 2; ++repeat) {
+          base = 0;
+          for (std::size_t i = 0; i < cache->Size(); ++i) {
+            auto input = policy->CreateReader(path, index.offset[i], index.Bytes(i));
+            EllpackPage page;
+            ASSERT_TRUE(format->Read(&page, input.get()));
+            auto dst = page.Impl();
+            EXPECT_EQ(dst->base_rowid, base);
+            EXPECT_EQ(dst->n_rows, cinfo.buffer_rows[i]);
+            EXPECT_EQ(dst->info.row_stride, stride);
+            EXPECT_EQ(dst->NumSymbols(), symbols);
+            std::vector<common::CompressedByteT> buffer;
+            [[maybe_unused]] auto accessor = dst->GetHostEllpack(&ctx, &buffer);
+            ctx.CUDACtx()->Stream().Sync();
+            common::CompressedIterator<std::uint32_t> values{buffer.data(), symbols};
+            for (bst_idx_t j = 0; j < dst->n_rows * stride; ++j) {
+              ASSERT_EQ(values[j], (base * stride + j) % symbols);
+            }
+            base += dst->n_rows;
+          }
+        }
+      };
+      EllpackCacheStreamPolicy<EllpackPage, EllpackFormatPolicy> host;
+      test(&host);
+      EllpackFileStreamPolicy<EllpackPage, EllpackFormatPolicy> file;
+      test(&file);
+    }
+  }
 }
 
 TEST_P(TestEllpackPageRawFormat, HostIO) {
@@ -245,14 +408,14 @@ TEST(EllpackPageRawFormat, DevicePageConcat) {
   }
   {
     auto mem_cache = test(n_features * n_samples, ::xgboost::cuda_impl::AutoHostRatio());
-    ASSERT_EQ(mem_cache->h_pages.size(), 4);
+    ASSERT_EQ(mem_cache->pages.size(), 4);
     ASSERT_EQ(mem_cache->d_pages.size(), 4);
     ASSERT_FALSE(mem_cache->d_pages[0].empty());
   }
   {
     float cache_host_ratio = 0.65;
     auto mem_cache = test(n_features * n_samples, cache_host_ratio);
-    ASSERT_EQ(mem_cache->h_pages.size(), 4);
+    ASSERT_EQ(mem_cache->pages.size(), 4);
     ASSERT_EQ(mem_cache->d_pages.size(), 4);
     ASSERT_FALSE(mem_cache->d_pages[0].empty());
     auto n_total_bytes = mem_cache->SizeBytes();

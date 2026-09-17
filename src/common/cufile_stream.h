@@ -17,22 +17,21 @@ void InitCuFile();
 inline void InitCuFile() { AssertGPUSupport(); }
 #endif
 
-/** @brief Aligned cache reader with stream-ordered cuFile reads into device memory. */
-class CuFileReadStream {
+/** @brief Stream-ordered cuFile transfers between a cache file and device memory. */
+class CuFileStream {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 
  public:
-  CuFileReadStream(StringView path, std::size_t offset, std::size_t length);
-  ~CuFileReadStream();
+  // A writer creates/truncates the file; a reader opens an existing file.
+  explicit CuFileStream(StringView path, bool write = false);
+  // Create independent request state sharing the registered file and IO stream.
+  CuFileStream(CuFileStream const& other);
+  ~CuFileStream();
 
-  [[nodiscard]] bool Read(void* ptr, std::size_t n_bytes);
-  template <typename T>
-  [[nodiscard]] bool Read(T* ptr) {
-    return this->Read(ptr, sizeof(T));
-  }
-  [[nodiscard]] bool ReadAsync(void* ptr, std::size_t n_bytes, curt::StreamRef stream);
-  // Wait for the device read and check its completion status before publishing the page.
+  void ReadAsync(void* ptr, std::size_t n_bytes, std::size_t offset, curt::StreamRef stream);
+  void WriteAsync(void const* ptr, std::size_t n_bytes, std::size_t offset, curt::StreamRef stream);
+  // Check completion before publishing a page or reusing the request/buffer.
   void Sync();
 };
 }  // namespace xgboost::common
