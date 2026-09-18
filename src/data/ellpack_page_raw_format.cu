@@ -121,7 +121,10 @@ template <typename T>
     dh::safe_cuda(cudaEventElapsedTime(&milliseconds, start, stop));
     double n_bytes = page->Impl()->MemCostBytes();
     double tp = (n_bytes / static_cast<double>((1ul << 30))) * 1000.0 / milliseconds;
-    LOG(DEBUG) << "Ellpack " << __func__ << " throughput:" << tp << "GB/s";
+    // Concurrent requests have overlapping latency, including allocation and IO queue waits.
+    // This is a per-request rate, not aggregate storage bandwidth.
+    LOG(DEBUG) << "Ellpack " << __func__ << " latency:" << milliseconds
+               << "ms, effective per-request throughput:" << tp << "GiB/s";
   } else {
     dispatch();
   }
