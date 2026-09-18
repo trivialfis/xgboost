@@ -51,12 +51,20 @@ METHODS = ["Fused CV", "In-core CV"]
 
 
 def make_data(n_rows, n_features, seed, *, n_threads=None):
-    """Generate independent row chunks, reproducibly across thread counts."""
+    """Generate 80% signal / 20% noise columns in a reproducible random order.
+
+    Signal columns contribute linear, quadratic, sine, or interaction terms.
+    Fixed row chunks make the result reproducible across thread counts.
+    """
     X = np.empty((n_rows, n_features), dtype=np.float32)
     y = np.empty(n_rows, dtype=np.float32)
     chunk_rows = 2**16
     n_chunks = (n_rows + chunk_rows - 1) // chunk_rows
-    seeds = np.random.SeedSequence(seed).spawn(n_chunks)
+    seed_sequence = np.random.SeedSequence(seed)
+    feature_rng = np.random.default_rng(seed_sequence.spawn(1)[0])
+    n_signal = max(1, round(0.8 * n_features))
+    signal_features = feature_rng.permutation(n_features)[:n_signal]
+    seeds = seed_sequence.spawn(n_chunks)
 
     def fill_chunk(i):
         begin = i * chunk_rows
@@ -64,11 +72,19 @@ def make_data(n_rows, n_features, seed, *, n_threads=None):
         rng = np.random.default_rng(seeds[i])
         batch = X[begin:end]
         rng.standard_normal(batch.shape, dtype=np.float32, out=batch)
+
+        signal = batch[:, signal_features]
+        signal[:, 0::4] *= 2.0
+        signal[:, 1::4] **= 2
+        signal[:, 1::4] -= 1.0
+        signal[:, 1::4] *= 0.5
+        np.sin(signal[:, 2::4], out=signal[:, 2::4])
+        signal[:, 3::4] *= signal[:, : 4 * (n_signal // 4) : 4] > 0
+        # Center the quadratic terms and normalize so target scale stays comparable
+        # as the number of signal features changes.
         y[begin:end] = (
-            2.0 * batch[:, 0]
-            + 0.5 * batch[:, 1] ** 2
-            + np.sin(batch[:, 2])
-            + (batch[:, 0] > 0) * batch[:, 3]
+            0.5
+            + signal.sum(axis=1) * (2.0 / np.sqrt(n_signal))
             + 0.1 * rng.standard_normal(end - begin, dtype=np.float32)
         )
 
