@@ -146,6 +146,7 @@ class FoldTreeMethod {
     }
     auto d_gpair = unit.quantized_gpair.View(this->ctx_->Device());
     auto acc = page.Impl()->GetDeviceEllpack(this->ctx_, {});
+    auto feature_groups = this->feature_groups_->DeviceAccessor(this->ctx_->Device());
 
     std::vector<common::Span<tree::cuda_impl::RowIndexT const>> h_ridxs;
     std::vector<common::Span<GradientPairInt64>> h_hists;
@@ -156,8 +157,14 @@ class FoldTreeMethod {
         // A fold can have no training rows for a node in this batch.
         continue;
       }
+      auto hist = unit.histogram->GetNodeHistogram(nidx);
+      if (d_gpair.Shape(1) == 1) {
+        unit.histogram->BuildHistogram(this->ctx_, acc, feature_groups, d_gpair.Values(), d_ridx,
+                                       hist);
+        continue;
+      }
       h_ridxs.push_back(d_ridx);
-      h_hists.push_back(unit.histogram->GetNodeHistogram(nidx));
+      h_hists.push_back(hist);
       h_sizes_csum.push_back(d_ridx.size() + h_sizes_csum.back());
     }
     if (h_ridxs.empty()) {
@@ -166,9 +173,8 @@ class FoldTreeMethod {
 
     dh::device_vector<common::Span<GradientPairInt64>> hists{h_hists};
     dh::device_vector<common::Span<tree::cuda_impl::RowIndexT const>> ridxs{h_ridxs};
-    unit.histogram->BuildHistogram(this->ctx_, acc,
-                                   this->feature_groups_->DeviceAccessor(this->ctx_->Device()),
-                                   d_gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), h_sizes_csum);
+    unit.histogram->BuildHistogram(this->ctx_, acc, feature_groups, d_gpair, dh::ToSpan(ridxs),
+                                   dh::ToSpan(hists), h_sizes_csum);
   }
 
   // The feature set of every node of every unit, see `Reset`.
@@ -204,7 +210,7 @@ class FoldTreeMethod {
     CheckNoUnknownParams(unknown);
   }
 
-  void InitDataOnce(DMatrix* p_fmat, FoldAssignment const& assignment) {
+  void InitDataOnce(DMatrix* p_fmat, FoldAssignment const& assignment, bst_target_t n_targets) {
     xgboost_NVTX_FN_RANGE();
     CHECK(ctx_->IsCUDA()) << "CV tree method `hist` requires a CUDA device.";
     p_fmat->Info().feature_types.SetDevice(ctx_->Device());
@@ -221,8 +227,10 @@ class FoldTreeMethod {
         training_counts_[k][b] = batch_ptr_[b + 1] - batch_ptr_[b] - counts[k];
       }
     }
-    this->feature_groups_ = std::make_unique<tree::FeatureGroups>(
-        *this->cuts_, dense_compressed, tree::DftMtHistShmemBytes(ctx_->Ordinal()));
+    auto shmem = n_targets == 1 ? tree::DftStHistShmemBytes(ctx_->Ordinal())
+                                : tree::DftMtHistShmemBytes(ctx_->Ordinal());
+    this->feature_groups_ =
+        std::make_unique<tree::FeatureGroups>(*this->cuts_, dense_compressed, shmem);
 
     this->CheckSupportedParams();
   }
@@ -707,7 +715,7 @@ class FoldTreeMethod {
     CHECK(!assignment_ || assignment_ == predts->assignment)
         << "CV tree method must keep the fold assignment from its first update.";
     if (!assignment_) {
-      this->InitDataOnce(p_fmat, assignment);
+      this->InitDataOnce(p_fmat, assignment, folds->OutputLength(0));
       assignment_ = predts->assignment;
     }
     this->n_page_passes_ = this->n_levels_ = 0;

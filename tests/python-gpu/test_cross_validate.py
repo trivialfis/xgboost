@@ -7,6 +7,7 @@ import ctypes
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -464,6 +465,47 @@ def test_cv_hist_subtraction(xyw_extqdm: XywExtQdm) -> None:
         rebuilt.save_raw("json")
     )
     cp.testing.assert_array_equal(cached_predts.get_valid(), tight_predts.get_valid())
+
+
+@pytest.mark.parametrize("n_targets", [1, 2])
+@pytest.mark.parametrize("cache_host_ratio", [0.0, 0.5, 1.0])
+def test_cv_page_concat(n_targets: int, cache_host_ratio: float) -> None:
+    """Rebatching uneven inputs preserves all trees and prediction caches exactly."""
+    import cupy as cp
+
+    rng = np.random.default_rng(2026)
+    X = rng.normal(size=(512, 32)).astype(np.float32)
+    y = cp.asarray(rng.normal(size=(512, n_targets)), dtype=cp.float32)
+    X[rng.random(X.shape) < 0.5] = np.nan
+    X = cp.asarray(X)
+    boundaries = [0, 64, 144, 240, 400, 512]
+    batches = list(pairwise(boundaries))
+
+    def matrix(min_bytes: int, ref: xgb.DMatrix | None = None) -> xgb.DMatrix:
+        it = tm.IteratorForTest(
+            [X[b:e] for b, e in batches],
+            [y[b:e] for b, e in batches],
+            None,
+            cache=None,
+            min_cache_page_bytes=min_bytes,
+            on_host=True,
+        )
+        return xgb.ExtMemQuantileDMatrix(it, ref=ref, cache_host_ratio=cache_host_ratio)
+
+    original = matrix(0)
+    balanced = matrix(8000, ref=original)
+    params = {**PARAMS, "max_cached_hist_node": 1}
+    expected, expected_predts, _ = run_cv(original, 3, 3, refit=True, params=params)
+    actual, actual_predts, _ = run_cv(balanced, 3, 3, refit=True, params=params)
+    assert json.loads(actual.save_raw("json")) == json.loads(expected.save_raw("json"))
+    cp.testing.assert_array_equal(
+        actual_predts.get_valid(), expected_predts.get_valid()
+    )
+    cp.testing.assert_array_equal(
+        actual_predts.get_refit(), expected_predts.get_refit()
+    )
+    for k in range(3):
+        cp.testing.assert_array_equal(actual_predts.get(k), expected_predts.get(k))
 
 
 def test_cv_refit_vs_reference(xyw_extqdm: XywExtQdm) -> None:

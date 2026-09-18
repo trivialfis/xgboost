@@ -386,11 +386,13 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
    */
   // The total size of the cache.
   std::size_t n_cache_bytes = 0;
+  std::vector<std::size_t> batch_bytes;
   for (std::size_t i = 0; i < ext_info.n_batches; ++i) {
     auto n_samples = ext_info.base_rowids.at(i + 1) - ext_info.base_rowids[i];
     auto n_bytes = common::CompressedBufferWriter::CalculateBufferSize(
         ext_info.row_stride * n_samples, ell_info.n_symbols);
     n_cache_bytes += n_bytes;
+    batch_bytes.push_back(n_bytes);
   }
   std::tie(cinfo->cache_host_ratio, min_cache_page_bytes) = detail::DftPageSizeHostRatio(
       n_cache_bytes, is_validation, cinfo->cache_host_ratio, min_cache_page_bytes);
@@ -398,30 +400,33 @@ void CalcCacheMapping(Context const* ctx, bool is_dense,
   /**
    * Calculate the cache buffer size
    */
-  std::vector<std::size_t> cache_bytes;
-  std::vector<std::size_t> cache_mapping(ext_info.n_batches, 0);
-  std::vector<std::size_t> cache_rows;
-
-  for (std::size_t i = 0; i < ext_info.n_batches; ++i) {
-    auto n_samples = ext_info.base_rowids[i + 1] - ext_info.base_rowids[i];
-    auto n_bytes = common::CompressedBufferWriter::CalculateBufferSize(
-        ext_info.row_stride * n_samples, ell_info.n_symbols);
-
-    if (cache_bytes.empty()) {
-      // Push the first page
-      cache_bytes.push_back(n_bytes);
-      cache_rows.push_back(n_samples);
-    } else if (static_cast<decltype(min_cache_page_bytes)>(cache_bytes.back()) <
-               min_cache_page_bytes) {
-      // Concatenate to the previous page
-      cache_bytes.back() += n_bytes;
-      cache_rows.back() += n_samples;
-    } else {
-      // Push a new page
-      cache_bytes.push_back(n_bytes);
-      cache_rows.push_back(n_samples);
+  // Keep the page count selected by the minimum size, but avoid a small final page
+  // that cannot hide the transfer of the next page during histogram construction.
+  std::size_t n_pages = 0, page_bytes = 0;
+  for (auto n_bytes : batch_bytes) {
+    if (n_pages == 0 || static_cast<std::int64_t>(page_bytes) >= min_cache_page_bytes) {
+      ++n_pages;
+      page_bytes = 0;
     }
-    cache_mapping[i] = cache_bytes.size() - 1;
+    page_bytes += n_bytes;
+  }
+  std::vector<std::size_t> cache_bytes(n_pages, 0);
+  std::vector<std::size_t> cache_mapping(ext_info.n_batches, 0);
+  std::vector<std::size_t> cache_rows(n_pages, 0);
+  for (std::size_t p = 0, i = 0; p < n_pages; ++p) {
+    auto remaining_pages = n_pages - p;
+    auto target_bytes = common::DivRoundUp(n_cache_bytes, remaining_pages);
+    auto begin = i;
+    // Choose the nearest batch boundary to the mean of the remaining pages, leaving
+    // at least one input batch for every subsequent page. Input batches stay intact.
+    do {
+      cache_mapping[i] = p;
+      cache_bytes[p] += batch_bytes[i++];
+    } while (i < batch_bytes.size() - (remaining_pages - 1) &&
+             (remaining_pages == 1 || (cache_bytes[p] < target_bytes &&
+                                       batch_bytes[i] <= 2 * (target_bytes - cache_bytes[p]))));
+    cache_rows[p] = ext_info.base_rowids[i] - ext_info.base_rowids[begin];
+    n_cache_bytes -= cache_bytes[p];
   }
 
   cinfo->cache_mapping = std::move(cache_mapping);
