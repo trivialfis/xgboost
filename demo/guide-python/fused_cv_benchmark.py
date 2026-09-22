@@ -25,11 +25,11 @@ import pandas as pd
 import xgboost as xgb
 from xgboost import _cross_validation as xcv
 
-ROW_COUNTS = [2**22]
-N_FEATURES = 512
+ROW_COUNTS = [2**26]
+N_FEATURES = 1024
 K_FOLDS = 5
-N_ROUNDS = 32
-BATCH_ROWS = 2**16
+N_ROUNDS = 8
+BATCH_ROWS = 2**19
 SEED = 2026
 CACHE_HOST_RATIO = 1.0  # Keep the fused CV cache on the host.
 TREE_PARAMS = {
