@@ -367,21 +367,16 @@ struct GPUHistMakerDevice {
 
   // Update position and build histogram. We merge these two functions for external
   // memory, where we want to bundle as many computation as possible for each data read.
-  void PartitionAndBuildHist(DMatrix* p_fmat, std::vector<GPUExpandEntry> const& expand_set,
-                             std::vector<GPUExpandEntry> const& candidates, RegTree const* p_tree) {
-    if (expand_set.empty()) {
+  void PartitionAndBuildHist(DMatrix* p_fmat, std::vector<GPUExpandEntry> const& candidates,
+                             RegTree const* p_tree) {
+    if (candidates.empty()) {
       return;
     }
     monitor.Start(__func__);
-    CHECK_LE(candidates.size(), expand_set.size());
 
-    // Update all the nodes if working with external memory, this saves us from working
-    // with the finalize position call, which adds an additional iteration and requires
-    // special handling for row index.
-    bool const is_single_block = p_fmat->SingleColBlock();
-
-    // Prepare for update partition
-    auto nodes = this->CreatePartitionNodes(p_tree, is_single_block ? candidates : expand_set);
+    // Only partition nodes whose children need histograms. Terminal splits are resolved
+    // when writing the final row positions, without rearranging their row indices.
+    auto nodes = this->CreatePartitionNodes(p_tree, candidates);
 
     // Prepare for build hist
     std::vector<bst_node_t> build_nidx(candidates.size());
@@ -394,7 +389,7 @@ struct GPUHistMakerDevice {
                              bool fewer_right = right_sum.GetHess() < left_sum.GetHess();
                              return fewer_right;
                            });
-    auto prefetch_copy = !build_nidx.empty() && this->NeedCopy(p_fmat, candidates);
+    auto prefetch_copy = this->NeedCopy(p_fmat, candidates);
 
     this->histogram_.AllocateHistograms(ctx_, build_nidx, subtraction_nidx);
 
@@ -460,7 +455,11 @@ struct GPUHistMakerDevice {
 
     auto gpair = this->d_gpair.View(this->ctx_->Device());
 
-    if (!p_fmat->SingleColBlock()) {
+    auto n_partition_nodes = partitioners_.Front()->GetNumNodes();
+    CHECK_LE(n_partition_nodes, p_tree->NumNodes());
+    // No deferred splits: the partitions already identify leaves, so no feature pages
+    // are needed, regardless of the number of batches.
+    if (n_partition_nodes == p_tree->NumNodes()) {
       for (std::size_t k = 0; k < partitioners_.Size(); ++k) {
         auto& part = partitioners_.At(k);
         CHECK_EQ(part->GetNumNodes(), p_tree->NumNodes());
@@ -480,27 +479,37 @@ struct GPUHistMakerDevice {
     auto ft = p_fmat->Info().feature_types.ConstDeviceSpan();
     auto const& tree = p_tree->HostScView();
 
-    for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(true))) {
-      std::vector<NodeSplitData> split_data(p_tree->NumNodes());
-      for (std::size_t i = 0, n = split_data.size(); i < n; ++i) {
-        RegTree::Node split_node = tree.nodes[i];
-        auto split_type = tree.SplitType(i);
-        auto node_cats = common::GetNodeCats(d_categories, cat_segments[i]);
-        split_data[i] = NodeSplitData{std::move(split_node), split_type, node_cats};
-      }
+    std::vector<NodeSplitData> split_data(p_tree->NumNodes());
+    for (std::size_t i = 0, n = split_data.size(); i < n; ++i) {
+      RegTree::Node split_node = tree.nodes[i];
+      auto split_type = tree.SplitType(i);
+      auto node_cats = common::GetNodeCats(d_categories, cat_segments[i]);
+      split_data[i] = NodeSplitData{std::move(split_node), split_type, node_cats};
+    }
 
-      dh::CachingDeviceUVector<NodeSplitData> d_split_data;
-      dh::CopyTo(split_data, &d_split_data, this->ctx_->CUDACtx()->Stream());
-      auto s_split_data = dh::ToSpan(d_split_data);
+    dh::CachingDeviceUVector<NodeSplitData> d_split_data;
+    dh::CopyTo(split_data, &d_split_data, this->ctx_->CUDACtx()->Stream());
+    auto s_split_data = dh::ToSpan(d_split_data);
 
+    // Replace the terminal partition passes with one finalization pass. For external
+    // memory, retain direct access to host pages where supported instead of bulk copying.
+    std::size_t k{0};
+    for (auto const& page :
+         p_fmat->GetBatches<EllpackPage>(ctx_, StaticBatch(p_fmat->SingleColBlock()))) {
+      auto& part = partitioners_.At(k);
+      CHECK_EQ(part->GetNumNodes(), n_partition_nodes);
+      CHECK_EQ(page.BaseRowId(), batch_ptr_[k]);
+      CHECK_EQ(page.Size(), batch_ptr_.at(k + 1) - batch_ptr_[k]);
       page.Impl()->Visit(ctx_, ft, [&](auto&& d_matrix) {
         auto go_left_op = GoLeftOp<std::remove_reference_t<decltype(d_matrix)>>{d_matrix};
-        partitioners_.Front()->FinalisePosition(
-            ctx_, d_out_position, page.BaseRowId(),
-            FinalizeOp<std::remove_reference_t<decltype(d_matrix)>>{s_split_data, go_left_op,
-                                                                    cuda_impl::EncodeOp{gpair}});
+        part->FinalisePosition(ctx_, d_out_position.subspan(page.BaseRowId(), page.Size()),
+                               page.BaseRowId(),
+                               FinalizeOp<std::remove_reference_t<decltype(d_matrix)>>{
+                                   s_split_data, go_left_op, cuda_impl::EncodeOp{gpair}});
       });
+      ++k;
     }
+    CHECK_EQ(k, partitioners_.Size());
   }
 
   void ApplySplit(const GPUExpandEntry& candidate, RegTree* p_tree) {
@@ -604,21 +613,13 @@ struct GPUHistMakerDevice {
       // Allocaate children nodes.
       auto new_candidates = pinned.GetSpan(valid_candidates.size() * 2, GPUExpandEntry{});
 
-      this->PartitionAndBuildHist(p_fmat, expand_set, valid_candidates, p_tree);
+      this->PartitionAndBuildHist(p_fmat, valid_candidates, p_tree);
 
       this->EvaluateSplits(p_fmat, valid_candidates, *p_tree, new_candidates);
       curt::DefaultStream().Sync();
 
       driver.Push(new_candidates.begin(), new_candidates.end());
       expand_set = driver.Pop();
-    }
-    // Row partitioner can have lesser nodes than the tree since we skip some leaf
-    // nodes. These nodes are handled in the `FinalisePosition` call. However, a leaf can
-    // be spliable before evaluation but invalid after evaluation as we have more
-    // restrictions like min loss change after evalaution. Therefore, the check condition
-    // is greater than or equal to.
-    if (p_fmat->SingleColBlock()) {
-      CHECK_GE(p_tree->NumNodes(), this->partitioners_.Front()->GetNumNodes());
     }
     this->FinalisePosition(p_fmat, p_tree, p_out_position);
     p_tree->FinalizeLeaves(param.learning_rate);
