@@ -236,6 +236,8 @@ class DefaultFormatPolicy {
     return fmt;
   }
   static void DestroyPage(std::shared_ptr<S>* page) { page->reset(); }
+  // Whether to fetch the first page of the next iteration before the current one ends.
+  static bool PrefetchNextIterEarly(BatchParam const&) { return false; }
 };
 
 /**
@@ -296,7 +298,6 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
     std::int32_t n_prefetch_batches = std::min(static_cast<bst_idx_t>(n_prefetches), n_batches);
     CHECK_GT(n_prefetch_batches, 0);
     CHECK_LE(n_prefetch_batches, this->param_.n_prefetch_batches);
-    std::size_t fetch_it = this->count_;
 
     exce_.Rethrow();
     // Clear out the existing page before loading new ones. This helps reduce memory usage
@@ -304,19 +305,12 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
     // synchronizations (e.g., CUDA stream sync for Ellpack pages).
     this->DestroyPage(&page_);
 
-    for (std::int32_t i = 0; i < n_prefetch_batches; ++i, ++fetch_it) {
-      bool restart = fetch_it == n_batches;
-      fetch_it %= n_batches;  // ring
+    auto fetch = [&](std::size_t fetch_it, BatchParam const& p) {
       if (ring_->at(fetch_it).valid()) {
-        continue;
+        return;
       }
       auto const* self = this;  // make sure it's const
       CHECK_LT(fetch_it, cache_info_->offset.size());
-      // Make sure the new iteration starts with a copy to avoid spilling configuration.
-      if (restart) {
-        this->param_.prefetch_copy = true;
-      }
-      auto p = this->param_;
       ring_->at(fetch_it) = this->workers_.Submit([fetch_it, self, p, this] {
         auto page = std::make_shared<S>();
         this->exce_.Run([&] {
@@ -330,10 +324,26 @@ class SparsePageSourceImpl : public BatchIteratorImpl<S>, public FormatStreamPol
         return page;
       });
       this->fetch_cnt_++;
+    };
+    // Make sure the new iteration starts with a copy to avoid spilling configuration.
+    auto next_iter_param = this->param_;
+    next_iter_param.prefetch_copy = true;
+
+    for (std::int32_t i = 0; i < n_prefetch_batches; ++i) {
+      std::size_t fetch_it = this->count_ + i;
+      auto const& p = fetch_it < n_batches ? this->param_ : next_iter_param;
+      fetch(fetch_it % n_batches, p);  // ring
+    }
+    // The prefetch window reaches the next iteration only at the last pages. Fetch the first
+    // page of the next iteration once the current iteration has consumed it, if requested.
+    bool wraps = this->count_ + n_prefetch_batches > n_batches;
+    bool fetch_next = this->count_ > 0 && !wraps && this->PrefetchNextIterEarly(this->param_);
+    if (fetch_next) {
+      fetch(0, next_iter_param);
     }
 
     CHECK_EQ(std::count_if(ring_->cbegin(), ring_->cend(), [](auto const& f) { return f.valid(); }),
-             n_prefetch_batches)
+             n_prefetch_batches + static_cast<std::int32_t>(fetch_next))
         << "Sparse DMatrix assumes forward iteration.";
 
     monitor_.Start("Wait-" + std::to_string(count_));

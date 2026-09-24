@@ -38,6 +38,7 @@ class GHistIndexFormatPolicy {
 
   void SetCuts(common::HistogramCuts cuts) { std::swap(cuts_, cuts); }
   static void DestroyPage(std::shared_ptr<S>* page) { page->reset(); }
+  static bool PrefetchNextIterEarly(BatchParam const&) { return false; }
 };
 
 class GradientIndexPageSource

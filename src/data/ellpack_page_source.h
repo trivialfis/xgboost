@@ -212,6 +212,11 @@ class EllpackFormatPolicy {
   [[nodiscard]] auto const& CacheInfo() { return this->cache_info_; }
   [[nodiscard]] auto Ctx() const { return this->ctx_; }
   void DestroyPage(std::shared_ptr<S>* page) const;
+  // Pages accessed without copying leave the copy engine idle, use it for the next iteration.
+  // FIXME: We should not duplicate the logic in the cache.
+  [[nodiscard]] bool PrefetchNextIterEarly(BatchParam const& param) const {
+    return !param.prefetch_copy && has_hmm_;
+  }
 };
 
 template <typename S, template <typename> typename F>
