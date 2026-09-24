@@ -180,7 +180,7 @@ class DeviceHistogramBuilder {
   // TODO(jiamingy): use a type larger than bst_bin_t since we need to support multi-target.
   void Reset(Context const* ctx, std::size_t max_cached_hist_nodes, bst_bin_t n_total_bins,
              bool force_global_memory);
-  // Build histogram for single target and single node.
+  // Build histogram for single target and single node, a wrapper of the batched version.
   void BuildHistogram(Context const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
                       common::Span<GradientPairInt64 const> gpair,
