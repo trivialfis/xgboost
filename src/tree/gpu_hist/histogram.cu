@@ -1,16 +1,9 @@
 /**
  * Copyright 2020-2026, XGBoost Contributors
  */
-#include <algorithm>             // for max_element, min_element, stable_sort, push_heap
-#include <cmath>                 // for floor, log2
 #include <cstdint>               // uint32_t, int32_t
 #include <cuda/std/type_traits>  // for cuda::std::alignment_of_v
-#include <functional>            // for greater
-#include <map>                   // for map
 #include <memory>                // for unique_ptr
-#include <numeric>               // for iota
-#include <tuple>                 // for make_tuple
-#include <vector>                // for vector
 
 #include "../../collective/aggregator.h"
 #include "../../common/cuda_compat.cuh"   // for CUDA compatibility
@@ -104,13 +97,6 @@ using MtHistBound = HistSm75;
 // Single-target launch bounds
 // Maximize the number of threads instead of tuning for occupancy for single target.
 using StHistBound = HistSm75;
-// SMs that hold 2048 threads keep two blocks resident only if the kernel fits in 32
-// registers per thread.
-#if (__CUDA_ARCH__ >= 800 && __CUDA_ARCH__ < 860) || (__CUDA_ARCH__ >= 900 && __CUDA_ARCH__ < 1100)
-constexpr std::int32_t kStHistMinBlocks = 2;
-#else
-constexpr std::int32_t kStHistMinBlocks = 1;
-#endif
 
 template <typename HistArchPolicy, std::int32_t ItemsPerThread, bool Dense, bool Compressed,
           bool SharedMem>
@@ -158,13 +144,6 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
   Idx const ridx_size = d_ridx_iter.size();
   auto const d_ridx = d_ridx_iter.data();
 
-  // The number of elements for this grid to process
-  bst_idx_t const n_elements = static_cast<std::size_t>(ridx_size) * feature_stride;
-  // The offset is the same for every thread, so the whole block returns before any barrier.
-  if (offset >= n_elements) {
-    return;
-  }
-
   if constexpr (Policy::kSharedMem) {
     dh::BlockFill(smem_hist, group.num_bins, GradientPairInt64{});
     __syncthreads();
@@ -204,6 +183,9 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
     }
   };
 
+  // The number of elements for this grid to process
+  bst_idx_t const n_elements = static_cast<std::size_t>(ridx_size) * feature_stride;
+
   auto process_gpair_tile = [&](auto full_tile, auto offset) {
 #pragma unroll 1
     for (std::int32_t j = 0; j < Policy::kItemsPerThread; ++j) {
@@ -240,33 +222,23 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
 
 /**
  * @brief Kernel for the single-target histogram.
- *
- * @param blk_ptr    Indptr for mapping blockIdx.x to a segment.
- * @param seg_groups The feature group of each segment.
  */
 template <typename Policy, typename Accessor>
-__global__ __launch_bounds__(StHistBound::kBlockThreads, kStHistMinBlocks) void StHistKernel(
+__global__ __launch_bounds__(StHistBound::kBlockThreads, StHistBound::kMinBlocks) void StHistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups,
     common::Span<cuda_impl::RowIndexT const> d_ridx_iter,
-    common::Span<GradientPairInt64 const> d_gpair, common::Span<GradientPairInt64> node_hist,
-    common::Span<std::uint32_t const> blk_ptr, common::Span<std::uint32_t const> seg_groups) {
+    common::Span<GradientPairInt64 const> d_gpair, common::Span<GradientPairInt64> node_hist) {
   extern __align__(std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
 
   // Privatized histogram
   auto smem_hist = reinterpret_cast<GradientPairInt64*>(shmem);
 
-  // Find the segment for this block.
-  auto const* XGBOOST_RESTRICT p_blk_ptr = blk_ptr.data();
-  auto seg = dh::SegmentId(p_blk_ptr, p_blk_ptr + blk_ptr.size(), blockIdx.x);
-  auto starting_blk = p_blk_ptr[seg];
-  auto n_blks = p_blk_ptr[seg + 1] - starting_blk;
-
   // Offset of the first grid
-  bst_idx_t offset = static_cast<bst_idx_t>(blockIdx.x - starting_blk) * Policy::kTileSize;
+  bst_idx_t offset = blockIdx.x * Policy::kTileSize;
   // Grid-strided loop
-  auto const kStride = Policy::kTileSize * n_blks;
+  auto const kStride = Policy::kTileSize * gridDim.x;
 
-  FeatureGroup group = feature_groups[seg_groups[seg]];
+  FeatureGroup group = feature_groups[blockIdx.y];
 
   HistKernelOneNodeTarget<Policy>(matrix, group, d_ridx_iter, d_gpair.data(), smem_hist,
                                   node_hist.data(), offset, kStride);
@@ -278,25 +250,19 @@ __global__ __launch_bounds__(StHistBound::kBlockThreads, kStHistMinBlocks) void 
  * @param matrix         An ellpack accessor.
  * @param feature_groups Grouping for privatized histogram.
  * @param d_ridx_iters   Pointer to row index spans. One span per node.
- * @param blk_ptr        Indptr for mapping blockIdx.x to a segment.
- * @param seg_ids        The node and the feature group of each segment, as
- *                       `nidx_in_set * n_groups + group`.
+ * @param blk_ptr        Indptr for mapping blockIdx.x to nidx_in_set.
  */
 template <typename Policy, typename Accessor, typename RidxIterSpan>
 __global__ __launch_bounds__(MtHistBound::kBlockThreads, MtHistBound::kMinBlocks) void MtHistKernel(
     Accessor const matrix, FeatureGroupsAccessor const feature_groups, RidxIterSpan* d_ridx_iters,
-    common::Span<std::uint32_t const> blk_ptr, common::Span<std::uint32_t const> seg_ids,
-    common::Span<GradientPairInt64>* node_hists, GradientPairInt64 const* d_gpair,
-    bst_idx_t n_samples, bst_target_t n_targets) {
+    common::Span<std::uint32_t const> blk_ptr, common::Span<GradientPairInt64>* node_hists,
+    GradientPairInt64 const* d_gpair, bst_idx_t n_samples, bst_target_t n_targets) {
   using Idx = RowPartitioner::RowIndexT;
 
-  // Find the segment for this block.
+  // Find the node for this block.
   auto const* XGBOOST_RESTRICT p_blk_ptr = blk_ptr.data();
-  auto seg = dh::SegmentId(p_blk_ptr, p_blk_ptr + blk_ptr.size(), blockIdx.x);
-  Idx starting_blk = p_blk_ptr[seg];
-  auto n_groups = static_cast<std::uint32_t>(feature_groups.NumGroups());
-  Idx nidx_in_set = seg_ids[seg] / n_groups;
-  auto group_idx = seg_ids[seg] - nidx_in_set * n_groups;
+  Idx nidx_in_set = dh::SegmentId(p_blk_ptr, p_blk_ptr + blk_ptr.size(), blockIdx.x);
+  Idx starting_blk = p_blk_ptr[nidx_in_set];
 
   extern __align__(std::alignment_of_v<GradientPairInt64>) __shared__ char shmem[];
 
@@ -306,7 +272,7 @@ __global__ __launch_bounds__(MtHistBound::kBlockThreads, MtHistBound::kMinBlocks
   auto const n_bins_per_target = d_node_hist->size() / n_targets;
 
   // The number of blocks in this sub-grid
-  auto n_blks = p_blk_ptr[seg + 1] - starting_blk;
+  auto n_blks = p_blk_ptr[nidx_in_set + 1] - starting_blk;
   auto blkid_in_set = blockIdx.x - starting_blk;
 
   // unravel_index(blkdid_in_set, {n_blocks_one_node_target, n_targets})
@@ -314,11 +280,11 @@ __global__ __launch_bounds__(MtHistBound::kBlockThreads, MtHistBound::kMinBlocks
   bst_target_t target_idx = blkid_in_set - blkid_for_node * n_targets;
 
   // Offset of the first grid
-  bst_idx_t offset = static_cast<bst_idx_t>(blkid_for_node) * Policy::kTileSize;
+  bst_idx_t offset = blkid_for_node * Policy::kTileSize;
   // Grid-strided loop
   auto const kStride = Policy::kTileSize * (n_blks / n_targets);
 
-  FeatureGroup group = feature_groups[group_idx];
+  FeatureGroup group = feature_groups[blockIdx.y];
 
   // With a target-major layout, we don't have to pack the histogram for all targets into
   // the shared memory. Since we launch one block for each target, the histogram index can
@@ -330,196 +296,37 @@ __global__ __launch_bounds__(MtHistBound::kBlockThreads, MtHistBound::kMinBlocks
                                   gmem_hist, offset, kStride);
 }
 
-namespace cuda_impl {
-namespace {
-// Zeroing and flushing a bin costs about as much as processing this many items.
-constexpr double kFlushCost = 2.0;
-// Prefer fewer waves unless more waves are estimated to be faster by this fraction.
-constexpr double kWaveTolerance = 0.05;
-// Consider up to this many waves, or up to this many blocks per segment on average when
-// there are more segments than resident blocks.
-constexpr std::size_t kMaxWaves = 4;
-constexpr std::size_t kMaxWaveCandidates = 32;
-
-// Give each segment blocks in proportion to its items, at least one and at most one per tile.
-[[nodiscard]] std::vector<std::uint32_t> ProportionalBlocks(
-    common::Span<HistSegment const> segments, std::size_t tile_size, double n_slots) {
-  std::size_t n_items = 0;
-  for (auto const& seg : segments) {
-    n_items += seg.n_items;
-  }
-  std::vector<std::uint32_t> blocks(segments.size(), 0);
-  if (n_items == 0) {
-    return blocks;
-  }
-  std::vector<double> remainders(segments.size());
-  std::size_t n_blocks = 0;
-  for (std::size_t i = 0; i < segments.size(); ++i) {
-    auto n_tiles = common::DivRoundUp(segments[i].n_items, tile_size);
-    auto share = n_slots * static_cast<double>(segments[i].n_items) / n_items;
-    blocks[i] = std::min<std::size_t>(std::max(std::floor(share), 1.0), n_tiles);
-    remainders[i] = share - blocks[i];
-    n_blocks += blocks[i];
-  }
-  // Rounding down leaves slots idle, which costs more than giving a few blocks less work. Hand
-  // them to the segments with the largest remainders.
-  std::vector<std::size_t> order(segments.size());
-  std::iota(order.begin(), order.end(), 0);
-  std::stable_sort(order.begin(), order.end(),
-                   [&](auto l, auto r) { return remainders[l] > remainders[r]; });
-  auto n_target = static_cast<std::size_t>(n_slots);
-  for (auto i : order) {
-    if (n_blocks >= n_target || remainders[i] <= 0) {
-      break;
-    }
-    if (blocks[i] < common::DivRoundUp(segments[i].n_items, tile_size)) {
-      ++blocks[i];
-      ++n_blocks;
-    }
-  }
-  return blocks;
-}
-
-// A block without a tile returns before zeroing and flushing its histogram.
-[[nodiscard]] double BlockCost(HistSegment const& seg, std::size_t n_tiles, std::size_t tile_size) {
-  return n_tiles == 0 ? 0.0 : static_cast<double>(n_tiles * tile_size) + kFlushCost * seg.n_bins;
-}
-}  // anonymous namespace
-
-double ReplayHistBlocks(common::Span<HistSegment const> segments,
-                        common::Span<std::uint32_t const> blocks, std::size_t tile_size,
-                        std::size_t n_resident, std::size_t n_replicas) {
-  // A min-heap of the time each slot becomes free.
-  std::vector<double> slots(n_resident, 0.0);
-  auto cmp = std::greater<>{};
-  for (std::size_t i = 0; i < segments.size(); ++i) {
-    auto n_blocks = blocks[i];
-    if (n_blocks == 0) {
-      continue;
-    }
-    // Block b of a grid-stride loop processes tiles b, b + n_blocks, ...
-    auto n_tiles = common::DivRoundUp(segments[i].n_items, tile_size);
-    auto n_full = n_tiles / n_blocks;
-    auto n_extra = n_tiles % n_blocks;
-    for (std::uint32_t b = 0; b < n_blocks; ++b) {
-      auto cost = BlockCost(segments[i], n_full + (b < n_extra ? 1 : 0), tile_size);
-      for (std::size_t r = 0; r < n_replicas; ++r) {
-        std::pop_heap(slots.begin(), slots.end(), cmp);
-        slots.back() += cost;
-        std::push_heap(slots.begin(), slots.end(), cmp);
-      }
-    }
-  }
-  return *std::max_element(slots.cbegin(), slots.cend());
-}
-
-std::vector<std::uint32_t> HistBlocksPerSegment(common::Span<HistSegment const> segments,
-                                                std::size_t tile_size, std::size_t n_resident,
-                                                std::size_t n_replicas, std::size_t n_waves) {
-  auto n_slots = static_cast<double>(n_waves * n_resident) / n_replicas;
-  return ProportionalBlocks(segments, tile_size, n_slots);
-}
-
-std::size_t HistWaves(common::Span<HistSegment const> segments, std::size_t tile_size,
-                      std::size_t n_resident, std::size_t n_replicas) {
-  CHECK_GT(n_resident, 0);
-  CHECK_GT(n_replicas, 0);
-  std::size_t n_tiles = 0;
-  for (auto const& seg : segments) {
-    n_tiles += common::DivRoundUp(seg.n_items, tile_size);
-  }
-  auto max_waves =
-      std::max(kMaxWaves, common::DivRoundUp(kMaxWaves * segments.size() * n_replicas, n_resident));
-  max_waves = std::min(max_waves, kMaxWaveCandidates);
-  // 1, 2, 3, 4, then growing by about half.
-  std::vector<std::size_t> waves;
-  for (std::size_t k = 1; k <= max_waves; k = std::max(k + 1, k * 3 / 2)) {
-    waves.push_back(k);
-  }
-  std::vector<double> times;
-  for (auto k : waves) {
-    auto blocks = HistBlocksPerSegment(segments, tile_size, n_resident, n_replicas, k);
-    times.push_back(ReplayHistBlocks(segments, blocks, tile_size, n_resident, n_replicas));
-    std::size_t n_blocks = 0;
-    for (auto b : blocks) {
-      n_blocks += b;
-    }
-    if (n_blocks == n_tiles) {
-      // Every segment has one block per tile.
-      break;
-    }
-  }
-  auto t_min = *std::min_element(times.cbegin(), times.cend());
-  for (std::size_t i = 0; i < times.size(); ++i) {
-    if (times[i] <= (1.0 + kWaveTolerance) * t_min) {
-      return waves[i];
-    }
-  }
-  return waves[times.size() - 1];
-}
-
-std::vector<std::uint32_t> HistBlocksPerSegment(common::Span<HistSegment const> segments,
-                                                std::size_t tile_size, std::size_t n_resident,
-                                                std::size_t n_replicas) {
-  auto n_waves = HistWaves(segments, tile_size, n_resident, n_replicas);
-  return HistBlocksPerSegment(segments, tile_size, n_resident, n_replicas, n_waves);
-}
-
-}  // namespace cuda_impl
-
 // Dispatcher for the histogram kernel.
 struct HistKernel {
-  // Blocks for each segment, followed by the segment of each range of blocks.
-  dh::device_vector<std::uint32_t> grid_;
-
-  // Copy the block map to the device.
-  //
-  // @param blocks     Blocks for each segment.
-  // @param seg_ids    ID passed to the kernel for each segment.
-  // @param n_replicas Blocks launched for each assigned block.
-  //
-  // @return blk_ptr, the segment IDs, and the grid size.
-  auto UploadGrid(Context const* ctx, std::vector<std::uint32_t> const& blocks,
-                  std::vector<std::uint32_t> const& seg_ids, std::size_t n_replicas) {
-    auto n = blocks.size();
-    std::vector<std::uint32_t> h_grid(2 * n + 1, 0);
-    for (std::size_t i = 0; i < n; ++i) {
-      h_grid[i + 1] = h_grid[i] + blocks[i] * n_replicas;
-      h_grid[n + 1 + i] = seg_ids[i];
+  /**
+   * @brief Partition the grid into sub-grid for nodes.
+   *
+   * @param sizes_csum          cumulative sum of node sizes (csum of n_samples for each node).
+   * @param columns_per_group   Estimated number of columns for each feature group.
+   * @param max_blocks_per_node The maximum sub-grid size for a node.
+   * @param p_out_blocks        The total number of blocks (grid size).
+   */
+  template <typename Policy>
+  static auto AllocateBlocks(std::vector<std::size_t> const& sizes_csum,
+                             std::int32_t columns_per_group, std::size_t max_blocks_per_node,
+                             bst_target_t n_targets, std::uint32_t* p_out_blocks) {
+    CHECK_GT(max_blocks_per_node, 0);
+    std::vector<std::uint32_t> blk_ptr{0};
+    bst_idx_t n_total_blocks = 0;
+    for (std::size_t j = 1; j < sizes_csum.size(); ++j) {
+      auto nidx_in_set = j - 1;
+      auto n_samples = sizes_csum[j] - sizes_csum[j - 1];
+      std::size_t items_per_group = n_samples * columns_per_group;
+      auto n_blocks = common::DivRoundUp(items_per_group, Policy::kTileSize);
+      CHECK_GT(n_blocks, 0);  // at least one block for each node.
+      n_blocks = std::min(n_blocks, max_blocks_per_node) * n_targets;
+      blk_ptr.push_back(blk_ptr[nidx_in_set] + n_blocks);
+      n_total_blocks += n_blocks;
     }
-    if (this->grid_.size() < h_grid.size()) {
-      this->grid_.resize(h_grid.size());
-    }
-    // The pageable source is staged before the call returns.
-    dh::safe_cuda(cudaMemcpyAsync(this->grid_.data().get(), h_grid.data(),
-                                  h_grid.size() * sizeof(std::uint32_t), cudaMemcpyHostToDevice,
-                                  ctx->CUDACtx()->Stream()));
-    auto d_grid = dh::ToSpan(this->grid_);
-    return std::make_tuple(d_grid.subspan(0, n + 1), d_grid.subspan(n + 1, n), h_grid[n]);
-  }
-
-  // The number of waves chosen for a launch, by feature grouping, resident blocks, targets,
-  // nodes, total node size and whether the kernel uses shared memory. Choosing needs a
-  // replay, which is too slow to run for every launch.
-  std::map<std::tuple<void const*, std::size_t, std::size_t, std::size_t, std::int32_t, bool>,
-           std::size_t>
-      waves_;
-
-  std::size_t Waves(common::Span<cuda_impl::HistSegment const> segments,
-                    FeatureGroupsAccessor const& feature_groups, std::size_t tile_size,
-                    std::size_t n_resident, std::size_t n_replicas, std::size_t n_nodes,
-                    std::size_t n_rows, bool shared) {
-    // Node sizes within about 19% of each other share the number of waves.
-    auto bucket =
-        static_cast<std::int32_t>(std::floor(4.0 * std::log2(std::max<std::size_t>(n_rows, 1))));
-    auto key = std::make_tuple(static_cast<void const*>(feature_groups.h_feature_segments.data()),
-                               n_resident, n_replicas, n_nodes, bucket, shared);
-    auto it = this->waves_.find(key);
-    if (it == this->waves_.cend()) {
-      auto n_waves = cuda_impl::HistWaves(segments, tile_size, n_resident, n_replicas);
-      it = this->waves_.emplace(key, n_waves).first;
-    }
-    return it->second;
+    // check overflow
+    CHECK_EQ(n_total_blocks, blk_ptr.back());
+    *p_out_blocks = blk_ptr.back();
+    return dh::device_vector<std::uint32_t>{blk_ptr};
   }
 
   struct HistKernelConfig {
@@ -586,29 +393,16 @@ struct HistKernel {
     auto launch = [&](auto policy, auto kernel) {
       auto const& v = this->cfg.at(reinterpret_cast<void*>(kernel));
       using Policy = common::GetValueT<decltype(policy)>;
+      int columns_per_group = common::DivRoundUp(matrix.row_stride, feature_groups.NumGroups());
       CHECK_GT(v.n_blocks_per_mp, 0);
-      std::size_t n_resident = v.n_blocks_per_mp * this->n_mps;
-
-      auto const& fs = feature_groups.h_feature_segments;
-      auto const& bs = feature_groups.h_bin_segments;
-      std::size_t n_groups = feature_groups.NumGroups();
-      std::vector<cuda_impl::HistSegment> segments(n_groups);
-      std::vector<std::uint32_t> seg_groups(n_groups);
-      for (std::size_t g = 0; g < n_groups; ++g) {
-        std::size_t n_features = Policy::kCompressed ? fs[g + 1] - fs[g] : matrix.row_stride;
-        std::size_t n_bins = Policy::kSharedMem ? bs[g + 1] - bs[g] : 0;
-        segments[g] = {ridx.size() * n_features, n_bins};
-        seg_groups[g] = g;
-      }
-
-      auto n_waves = this->Waves(segments, feature_groups, Policy::kTileSize, n_resident, 1, 1,
-                                 ridx.size(), Policy::kSharedMem);
-      auto blocks =
-          cuda_impl::HistBlocksPerSegment(segments, Policy::kTileSize, n_resident, 1, n_waves);
-      auto [blk_ptr, d_seg_groups, n_blocks] = this->UploadGrid(ctx, blocks, seg_groups, 1);
-
-      dh::LaunchKernel(n_blocks, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream())(
-          kernel, matrix, feature_groups, ridx, gpair, hist, blk_ptr, d_seg_groups);
+      std::size_t items_per_group = ridx.size() * columns_per_group;
+      std::uint32_t n_blocks =
+          std::min(static_cast<cuda_impl::RowIndexT>(v.n_blocks_per_mp * this->n_mps),
+                   static_cast<cuda_impl::RowIndexT>(
+                       common::DivRoundUp(items_per_group, Policy::kTileSize)));
+      dim3 conf(n_blocks, feature_groups.NumGroups());
+      dh::LaunchKernel(conf, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream())(
+          kernel, matrix, feature_groups, ridx, gpair, hist);
       dh::safe_cuda(cudaPeekAtLastError());
     };
     using Arch = StHistBound;
@@ -645,35 +439,15 @@ struct HistKernel {
     auto launch = [&](auto policy, auto kernel) {
       auto const& v = this->cfg.at(reinterpret_cast<void*>(kernel));
       using Policy = common::GetValueT<decltype(policy)>;
+      int columns_per_group = common::DivRoundUp(matrix.row_stride, feature_groups.NumGroups());
       CHECK_GT(v.n_blocks_per_mp, 0);
-      std::size_t n_resident = v.n_blocks_per_mp * this->n_mps;
-
-      // One segment for each feature group of each node.
-      auto const& fs = feature_groups.h_feature_segments;
-      auto const& bs = feature_groups.h_bin_segments;
-      std::size_t n_groups = feature_groups.NumGroups();
-      std::size_t n_nodes = h_sizes_csum.size() - 1;
-      std::vector<cuda_impl::HistSegment> segments;
-      std::vector<std::uint32_t> seg_ids;
-      for (std::size_t g = 0; g < n_groups; ++g) {
-        std::size_t n_features = Policy::kCompressed ? fs[g + 1] - fs[g] : matrix.row_stride;
-        std::size_t n_bins = Policy::kSharedMem ? bs[g + 1] - bs[g] : 0;
-        for (std::size_t nidx_in_set = 0; nidx_in_set < n_nodes; ++nidx_in_set) {
-          auto n_rows = h_sizes_csum[nidx_in_set + 1] - h_sizes_csum[nidx_in_set];
-          CHECK_GT(n_rows, 0);
-          segments.push_back({n_rows * n_features, n_bins});
-          seg_ids.push_back(nidx_in_set * n_groups + g);
-        }
-      }
-
-      auto n_waves = this->Waves(segments, feature_groups, Policy::kTileSize, n_resident, n_targets,
-                                 n_nodes, h_sizes_csum.back(), Policy::kSharedMem);
-      auto blocks = cuda_impl::HistBlocksPerSegment(segments, Policy::kTileSize, n_resident,
-                                                    n_targets, n_waves);
-      auto [blk_ptr, d_seg_ids, n_blocks] = this->UploadGrid(ctx, blocks, seg_ids, n_targets);
-
-      dh::LaunchKernel(n_blocks, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream())(
-          kernel, matrix, feature_groups, ridx_iters, blk_ptr, d_seg_ids, hists.data(), d_gpair,
+      std::uint32_t n_blocks = 0;
+      auto blk_ptr = AllocateBlocks<Policy>(h_sizes_csum, columns_per_group,
+                                            v.n_blocks_per_mp * n_mps, n_targets, &n_blocks);
+      CHECK_GE(n_blocks, hists.size());
+      dim3 conf(n_blocks, feature_groups.NumGroups());
+      dh::LaunchKernel(conf, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream())(
+          kernel, matrix, feature_groups, ridx_iters, dh::ToSpan(blk_ptr), hists.data(), d_gpair,
           n_samples, n_targets);
       dh::safe_cuda(cudaPeekAtLastError());
     };

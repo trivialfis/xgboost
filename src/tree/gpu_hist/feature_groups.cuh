@@ -42,21 +42,14 @@ struct FeatureGroup {
 /** @brief FeatureGroupsAccessor is a non-owning accessor for FeatureGroups. */
 struct FeatureGroupsAccessor {
   FeatureGroupsAccessor(common::Span<const bst_feature_t> feature_segments,
-                        common::Span<const bst_bin_t> bin_segments, bst_bin_t max_group_bins,
-                        common::Span<const bst_feature_t> h_feature_segments,
-                        common::Span<const bst_bin_t> h_bin_segments)
+                        common::Span<const bst_bin_t> bin_segments, bst_bin_t max_group_bins)
       : feature_segments{feature_segments},
         bin_segments{bin_segments.data()},
-        max_group_bins{max_group_bins},
-        h_feature_segments{h_feature_segments},
-        h_bin_segments{h_bin_segments} {}
+        max_group_bins{max_group_bins} {}
 
   common::Span<const bst_feature_t> feature_segments;
   int const* bin_segments;
   bst_bin_t max_group_bins;
-  /** @brief Host copies of the segments, for configuring kernel launches. */
-  common::Span<const bst_feature_t> h_feature_segments;
-  common::Span<const bst_bin_t> h_bin_segments;
 
   /** @brief Gets the number of feature groups. */
   XGBOOST_DEVICE int NumGroups() const { return feature_segments.size() - 1; }
@@ -122,8 +115,7 @@ struct FeatureGroups {
   [[nodiscard]] FeatureGroupsAccessor DeviceAccessor(DeviceOrd device) const {
     feature_segments.SetDevice(device);
     bin_segments.SetDevice(device);
-    return {feature_segments.ConstDeviceSpan(), bin_segments.ConstDeviceSpan(), max_group_bins,
-            feature_segments.ConstHostVector(), bin_segments.ConstHostVector()};
+    return {feature_segments.ConstDeviceSpan(), bin_segments.ConstDeviceSpan(), max_group_bins};
   }
 
 private:
