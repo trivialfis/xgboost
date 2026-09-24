@@ -4,9 +4,10 @@
 #include <gtest/gtest.h>
 #include <xgboost/context.h>  // for Context
 
-#include <memory>  // for unique_ptr
-#include <tuple>   // for tuple
-#include <vector>  // for vector
+#include <memory>   // for unique_ptr
+#include <numeric>  // for accumulate
+#include <tuple>    // for tuple
+#include <vector>   // for vector
 
 #include "../../../../src/tree/gpu_hist/expand_entry.cuh"  // for GPUExpandEntry
 #include "../../../../src/tree/gpu_hist/histogram.cuh"
@@ -84,6 +85,113 @@ TEST(Histogram, SubtractionTrack) {
   ASSERT_EQ(need_build.size(), 2);
   ASSERT_EQ(need_build[0], 4);
   ASSERT_EQ(need_build[1], 6);
+}
+
+namespace {
+// One segment for each feature group of a node.
+std::vector<cuda_impl::HistSegment> MakeSegments(std::size_t n_rows,
+                                                 std::vector<std::size_t> const& n_features,
+                                                 std::size_t n_bins_per_feature) {
+  std::vector<cuda_impl::HistSegment> segments;
+  for (auto f : n_features) {
+    segments.push_back({n_rows * f, f * n_bins_per_feature});
+  }
+  return segments;
+}
+
+std::size_t Sum(std::vector<std::uint32_t> const& blocks) {
+  return std::accumulate(blocks.cbegin(), blocks.cend(), std::size_t{0});
+}
+}  // namespace
+
+TEST(Histogram, HistBlocksPerSegment) {
+  std::size_t constexpr kTile = 8192;
+  // 1024 features with 256 bins each: 42 groups of 24 features and one of 16.
+  std::vector<std::size_t> even(42, 24);
+  even.push_back(16);
+  {
+    // Evenly sized groups fill the fewest whole waves.
+    auto segments = MakeSegments(1 << 20, even, 256);
+    ASSERT_EQ(cuda_impl::HistWaves(segments, kTile, 66, 1), 2);
+    ASSERT_EQ(Sum(cuda_impl::HistBlocksPerSegment(segments, kTile, 66, 1)), 132);
+
+    ASSERT_EQ(cuda_impl::HistWaves(segments, kTile, 264, 1), 1);
+    auto blocks = cuda_impl::HistBlocksPerSegment(segments, kTile, 264, 1);
+    ASSERT_EQ(Sum(blocks), 264);
+    for (std::size_t g = 0; g + 1 < blocks.size(); ++g) {
+      ASSERT_GE(blocks[g], 6);
+      ASSERT_LE(blocks[g], 7);
+    }
+    ASSERT_EQ(blocks.back(), 4);
+  }
+  {
+    // 3072 binary features in one group, followed by 42 groups of 24 features with 256
+    // bins. The wide group gets blocks in proportion to its items.
+    std::vector<cuda_impl::HistSegment> segments{{(1 << 16) * 3072, 6144}};
+    segments.resize(43, {(1 << 16) * 24, 6144});
+    for (std::size_t n_resident : {66, 264}) {
+      auto n_waves = cuda_impl::HistWaves(segments, kTile, n_resident, 1);
+      auto blocks = cuda_impl::HistBlocksPerSegment(segments, kTile, n_resident, 1);
+      auto n_slots = static_cast<double>(n_waves * n_resident);
+      ASSERT_GE(blocks[0], std::floor(n_slots * 3072 / 4080));
+      ASSERT_LE(blocks[0], std::ceil(n_slots * 3072 / 4080));
+      for (std::size_t g = 1; g < blocks.size(); ++g) {
+        ASSERT_GE(blocks[g], std::max(std::floor(n_slots * 24 / 4080), 1.0));
+        ASSERT_LE(blocks[g], std::ceil(n_slots * 24 / 4080));
+      }
+    }
+  }
+  {
+    // More groups than resident blocks: 4096 features in 171 groups.
+    std::vector<std::size_t> wide(170, 24);
+    wide.push_back(16);
+    auto segments = MakeSegments(1 << 16, wide, 256);
+    ASSERT_GT(cuda_impl::HistWaves(segments, kTile, 66, 1), 4);
+    ASSERT_GE(Sum(cuda_impl::HistBlocksPerSegment(segments, kTile, 66, 1)), 2 * wide.size());
+  }
+  {
+    // Tiny nodes get at most one block per tile, and empty segments get none.
+    auto segments = MakeSegments(100, even, 256);
+    ASSERT_EQ(cuda_impl::HistWaves(segments, kTile, 66, 1), 1);
+    for (auto b : cuda_impl::HistBlocksPerSegment(segments, kTile, 66, 1)) {
+      ASSERT_EQ(b, 1);
+    }
+    segments[3].n_items = 0;
+    ASSERT_EQ(cuda_impl::HistBlocksPerSegment(segments, kTile, 66, 1)[3], 0);
+    std::vector<cuda_impl::HistSegment> empty(3, {0, 6144});
+    ASSERT_EQ(Sum(cuda_impl::HistBlocksPerSegment(empty, kTile, 66, 1)), 0);
+  }
+  {
+    // With one block per target, the replicated blocks fill whole waves.
+    auto segments = MakeSegments(1 << 20, even, 256);
+    std::size_t n_targets = 3, n_resident = 132;
+    auto n_waves = cuda_impl::HistWaves(segments, kTile, n_resident, n_targets);
+    auto blocks = cuda_impl::HistBlocksPerSegment(segments, kTile, n_resident, n_targets);
+    ASSERT_EQ(Sum(blocks) * n_targets, n_waves * n_resident);
+  }
+}
+
+TEST(Histogram, ReplayHistBlocks) {
+  std::size_t constexpr kTile = 8192;
+  // Without flushes, the time is the number of items on the busiest slot.
+  std::vector<cuda_impl::HistSegment> segments(3, {kTile, 0});
+  std::vector<std::uint32_t> blocks(3, 1);
+  ASSERT_EQ(cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 3, 1), kTile);
+  // The third block waits for a slot.
+  ASSERT_EQ(cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 2, 1), 2 * kTile);
+  // One block per target.
+  ASSERT_EQ(cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 3, 2), 2 * kTile);
+  // Grid-stride loop: 3 tiles in 2 blocks.
+  segments = {{3 * kTile, 0}};
+  blocks = {2};
+  ASSERT_EQ(cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 2, 1), 2 * kTile);
+  // Every block that processes a tile flushes its bins; a block without a tile doesn't.
+  segments = {{kTile, 64}};
+  blocks = {1};
+  auto with_flush = cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 2, 1);
+  ASSERT_GT(with_flush, kTile);
+  blocks = {2};
+  ASSERT_EQ(cuda_impl::ReplayHistBlocks(segments, blocks, kTile, 2, 1), with_flush);
 }
 
 namespace {
