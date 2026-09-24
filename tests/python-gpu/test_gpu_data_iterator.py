@@ -1,11 +1,12 @@
 import sys
 from itertools import pairwise
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
-from hypothesis import given, settings, strategies
-
 import xgboost as xgb
+from hypothesis import given, settings, strategies
 from xgboost import testing as tm
 from xgboost.testing import no_cupy
 from xgboost.testing.data_iter import check_invalid_cat_batches, check_uneven_sizes
@@ -96,6 +97,116 @@ def test_extmem_qdm(
         on_host=on_host,
         is_cat=False,
     )
+
+
+@pytest.mark.skipif(**no_cupy())
+@pytest.mark.parametrize("on_host", [False, True])
+@pytest.mark.parametrize("is_cat", [False, True])
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("sampling", ["none", "uniform", "gradient_based"])
+@pytest.mark.parametrize(
+    "growth",
+    [
+        pytest.param({"max_depth": 1}, id="stump"),
+        pytest.param({"max_depth": 3}, id="depth"),
+        pytest.param(
+            {"max_depth": 2, "grow_policy": "lossguide"}, id="lossguide-depth"
+        ),
+        pytest.param(
+            {"max_depth": 0, "max_leaves": 5, "grow_policy": "lossguide"},
+            id="leaves",
+        ),
+        pytest.param(
+            {"max_depth": 12, "min_child_weight": 128}, id="complete-partitions"
+        ),
+        pytest.param({"gamma": 1e10}, id="no-split"),
+    ],
+)
+def test_extmem_final_position(
+    tmp_path: Path,
+    on_host: bool,
+    is_cat: bool,
+    sparse: bool,
+    sampling: str,
+    growth: dict[str, Any],
+) -> None:
+    """Deferred splits preserve cached predictions across uneven external-memory pages."""
+    import cupy as cp
+
+    rng = np.random.default_rng(2026)
+    X = rng.normal(size=(512, 4)).astype(np.float32)
+    if is_cat:
+        X[:, 0] = rng.integers(0, 8, size=X.shape[0])
+    y = cp.asarray(3 * (X[:, 0] > (3 if is_cat else 0)) + X[:, 1], dtype=cp.float32)
+    X[rng.random(X.shape) < 0.2] = np.nan
+    if sparse:
+        # Keep every row shorter than the feature count to exercise sparse ELLPACK lookup.
+        X[::2, 2] = np.nan
+        X[1::2, 3] = np.nan
+    X = cp.asarray(X)
+    feature_types = ["c" if is_cat else "q", "q", "q", "q"]
+    batches = list(pairwise([0, 1, 65, 240, 400, X.shape[0]]))
+
+    class Iterator(xgb.DataIter):
+        def __init__(self) -> None:
+            super().__init__(
+                cache_prefix=str(tmp_path / "cache"),
+                on_host=on_host,
+                min_cache_page_bytes=0,
+            )
+            self.it = 0
+
+        def next(self, input_data: Any) -> bool:
+            if self.it == len(batches):
+                return False
+            begin, end = batches[self.it]
+            input_data(
+                data=X[begin:end], label=y[begin:end], feature_types=feature_types
+            )
+            self.it += 1
+            return True
+
+        def reset(self) -> None:
+            self.it = 0
+
+    in_core = xgb.QuantileDMatrix(
+        X, y, max_bin=32, feature_types=feature_types, enable_categorical=is_cat
+    )
+    external = xgb.ExtMemQuantileDMatrix(
+        Iterator(),
+        ref=in_core,
+        max_bin=32,
+        enable_categorical=is_cat,
+        cache_host_ratio=1.0,
+    )
+    params = {
+        "tree_method": "hist",
+        "device": "cuda",
+        "max_bin": 32,
+        "max_cat_to_onehot": 1,
+        "subsample": 1.0 if sampling == "none" else 0.5,
+        "sampling_method": "uniform" if sampling == "none" else sampling,
+        **growth,
+    }
+
+    def train(data: xgb.DMatrix) -> xgb.Booster:
+        booster = xgb.Booster(params, [data])
+        for i in range(3):
+            booster.update(data, i)
+            # Check finalized leaf IDs against independent feature traversal after each
+            # round, before xgb.train would reset the training prediction cache. The two
+            # prediction paths accumulate tree values in a different order.
+            np.testing.assert_allclose(
+                booster.predict(data),
+                cp.asnumpy(booster.inplace_predict(X)),
+                rtol=1e-6,
+                atol=1e-6,
+            )
+        return booster
+
+    expected = train(in_core)
+    actual = train(external)
+    assert actual.save_raw(raw_format="json") == expected.save_raw(raw_format="json")
 
 
 @given(

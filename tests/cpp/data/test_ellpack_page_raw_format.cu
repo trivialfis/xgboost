@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <xgboost/data.h>
 
+#include "../../../src/common/cuda_context.cuh"         // for CUDAContext
 #include "../../../src/data/batch_utils.h"              // for AutoHostRatio
 #include "../../../src/data/ellpack_page.cuh"           // for EllpackPage, GetRowStride
 #include "../../../src/data/ellpack_page_raw_format.h"  // for EllpackPageRawFormat
@@ -169,6 +170,33 @@ TEST_P(TestEllpackPageRawFormat, HostIO) {
 }
 
 INSTANTIATE_TEST_SUITE_P(EllpackPageRawFormat, TestEllpackPageRawFormat, ::testing::Bool());
+
+TEST(EllpackPageRawFormat, StagingPool) {
+  auto ctx = MakeCUDACtx(0);
+  auto stream = ctx.CUDACtx()->Stream();
+  auto pool = std::make_shared<EllpackStagingPool>();
+  {
+    auto a = pool->Acquire(8, 16, stream);
+    ASSERT_EQ(a.size(), 8);
+    ASSERT_EQ(a.Resource()->Size(), 16);
+    auto b = pool->Acquire(16, 16, stream);
+    ASSERT_EQ(pool->NumFree(), 0);
+  }
+  // Released buffers are returned to the pool.
+  ASSERT_EQ(pool->NumFree(), 2);
+  {
+    auto a = pool->Acquire(16, 32, stream);
+    ASSERT_EQ(a.size(), 16);
+    ASSERT_EQ(a.Resource()->Size(), 16);
+    ASSERT_EQ(pool->NumFree(), 1);
+    // None of the free buffers is large enough.
+    auto b = pool->Acquire(32, 32, stream);
+    ASSERT_EQ(b.Resource()->Size(), 32);
+    ASSERT_EQ(pool->NumFree(), 1);
+    // The view keeps the pool alive.
+    pool.reset();
+  }
+}
 
 TEST(EllpackPageRawFormat, DevicePageConcat) {
   auto ctx = MakeCUDACtx(0);

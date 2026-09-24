@@ -113,21 +113,26 @@ class EllpackHostCacheTest
     for (auto const& page_s : p_fmat->GetBatches<EllpackPage>(&ctx, param)) {
       auto impl_s = page_s.Impl();
       auto cuts_s = impl_s->CutsShared();
-      auto new_impl = std::make_unique<EllpackPageImpl>(&ctx, cuts_s, sparsity == 0.0,
-                                                        impl_s->info.row_stride, impl_s->n_rows);
-      new_impl->CopyInfo(impl_s);
-      bst_idx_t offset = 0;
-      std::size_t k = 0;
-      for (auto const& page_m : p_ext_fmat->GetBatches<EllpackPage>(&ctx, param)) {
-        ASSERT_LT(k + 1, batch_ptr.size());
-        ASSERT_EQ(page_m.BaseRowId(), batch_ptr[k]);
-        ASSERT_EQ(page_m.Size(), batch_ptr[k + 1] - batch_ptr[k]);
-        auto impl_m = page_m.Impl();
-        offset += new_impl->Copy(&ctx, impl_m, offset);
-        ++k;
+      // Mix iterations with and without copying the pages, as in training.
+      for (bool prefetch_copy : {true, false, false, true}) {
+        auto p = param;
+        p.prefetch_copy = prefetch_copy;
+        auto new_impl = std::make_unique<EllpackPageImpl>(&ctx, cuts_s, sparsity == 0.0,
+                                                          impl_s->info.row_stride, impl_s->n_rows);
+        new_impl->CopyInfo(impl_s);
+        bst_idx_t offset = 0;
+        std::size_t k = 0;
+        for (auto const& page_m : p_ext_fmat->GetBatches<EllpackPage>(&ctx, p)) {
+          ASSERT_LT(k + 1, batch_ptr.size());
+          ASSERT_EQ(page_m.BaseRowId(), batch_ptr[k]);
+          ASSERT_EQ(page_m.Size(), batch_ptr[k + 1] - batch_ptr[k]);
+          auto impl_m = page_m.Impl();
+          offset += new_impl->Copy(&ctx, impl_m, offset);
+          ++k;
+        }
+        ASSERT_EQ(k, static_cast<std::size_t>(p_ext_fmat->NumBatches()));
+        AssertEllpackEq(&ctx, impl_s, new_impl.get());
       }
-      ASSERT_EQ(k, static_cast<std::size_t>(p_ext_fmat->NumBatches()));
-      AssertEllpackEq(&ctx, impl_s, new_impl.get());
     }
   }
 };

@@ -5,15 +5,18 @@
 #ifndef XGBOOST_DATA_ELLPACK_PAGE_SOURCE_H_
 #define XGBOOST_DATA_ELLPACK_PAGE_SOURCE_H_
 
+#include <cstddef>  // for size_t
 #include <cstdint>  // for int32_t
 #include <limits>   // for numeric_limits
-#include <memory>   // for shared_ptr
+#include <memory>   // for shared_ptr, unique_ptr, enable_shared_from_this
+#include <mutex>    // for mutex
 #include <tuple>    // for tuple
 #include <utility>  // for move
 #include <vector>   // for vector
 
 #include "../common/compressed_iterator.h"  // for CompressedByteT
 #include "../common/cuda_rt_utils.h"        // for SupportsPageableMem, SupportsAts
+#include "../common/cuda_stream.h"          // for StreamRef
 #include "../common/hist_util.h"            // for HistogramCuts
 #include "../common/ref_resource_view.h"    // for RefResourceView
 #include "../data/batch_utils.h"            // for AutoHostRatio
@@ -48,6 +51,39 @@ struct EllpackCacheInfo {
   [[nodiscard]] std::size_t NumBatchesCc() const { return this->buffer_rows.size(); }
 };
 
+/**
+ * @brief Reusable device buffers for pages copied from the host cache.
+ *
+ * Allocating a page-sized buffer for every read can stall the driver for milliseconds when
+ * the memory pool cannot reuse a freed block of the same size, which blocks the training
+ * thread as well. Buffers are allocated with the size of the largest page instead.
+ */
+class EllpackStagingPool : public std::enable_shared_from_this<EllpackStagingPool> {
+  struct Buffer;
+  class Resource;
+
+  mutable std::mutex lock_;
+  std::vector<std::unique_ptr<Buffer>> free_;
+
+  void Release(std::unique_ptr<Buffer> buf);
+
+ public:
+  EllpackStagingPool();
+  ~EllpackStagingPool();
+  /**
+   * @brief Get a buffer with at least `n_bytes`.
+   *
+   * @param n_bytes     The size of the returned view.
+   * @param alloc_bytes The size of a new buffer if none of the free buffers is large enough.
+   * @param stream      The stream that uses the buffer.
+   */
+  [[nodiscard]] common::RefResourceView<common::CompressedByteT> Acquire(std::size_t n_bytes,
+                                                                         std::size_t alloc_bytes,
+                                                                         curt::StreamRef stream);
+  // The number of buffers available for reuse.
+  [[nodiscard]] std::size_t NumFree() const;
+};
+
 // We need to decouple the storage and the view of the storage so that we can implement
 // concurrent read. As a result, there are two classes, one for cache storage, another one
 // for stream.
@@ -73,6 +109,8 @@ struct EllpackMemCache {
   std::vector<std::size_t> const buffer_bytes;
   std::vector<bst_idx_t> const buffer_rows;
   double const cache_host_ratio;
+  // Device buffers for reading pages with copy.
+  std::shared_ptr<EllpackStagingPool> const staging;
 
   explicit EllpackMemCache(EllpackCacheInfo cinfo);
   ~EllpackMemCache();
@@ -87,6 +125,8 @@ struct EllpackMemCache {
   [[nodiscard]] std::size_t GidxSizeBytes(std::size_t i) const noexcept(true);
   // The number of bytes of the gradient index (ellpack) of the entire cache.
   [[nodiscard]] std::size_t GidxSizeBytes() const noexcept(true);
+  // The number of bytes of the gradient index (ellpack) of the largest page.
+  [[nodiscard]] std::size_t MaxGidxSizeBytes() const noexcept(true);
   // The number of pages in the cache.
   [[nodiscard]] std::size_t Size() const { return this->h_pages.size(); }
   // Is the cache empty?

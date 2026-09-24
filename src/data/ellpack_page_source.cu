@@ -1,21 +1,24 @@
 /**
  * Copyright 2019-2026, XGBoost contributors
  */
-#include <algorithm>  // for fill, max
+#include <algorithm>  // for fill, find_if, max
 #include <cstddef>    // for size_t
 #include <cstdint>    // for int8_t, uint64_t, uint32_t
-#include <memory>     // for shared_ptr, make_unique
+#include <memory>     // for shared_ptr, make_shared, make_unique
+#include <mutex>      // for lock_guard
 #include <numeric>    // for accumulate
 #include <utility>    // for move
 
 #include "../common/common.h"               // for HumanMemUnit, safe_cuda
 #include "../common/cuda_context.cuh"       // for CUDAContext
-#include "../common/cuda_rt_utils.h"        // for SetDevice
+#include "../common/cuda_rt_utils.h"        // for SetDevice, CurrentDevice
+#include "../common/cuda_stream.h"          // for Event, DefaultStream
 #include "../common/device_helpers.cuh"     // for CurrentDevice
 #include "../common/numa_topo.h"            // for NumaMemCanCross, GetNumaMemBind
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
-#include "../common/resource.cuh"           // for PrivateCudaMmapConstStream
+#include "../common/resource.cuh"           // for PrivateCudaMmapConstStream, CudaMallocResource
 #include "../common/transform_iterator.h"   // for MakeIndexTransformIter
+#include "../common/utils.h"                // for MakeCleanup
 #include "batch_utils.h"                    // for HostRatioIsAuto
 #include "ellpack_page.cuh"                 // for EllpackPageImpl
 #include "ellpack_page.h"                   // for EllpackPage
@@ -25,13 +28,83 @@
 
 namespace xgboost::data {
 /**
+ * Staging pool
+ */
+struct EllpackStagingPool::Buffer {
+  common::CudaMallocResource mem;
+  // Recorded when the buffer is returned to the pool.
+  curt::Event released;
+  std::int32_t device{curt::CurrentDevice()};
+
+  explicit Buffer(std::size_t n_bytes) : mem{n_bytes} {}
+};
+
+// Returns the buffer to the pool once the page using it is released.
+class EllpackStagingPool::Resource : public common::ResourceHandler {
+  std::shared_ptr<EllpackStagingPool> pool_;
+  std::unique_ptr<Buffer> buf_;
+
+ public:
+  Resource(std::shared_ptr<EllpackStagingPool> pool, std::unique_ptr<Buffer> buf)
+      : ResourceHandler{kCudaMalloc}, pool_{std::move(pool)}, buf_{std::move(buf)} {}
+  ~Resource() noexcept(false) override { this->pool_->Release(std::move(this->buf_)); }
+
+  [[nodiscard]] void* Data() override { return this->buf_->mem.Data(); }
+  [[nodiscard]] std::size_t Size() const override { return this->buf_->mem.Size(); }
+};
+
+EllpackStagingPool::EllpackStagingPool() = default;
+
+EllpackStagingPool::~EllpackStagingPool() = default;
+
+void EllpackStagingPool::Release(std::unique_ptr<Buffer> buf) {
+  // Order the next use after the work on the releasing thread, like `cudaFreeAsync`. Pages
+  // can be released by a thread using a different device.
+  auto device = curt::CurrentDevice();
+  auto restore = common::MakeCleanup([&] { curt::SetDevice(device); });
+  curt::SetDevice(buf->device);
+  buf->released.Record(curt::DefaultStream());
+  std::lock_guard guard{this->lock_};
+  this->free_.push_back(std::move(buf));
+}
+
+[[nodiscard]] common::RefResourceView<common::CompressedByteT> EllpackStagingPool::Acquire(
+    std::size_t n_bytes, std::size_t alloc_bytes, curt::StreamRef stream) {
+  CHECK_GE(alloc_bytes, n_bytes);
+  std::unique_ptr<Buffer> buf;
+  {
+    std::lock_guard guard{this->lock_};
+    auto it = std::find_if(this->free_.begin(), this->free_.end(),
+                           [&](auto const& b) { return b->mem.Size() >= n_bytes; });
+    if (it != this->free_.end()) {
+      buf = std::move(*it);
+      this->free_.erase(it);
+    }
+  }
+  if (buf) {
+    stream.Wait(buf->released);
+  } else {
+    buf = std::make_unique<Buffer>(alloc_bytes);
+  }
+  auto resource = std::make_shared<Resource>(this->shared_from_this(), std::move(buf));
+  return common::RefResourceView<common::CompressedByteT>{
+      resource->DataAs<common::CompressedByteT>(), n_bytes, resource};
+}
+
+[[nodiscard]] std::size_t EllpackStagingPool::NumFree() const {
+  std::lock_guard guard{this->lock_};
+  return this->free_.size();
+}
+
+/**
  * Cache
  */
 EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
     : cache_mapping{std::move(cinfo.cache_mapping)},
       buffer_bytes{std::move(cinfo.buffer_bytes)},
       buffer_rows{std::move(cinfo.buffer_rows)},
-      cache_host_ratio{cinfo.cache_host_ratio} {
+      cache_host_ratio{cinfo.cache_host_ratio},
+      staging{std::make_shared<EllpackStagingPool>()} {
   CHECK_EQ(buffer_bytes.size(), buffer_rows.size());
   CHECK(!detail::HostRatioIsAuto(this->cache_host_ratio));
   CHECK_GE(this->cache_host_ratio, 0.0) << error::CacheHostRatioInvalid();
@@ -65,6 +138,13 @@ EllpackMemCache::~EllpackMemCache() = default;
   auto it = common::MakeIndexTransformIter([&](auto i) { return this->GidxSizeBytes(i); });
   using T = std::iterator_traits<decltype(it)>::value_type;
   return std::accumulate(it, it + this->Size(), static_cast<T>(0));
+}
+
+[[nodiscard]] std::size_t EllpackMemCache::MaxGidxSizeBytes() const noexcept(true) {
+  auto it = common::MakeIndexTransformIter([&](auto i) { return this->GidxSizeBytes(i); });
+  using T = std::iterator_traits<decltype(it)>::value_type;
+  return std::accumulate(it, it + this->Size(), static_cast<T>(0),
+                         [](T l, T r) { return std::max(l, r); });
 }
 
 [[nodiscard]] EllpackMemCache::PagePtr EllpackMemCache::At(std::int32_t k) const {
@@ -245,7 +325,8 @@ class EllpackHostCacheStreamImpl {
       // Copy the data in the same order as written
       // Host cache
       auto n_bytes = this->cache_->GidxSizeBytes(this->ptr_);
-      out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n_bytes);
+      out_impl->gidx_buffer = this->cache_->staging->Acquire(
+          n_bytes, this->cache_->MaxGidxSizeBytes(), ctx->CUDACtx()->Stream());
       if (!h_page->gidx_buffer.empty()) {
         dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), h_page->gidx_buffer.data(),
                                       h_page->gidx_buffer.size_bytes(), cudaMemcpyDefault,

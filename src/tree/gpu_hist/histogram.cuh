@@ -3,9 +3,11 @@
  */
 #pragma once
 
-#include <cstddef>  // for size_t
-#include <cstdint>  // for int32_t
-#include <memory>   // for unique_ptr
+#include <algorithm>  // for min, max
+#include <cstddef>    // for size_t
+#include <cstdint>    // for int32_t
+#include <memory>     // for unique_ptr
+#include <vector>     // for vector
 
 #include "../../common/cuda_context.cuh"    // for CUDAContext
 #include "../../common/device_helpers.cuh"  // for LaunchN
@@ -61,6 +63,58 @@ XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
 namespace cuda_impl {
 // Start with about 16mb
 std::size_t constexpr DftReserveSize() { return 1 << 22; }
+
+/** @brief The work of one segment in a histogram kernel: one feature group of one node. */
+struct HistSegment {
+  /** @brief The number of items (rows x features) to process. */
+  std::size_t n_items;
+  /** @brief The number of bins each block zeroes and flushes, 0 without shared memory. */
+  std::size_t n_bins;
+};
+
+/**
+ * @brief Assign blocks to the segments of a histogram kernel launch.
+ *
+ * A block flushes its whole privatized histogram however few items it processes, and the
+ * kernel lasts as long as its busiest resident slot. Segments get blocks in proportion to
+ * their items, so every block does about the same work whichever segment it belongs to, and
+ * the blocks fill whole waves of resident blocks. The number of waves is the fewest whose
+ * estimated time is within 5% of the best, estimated by replaying the in-order dispatch of
+ * blocks onto the resident slots.
+ *
+ * @param segments   The work of each segment.
+ * @param tile_size  The number of items processed by a block in one iteration.
+ * @param n_resident The number of blocks that can be resident on the device.
+ * @param n_replicas The number of blocks launched for each assigned block, one per target.
+ *
+ * @return The number of blocks for each segment.
+ */
+[[nodiscard]] std::vector<std::uint32_t> HistBlocksPerSegment(
+    common::Span<HistSegment const> segments, std::size_t tile_size, std::size_t n_resident,
+    std::size_t n_replicas);
+
+/**
+ * @brief The number of waves chosen by @ref HistBlocksPerSegment.
+ */
+[[nodiscard]] std::size_t HistWaves(common::Span<HistSegment const> segments, std::size_t tile_size,
+                                    std::size_t n_resident, std::size_t n_replicas);
+
+/**
+ * @brief Assign blocks in proportion to the items of each segment, for the given number of
+ *        waves.
+ */
+[[nodiscard]] std::vector<std::uint32_t> HistBlocksPerSegment(
+    common::Span<HistSegment const> segments, std::size_t tile_size, std::size_t n_resident,
+    std::size_t n_replicas, std::size_t n_waves);
+
+/**
+ * @brief Estimate the time of a histogram kernel, in items, by replaying the in-order dispatch
+ *        of its blocks onto the resident slots. Exposed for testing.
+ */
+[[nodiscard]] double ReplayHistBlocks(common::Span<HistSegment const> segments,
+                                      common::Span<std::uint32_t const> blocks,
+                                      std::size_t tile_size, std::size_t n_resident,
+                                      std::size_t n_replicas);
 }  // namespace cuda_impl
 
 /**
