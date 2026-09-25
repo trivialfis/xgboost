@@ -4,9 +4,13 @@
 #include <gtest/gtest.h>
 #include <xgboost/context.h>  // for Context
 
-#include <memory>  // for unique_ptr
-#include <tuple>   // for tuple
-#include <vector>  // for vector
+#include <algorithm>  // for shuffle
+#include <iterator>   // for back_inserter
+#include <memory>     // for unique_ptr
+#include <numeric>    // for iota, partial_sum
+#include <random>     // for mt19937
+#include <tuple>      // for tuple
+#include <vector>     // for vector
 
 #include "../../../../src/tree/gpu_hist/expand_entry.cuh"  // for GPUExpandEntry
 #include "../../../../src/tree/gpu_hist/histogram.cuh"
@@ -512,4 +516,98 @@ INSTANTIATE_TEST_SUITE_P(
       }
       return ss.str();
     });
+
+namespace {
+void TestBatchedNodes(float sparsity, bool force_global, bst_target_t n_targets) {
+  auto ctx = MakeCUDACtx(0);
+  bst_idx_t n_samples = 1 << 16;
+  bst_feature_t n_features = 37;
+  bst_bin_t n_bins = 16;
+  auto p_fmat = RandomDataGenerator{n_samples, n_features, sparsity}.GenerateDMatrix();
+  auto gpair = GenerateGradientsFixedPoint(&ctx, n_samples, n_targets).gpair;
+  ASSERT_TRUE(gpair.View(ctx.Device()).FContiguous());
+
+  // Nodes of various sizes, including an empty node and nodes smaller than a tile.
+  std::vector<std::size_t> sizes{1, 0, 7, 1000, 20000};
+  sizes.push_back(n_samples - std::accumulate(sizes.cbegin(), sizes.cend(), std::size_t{0}));
+  std::vector<std::size_t> sizes_csum{0};
+  std::partial_sum(sizes.cbegin(), sizes.cend(), std::back_inserter(sizes_csum));
+  bst_node_t n_nodes = sizes.size();
+
+  std::vector<cuda_impl::RowIndexT> h_ridx(n_samples);
+  std::iota(h_ridx.begin(), h_ridx.end(), 0);
+  std::shuffle(h_ridx.begin(), h_ridx.end(), std::mt19937{0});
+  dh::device_vector<cuda_impl::RowIndexT> ridx{h_ridx};
+  auto d_ridx = dh::ToSpan(ridx);
+
+  BatchParam p{n_bins, TrainParam::DftSparseThreshold()};
+  for (auto const& page : p_fmat->GetBatches<EllpackPage>(&ctx, p)) {
+    auto impl = page.Impl();
+    bst_bin_t n_bins_per_target = impl->Cuts().TotalBins();
+    auto n_total_bins = n_bins_per_target * n_targets;
+    // Small groups so that nodes are split into many segments.
+    FeatureGroups fg{impl->Cuts(), impl->IsDenseCompressed(),
+                     sizeof(GradientPairInt64) * n_bins * 4};
+    if (impl->IsDenseCompressed()) {
+      ASSERT_GT(fg.feature_segments.Size(), 3);
+    }
+
+    DeviceHistogramBuilder builder;
+    builder.Reset(&ctx, n_nodes, n_total_bins, force_global);
+    std::vector<bst_node_t> nidx(n_nodes);
+    std::iota(nidx.begin(), nidx.end(), 0);
+    builder.AllocateHistograms(&ctx, nidx);
+    std::vector<common::Span<cuda_impl::RowIndexT const>> h_ridxs;
+    std::vector<common::Span<GradientPairInt64>> h_hists;
+    for (bst_node_t i = 0; i < n_nodes; ++i) {
+      h_ridxs.push_back(d_ridx.subspan(sizes_csum[i], sizes[i]));
+      h_hists.push_back(builder.GetNodeHistogram(i));
+    }
+    dh::device_vector<common::Span<cuda_impl::RowIndexT const>> ridxs{h_ridxs};
+    dh::device_vector<common::Span<GradientPairInt64>> hists{h_hists};
+    impl->Visit(&ctx, {}, [&](auto&& acc) {
+      builder.BuildHistogram(&ctx, acc, fg.DeviceAccessor(ctx.Device()), gpair.View(ctx.Device()),
+                             dh::ToSpan(ridxs), dh::ToSpan(hists), sizes_csum);
+    });
+
+    // Build each node and target separately with a single group as the baseline.
+    FeatureGroups single_group{impl->Cuts()};
+    auto d_gpair = gpair.View(ctx.Device()).Values();
+    for (bst_node_t i = 0; i < n_nodes; ++i) {
+      std::vector<GradientPairInt64> h_got(n_total_bins);
+      dh::CopyDeviceSpanToVector(&h_got, h_hists[i]);
+      for (bst_target_t t = 0; t < n_targets; ++t) {
+        dh::device_vector<GradientPairInt64> expected(n_bins_per_target);
+        DeviceHistogramBuilder single;
+        single.Reset(&ctx, 1, n_bins_per_target, /*force_global=*/true);
+        impl->Visit(&ctx, {}, [&](auto&& acc) {
+          single.BuildHistogram(&ctx, acc, single_group.DeviceAccessor(ctx.Device()),
+                                d_gpair.subspan(t * n_samples, n_samples), h_ridxs[i],
+                                dh::ToSpan(expected));
+        });
+        std::vector<GradientPairInt64> h_expected(n_bins_per_target);
+        thrust::copy(expected.begin(), expected.end(), h_expected.begin());
+        for (bst_bin_t j = 0; j < n_bins_per_target; ++j) {
+          auto const& got = h_got[t * n_bins_per_target + j];
+          ASSERT_EQ(got.GetQuantisedGrad(), h_expected[j].GetQuantisedGrad())
+              << "node:" << i << " target:" << t << " bin:" << j;
+          ASSERT_EQ(got.GetQuantisedHess(), h_expected[j].GetQuantisedHess())
+              << "node:" << i << " target:" << t << " bin:" << j;
+        }
+      }
+    }
+  }
+}
+}  // namespace
+
+TEST(Histogram, BatchedNodes) {
+  // Dense, dense with missing values, and sparse.
+  for (auto sparsity : {0.0f, 0.2f, 0.8f}) {
+    for (auto force_global : {false, true}) {
+      for (bst_target_t n_targets : {1, 3}) {
+        TestBatchedNodes(sparsity, force_global, n_targets);
+      }
+    }
+  }
+}
 }  // namespace xgboost::tree
