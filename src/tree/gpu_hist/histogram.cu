@@ -112,7 +112,7 @@ template <typename HistArchPolicy, std::int32_t ItemsPerThread, bool Dense, bool
 struct HistPolicy : public HistArchPolicy {
   using ArchPolicy = HistArchPolicy;
   static constexpr std::int32_t kItemsPerThread = ItemsPerThread;
-  static constexpr std::int32_t kTileSize = HistArchPolicy::kBlockThreads * ItemsPerThread;
+  static constexpr std::int32_t kTileSize = HistArchPolicy::kBlockThreads * kItemsPerThread;
   static constexpr bool kDense = Dense;
   static constexpr bool kCompressed = Compressed;
   static constexpr bool kSharedMem = SharedMem;
@@ -195,22 +195,9 @@ __device__ void HistKernelOneNodeTarget(Accessor const& matrix, FeatureGroup con
     }
   };
 
-  auto process_gpair_tile = [&](auto full_tile, auto offset) {
-#pragma unroll 1
-    for (std::int32_t j = 0; j < Policy::kItemsPerThread; ++j) {
-      bst_idx_t const idx = offset + j * Policy::kBlockThreads + threadIdx.x;
-      if (full_tile || idx < end) {
-        process_valid_tile(idx);
-      }
-    }
-  };
-
-  for (auto offset = begin; offset < end; offset += Policy::kTileSize) {
-    if (end - offset >= static_cast<bst_idx_t>(Policy::kTileSize)) {
-      process_gpair_tile(std::true_type{}, offset);
-    } else {
-      process_gpair_tile(std::false_type{}, offset);
-    }
+  // A single loop avoids carrying both a tile offset and an item offset through accumulation.
+  for (bst_idx_t idx = begin + threadIdx.x; idx < end; idx += Policy::kBlockThreads) {
+    process_valid_tile(idx);
   }
 }
 
@@ -353,7 +340,10 @@ __global__ __launch_bounds__(
   // The position is the only state carried between segments. Ranges of blocks are aligned
   // to `items_per_block`, the block reaches the end of its range when the position is
   // aligned.
-  bst_idx_t pos = blockIdx.x * items_per_block;
+  // Keep the scheduling position in thread-local memory. It is accessed only between
+  // segments, allowing flush metadata to be reconstructed without keeping it in registers
+  // across the accumulation loop.
+  volatile bst_idx_t pos = blockIdx.x * items_per_block;
   do {
     auto seg = find_segment(pos);
     if (seg.begin < seg.end) {
@@ -371,7 +361,6 @@ __global__ __launch_bounds__(
         __syncthreads();
         // Recompute the segment instead of keeping it alive across the histogram loop,
         // which saves registers.
-        asm volatile("" : "+l"(pos));
         seg = find_segment(pos);
         group = feature_groups[seg.gidx];
         auto gmem_hist = target_hist(seg);
