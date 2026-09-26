@@ -484,7 +484,10 @@ struct HistKernel {
       bst_idx_t n_items =
           n_targets * (h_sizes_csum.back() * row_items + n_segments * Policy::kSegmentCost);
       auto [items_per_block, n_blocks] = SliceItems<Policy>(n_items, v.n_blocks_per_mp * n_mps);
-      dh::device_vector<std::size_t> sizes_csum{h_sizes_csum};
+      dh::TemporaryArray<std::size_t> sizes_csum(h_sizes_csum.size());
+      dh::safe_cuda(cudaMemcpyAsync(sizes_csum.data().get(), h_sizes_csum.data(),
+                                    h_sizes_csum.size() * sizeof(std::size_t), cudaMemcpyHostToDevice,
+                                    ctx->CUDACtx()->Stream()));
       dh::LaunchKernel(n_blocks, Policy::kBlockThreads, shmem_bytes, ctx->CUDACtx()->Stream())(
           kernel, matrix, feature_groups, ridx_iters, dh::ToSpan(sizes_csum), hists.data(), d_gpair,
           n_samples, n_targets, items_per_block, n_items);

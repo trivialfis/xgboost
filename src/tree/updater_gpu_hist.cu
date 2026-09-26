@@ -307,8 +307,8 @@ struct GPUHistMakerDevice {
     dh::TemporaryArray<common::Span<GradientPairInt64>> hists(h_hists.size());
     dh::TemporaryArray<common::Span<cuda_impl::RowIndexT const>> ridxs(h_ridxs.size());
     auto stream = ctx_->CUDACtx()->Stream();
-    // BuildHistogram waits for these copies together with the prefix-sum copy. Keep the
-    // host vectors alive until it returns.
+    // Keep the host metadata pageable for staging. Copies and the histogram kernel use
+    // the same stream.
     dh::safe_cuda(cudaMemcpyAsync(hists.data().get(), h_hists.data(),
                                   h_hists.size() * sizeof(h_hists[0]), cudaMemcpyHostToDevice,
                                   stream));
