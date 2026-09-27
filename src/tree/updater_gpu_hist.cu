@@ -288,7 +288,6 @@ struct GPUHistMakerDevice {
     monitor.Start(__func__);
     std::vector<common::Span<GradientPairInt64>> h_hists;
     std::vector<common::Span<cuda_impl::RowIndexT const>> h_ridxs;
-    std::vector<std::size_t> h_sizes_csum{0};
     for (auto nidx : build_nidx) {
       auto d_ridx = partitioners_.At(k)->GetRows(nidx);
       if (d_ridx.empty()) {
@@ -297,29 +296,16 @@ struct GPUHistMakerDevice {
       }
       h_ridxs.push_back(d_ridx);
       h_hists.push_back(histogram_.GetNodeHistogram(nidx));
-      h_sizes_csum.push_back(h_sizes_csum.back() + d_ridx.size());
     }
     if (h_ridxs.empty()) {
       monitor.Stop(__func__);
       return;
     }
 
-    dh::TemporaryArray<common::Span<GradientPairInt64>> hists(h_hists.size());
-    dh::TemporaryArray<common::Span<cuda_impl::RowIndexT const>> ridxs(h_ridxs.size());
-    auto stream = ctx_->CUDACtx()->Stream();
-    // Keep the host metadata pageable for staging. Copies and the histogram kernel use
-    // the same stream.
-    dh::safe_cuda(cudaMemcpyAsync(hists.data().get(), h_hists.data(),
-                                  h_hists.size() * sizeof(h_hists[0]), cudaMemcpyHostToDevice,
-                                  stream));
-    dh::safe_cuda(cudaMemcpyAsync(ridxs.data().get(), h_ridxs.data(),
-                                  h_ridxs.size() * sizeof(h_ridxs[0]), cudaMemcpyHostToDevice,
-                                  stream));
-
     auto acc = page.Impl()->GetDeviceEllpack(this->ctx_, {});
     auto gpair = this->d_gpair.View(this->ctx_->Device());
     this->histogram_.BuildHistogram(ctx_, acc, feature_groups_->DeviceAccessor(ctx_->Device()),
-                                    gpair, dh::ToSpan(ridxs), dh::ToSpan(hists), h_sizes_csum);
+                                    gpair, h_ridxs, h_hists);
     monitor.Stop(__func__);
   }
 

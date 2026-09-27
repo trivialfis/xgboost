@@ -6,6 +6,7 @@
 #include <cstddef>  // for size_t
 #include <cstdint>  // for int32_t
 #include <memory>   // for unique_ptr
+#include <vector>   // for vector
 
 #include "../../common/cuda_context.cuh"    // for CUDAContext
 #include "../../common/device_helpers.cuh"  // for LaunchN
@@ -17,27 +18,25 @@
 #include "xgboost/span.h"                   // for Span
 
 namespace xgboost::tree {
-// Single-target shared memory policy
-[[nodiscard]] inline std::size_t DftStHistShmemBytes(std::int32_t device) {
-  auto optin = dh::MaxSharedMemoryOptin(device);
-  return std::min(optin, std::size_t{96} * 1024);
-}
+/**
+ * @brief Single-target shared memory policy.
+ *
+ * The budget is derived from the device instead of being tuned per arch. It is the largest
+ * dynamic shared memory a block may use while still letting as many blocks be co-resident
+ * as the thread budget of the SM allows. See the implementation for details.
+ *
+ * A larger budget means `FeatureGroups` needs fewer groups, which is a win. A budget so
+ * large that it costs a co-resident block is not.
+ */
+[[nodiscard]] std::size_t DftStHistShmemBytes(std::int32_t device);
 
-// Multi-target shared memory policy
-[[nodiscard]] inline std::size_t DftMtHistShmemBytes(std::int32_t device) {
-  auto max_shared_optin = dh::MaxSharedMemoryOptin(device);
-  auto max_shared = dh::MaxSharedMemory(device);
-  // Use larger shared memory if available.
-  //
-  // By default, max_shared is 48 kB for most GPUs. Optin size varies between archs, some
-  // have large optin size, like the H200. We expand the shared memory size for those
-  // large devices.
-  constexpr std::size_t kThreshold = 4;
-  if (max_shared_optin > max_shared * kThreshold) {
-    return 2 * max_shared;
-  }
-  return max_shared;
-}
+/**
+ * @brief Multi-target shared memory policy.
+ *
+ * Same derivation as `DftStHistShmemBytes`, but the multi-target kernel picks its block size
+ * per arch, so the co-residency comes from that tuning instead of from the thread budget.
+ */
+[[nodiscard]] std::size_t DftMtHistShmemBytes(std::int32_t device);
 
 /**
  * @brief An atomicAdd designed for gradient pair with better performance.  For general
@@ -186,13 +185,20 @@ class DeviceHistogramBuilder {
                       common::Span<GradientPairInt64 const> gpair,
                       common::Span<std::uint32_t const> ridx,
                       common::Span<GradientPairInt64> histogram);
-  // Build histograms for multiple nodes and multiple targets
+  /**
+   * @brief Build histograms for multiple nodes and multiple targets.
+   *
+   * @param ridxs One span of row indices for each node, empty nodes are allowed.
+   * @param hists One histogram for each node, must match `ridxs`.
+   *
+   * The per-node metadata is staged to the device by this method, the caller can free the
+   * inputs upon return.
+   */
   void BuildHistogram(Context const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,
                       linalg::MatrixView<GradientPairInt64 const> gpair,
-                      common::Span<common::Span<const std::uint32_t>> ridxs,
-                      common::Span<common::Span<GradientPairInt64>> hists,
-                      std::vector<std::size_t> const& h_sizes_csum);
+                      std::vector<common::Span<std::uint32_t const>> const& ridxs,
+                      std::vector<common::Span<GradientPairInt64>> const& hists);
 
   [[nodiscard]] auto GetNodeHistogram(bst_node_t nidx) { return hist_.GetNodeHistogram(nidx); }
 

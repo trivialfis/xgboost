@@ -61,13 +61,12 @@ class MultiHistTest
   }
 
   void TestMtBuild() {
-    auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
-    auto hists = dh::device_vector<common::Span<GradientPairInt64>>{node_hist};
-    auto sizes_cum = std::vector<std::size_t>{0, ridx.size()};
+    auto ridxs = std::vector<common::Span<std::uint32_t const>>{dh::ToSpan(ridx)};
+    auto hists = std::vector<common::Span<GradientPairInt64>>{node_hist};
 
-    this->histogram.BuildHistogram(
-        &this->ctx, page->GetDeviceEllpack(&ctx, {}), p_fg->DeviceAccessor(ctx.Device()),
-        gpairs_i64.View(this->ctx.Device()), dh::ToSpan(ridxs), dh::ToSpan(hists), sizes_cum);
+    this->histogram.BuildHistogram(&this->ctx, page->GetDeviceEllpack(&ctx, {}),
+                                   p_fg->DeviceAccessor(ctx.Device()),
+                                   gpairs_i64.View(this->ctx.Device()), ridxs, hists);
 
     auto d_hist = this->node_hist;
     std::vector<GradientPairInt64> h_hist(d_hist.size());
@@ -84,16 +83,15 @@ class MultiHistTest
 
   void TestMtChildrenBuild() {
     auto d_ridx = dh::ToSpan(ridx);
-    auto ridxs = dh::device_vector<common::Span<std::uint32_t const>>{
-        d_ridx.subspan(0, n_samples / 4), d_ridx.subspan(n_samples / 4)};
-    auto sizes_cum = std::vector<std::size_t>{0, n_samples / 4, n_samples};
+    auto ridxs = std::vector<common::Span<std::uint32_t const>>{d_ridx.subspan(0, n_samples / 4),
+                                                               d_ridx.subspan(n_samples / 4)};
     this->histogram.AllocateHistograms(&ctx, {1, 2});
-    auto hists = dh::device_vector<common::Span<GradientPairInt64>>{
+    auto hists = std::vector<common::Span<GradientPairInt64>>{
         this->histogram.GetNodeHistogram(1), this->histogram.GetNodeHistogram(2)};
 
-    this->histogram.BuildHistogram(
-        &this->ctx, page->GetDeviceEllpack(&ctx, {}), p_fg->DeviceAccessor(ctx.Device()),
-        gpairs_i64.View(this->ctx.Device()), dh::ToSpan(ridxs), dh::ToSpan(hists), sizes_cum);
+    this->histogram.BuildHistogram(&this->ctx, page->GetDeviceEllpack(&ctx, {}),
+                                   p_fg->DeviceAccessor(ctx.Device()),
+                                   gpairs_i64.View(this->ctx.Device()), ridxs, hists);
 
     auto d_hist_1 = this->histogram.GetNodeHistogram(1);
     auto d_hist_2 = this->histogram.GetNodeHistogram(2);

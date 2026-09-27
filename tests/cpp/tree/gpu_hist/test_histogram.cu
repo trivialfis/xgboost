@@ -23,6 +23,68 @@
 #include "dummy_quantizer.cuh"
 
 namespace xgboost::tree {
+namespace {
+// Both shared memory policies obey the same contract: `n_blocks` blocks, each charged the
+// budget plus the driver reservation, must exactly saturate the shared memory of one SM.
+void CheckHistShmemPolicy(std::int32_t device, std::size_t budget, std::int32_t n_blocks) {
+  auto optin = dh::MaxSharedMemoryOptin(device);
+  ASSERT_GT(budget, 0);
+  // Must be requestable by a kernel.
+  ASSERT_LE(budget, optin);
+
+  std::int32_t smem_per_sm = 0, reserved = 0;
+  dh::safe_cuda(cudaDeviceGetAttribute(&smem_per_sm,
+                                       cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
+  dh::safe_cuda(
+      cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
+
+  // Fits: the requested co-residency is achievable.
+  auto charged = static_cast<std::size_t>(n_blocks) * (budget + reserved);
+  ASSERT_LE(charged, static_cast<std::size_t>(smem_per_sm));
+
+  // Tight: either we are at the opt-in ceiling, or one more allocation granule would no
+  // longer fit. Otherwise shared memory is left unused and `FeatureGroups` makes more groups
+  // than necessary.
+  constexpr std::size_t kGranule = 128;
+  if (budget < optin) {
+    auto bigger = static_cast<std::size_t>(n_blocks) * (budget + kGranule + reserved);
+    ASSERT_GT(bigger, static_cast<std::size_t>(smem_per_sm));
+  }
+}
+}  // anonymous namespace
+
+TEST(Histogram, DftStHistShmemBytes) {
+  auto ctx = MakeCUDACtx(0);
+  auto device = ctx.Ordinal();
+
+  std::int32_t max_threads_per_sm = 0;
+  dh::safe_cuda(cudaDeviceGetAttribute(&max_threads_per_sm,
+                                       cudaDevAttrMaxThreadsPerMultiProcessor, device));
+  // Single target uses a fixed block size, so the co-residency is the thread budget.
+  constexpr std::int32_t kBlockThreads = 1024;
+  auto n_blocks = std::max(1, max_threads_per_sm / kBlockThreads);
+
+  CheckHistShmemPolicy(device, DftStHistShmemBytes(device), n_blocks);
+}
+
+TEST(Histogram, DftMtHistShmemBytes) {
+  auto ctx = MakeCUDACtx(0);
+  auto device = ctx.Ordinal();
+  auto budget = DftMtHistShmemBytes(device);
+
+  // The multi-target block size is an arch tuning not exposed here, so the co-residency is
+  // recovered from the budget itself, then checked for the fits-and-tight contract.
+  std::int32_t smem_per_sm = 0, reserved = 0;
+  dh::safe_cuda(cudaDeviceGetAttribute(&smem_per_sm,
+                                       cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
+  dh::safe_cuda(
+      cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
+  auto n_blocks = static_cast<std::int32_t>(smem_per_sm / (budget + reserved));
+  ASSERT_GE(n_blocks, 1);
+
+  CheckHistShmemPolicy(device, budget, n_blocks);
+}
+
 TEST(Histogram, DeviceHistogramStorage) {
   // Ensures that node allocates correctly after reaching `kStopGrowingSize`.
   auto ctx = MakeCUDACtx(0);
@@ -563,11 +625,9 @@ void TestBatchedNodes(float sparsity, bool force_global, bst_target_t n_targets)
       h_ridxs.push_back(d_ridx.subspan(sizes_csum[i], sizes[i]));
       h_hists.push_back(builder.GetNodeHistogram(i));
     }
-    dh::device_vector<common::Span<cuda_impl::RowIndexT const>> ridxs{h_ridxs};
-    dh::device_vector<common::Span<GradientPairInt64>> hists{h_hists};
     impl->Visit(&ctx, {}, [&](auto&& acc) {
       builder.BuildHistogram(&ctx, acc, fg.DeviceAccessor(ctx.Device()), gpair.View(ctx.Device()),
-                             dh::ToSpan(ridxs), dh::ToSpan(hists), sizes_csum);
+                             h_ridxs, h_hists);
     });
 
     // Build each node and target separately with a single group as the baseline.
