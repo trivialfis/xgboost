@@ -158,21 +158,42 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   }
 }
 
+// Upper bound on the shared memory a histogram block may request.
+//
+// Without it, the derivation below gives 113KB on sm_90 and sm_100, where the previous
+// per-arch heuristic gave 96KB, and a small regression was reported on H200 after that
+// change. Every other supported arch derives less than this, so the cap only affects those
+// two, i.e. it restores exactly the budget they had before.
+//
+// FIXME(jiamingy): The reason a larger budget hurts there is not understood. It is not L1
+// capacity: shared memory and L1 share one unified data cache, and taking 113KB x 2 blocks
+// forces the maximum carve-out, which leaves L1 at its 28KB minimum instead of 60KB. That
+// mechanism is real and was measured on sm_120 (a synthetic kernel with a 48KB working set is
+// 8.7x slower under the large carve-out), but the histogram kernel does not depend on L1
+// capacity: it streams `gidx`, and the data it actually reuses (`d_ridx`, the segment arrays)
+// is only a few KB. Measured on sm_120 with interleaved pairs, shrinking the budget to keep
+// L1 was neutral for single target (ratio 0.985-1.004) and a consistent small loss for multi
+// target (1.015-1.033), so that is not the fix. Raise or drop this cap once someone can
+// profile an affected device.
+constexpr std::size_t kMaxShmemBytes = 96 * 1024;
+
 /**
  * @brief The shared memory budget for a block, given the co-residency the launch bounds
  *        ask for.
  *
  * `__launch_bounds__(block_threads, min_blocks)` promises that `min_blocks` blocks can be
- * co-resident, and ptxas caps the registers per thread to make it so. Shared memory must
- * not then be the reason the promise can not be kept, so the shared memory of the SM is
- * split between exactly `min_blocks` blocks.
+ * co-resident, and ptxas caps the registers per thread to make it so. Shared memory must not
+ * then be the reason the promise can not be kept, so the shared memory of the SM is split
+ * between exactly `min_blocks` blocks.
  *
- * Using less would leave shared memory unused and force `FeatureGroups` to create more
- * groups than necessary. Using more would cost a co-resident block, which the launch bounds
- * already paid for with a tighter register cap.
+ * Using less leaves shared memory unused and forces `FeatureGroups` to create more groups
+ * than necessary. Using more costs a co-resident block, which the launch bounds already paid
+ * for with a tighter register cap.
  *
- * Note that the aggregate shared memory used per SM is the full amount for any
- * `min_blocks`, only the per-block share changes.
+ * Note that the aggregate shared memory used per SM is the full amount for any `min_blocks`,
+ * only the per-block share changes.
+ *
+ * The budget is capped at `kMaxShmemBytes`, see there.
  */
 [[nodiscard]] std::size_t HistShmemBytes(std::int32_t device, std::int32_t min_blocks) {
   CHECK_GT(min_blocks, 0);
@@ -189,7 +210,7 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   auto per_block = (smem_per_sm / min_blocks / kGranularity) * kGranularity - reserved;
   CHECK_GT(per_block, 0);
   // A block can not request more than the opt-in maximum.
-  return std::min(static_cast<std::size_t>(per_block), optin);
+  return std::min({static_cast<std::size_t>(per_block), optin, kMaxShmemBytes});
 }
 
 // The co-residency the launch bounds ask for, as seen from the host. The device pass uses
@@ -215,26 +236,8 @@ std::size_t DftMtHistShmemBytes(std::int32_t device) {
   std::size_t bytes = 0;
   DispatchCudaSm(device, [&](auto arch) {
     using Arch = common::GetValueT<decltype(arch)>;
-    // FIXME(jiamingy): Unbenchmarked on sm_80 and sm_90. This replaced the heuristic
-    //
-    //   auto max_shared = dh::MaxSharedMemory(device);          // 48KB on most archs
-    //   return dh::MaxSharedMemoryOptin(device) > max_shared * 4 ? 2 * max_shared
-    //                                                            : max_shared;
-    //
-    // which returned 48KB on sm_80 and 96KB on sm_90, so the budget rises to 81KB and 113KB
-    // respectively. That is a large change on the archs we can not measure. The derivation is
-    // sound: the launch bounds already pay for `kMinBlocks` co-resident blocks with a tighter
-    // register cap, and the budget now uses all the shared memory that co-residency permits
-    // instead of leaving 40% of it unused on sm_80. The device code is unchanged.
-    //
-    // But a larger budget is not always faster. It means fewer, larger feature groups, and on
-    // sm_120 the single-target kernel was measured faster with a smaller budget on datasets
-    // with many bins (17% on 262144 rows x 1000 features x 256 bins, 49KB vs 99KB), likely
-    // because requesting nearly all the shared memory leaves no L1 for the `gidx` reads. That
-    // was the single-target kernel, the multi-target one has a different block size and
-    // register pressure, so it may not behave the same. Either way the optimum depends on the
-    // total bin count and can not be derived here. Restore the heuristic above if this
-    // regresses.
+    // The budget this returns is larger than the per-arch heuristic it replaced on every
+    // arch, except where `kMaxShmemBytes` caps it. See there for the H200 regression.
     bytes = HistShmemBytes(device, Arch::kMinBlocks);
   });
   return bytes;
