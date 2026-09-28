@@ -399,10 +399,9 @@ __global__ __launch_bounds__(
   };
   auto target_hist = [&](HistSegment const& seg) {
     auto d_node_hist = node_hists[seg.nidx_in_set];
-    // With a target-major layout, we don't have to pack the histogram for all targets into
-    // the shared memory.
+    // With a target-major layout.
     auto gmem_hist = d_node_hist.data() + seg.target_idx * (d_node_hist.size() / n_targets);
-    // Without the hint, the compiler emits generic atomics for the flush.
+    // hint for PTX: atom.add.u64 -> atom.global.add.u64
     __builtin_assume(__isGlobal(gmem_hist));
     return gmem_hist;
   };
