@@ -18,24 +18,11 @@
 #include "xgboost/span.h"                   // for Span
 
 namespace xgboost::tree {
-/**
- * @brief Single-target shared memory policy.
- *
- * The budget is derived from the device instead of being tuned per arch. It is the largest
- * dynamic shared memory a block may use while still letting as many blocks be co-resident
- * as the thread budget of the SM allows. See the implementation for details.
- *
- * A larger budget means `FeatureGroups` needs fewer groups, which is a win. A budget so
- * large that it costs a co-resident block is not.
- */
+// Single-target shared memory policy. The largest budget for a block that doesn't reduce the
+// number of co-resident blocks.
 [[nodiscard]] std::size_t DftStHistShmemBytes(std::int32_t device);
 
-/**
- * @brief Multi-target shared memory policy.
- *
- * Same derivation as `DftStHistShmemBytes`, but the multi-target kernel picks its block size
- * per arch, so the co-residency comes from that tuning instead of from the thread budget.
- */
+// Multi-target shared memory policy, same rule with the per-arch block size.
 [[nodiscard]] std::size_t DftMtHistShmemBytes(std::int32_t device);
 
 /**
@@ -190,9 +177,6 @@ class DeviceHistogramBuilder {
    *
    * @param ridxs One span of row indices for each node, empty nodes are allowed.
    * @param hists One histogram for each node, must match `ridxs`.
-   *
-   * The per-node metadata is staged to the device by this method, the caller can free the
-   * inputs upon return.
    */
   void BuildHistogram(Context const* ctx, EllpackAccessor const& matrix,
                       FeatureGroupsAccessor const& feature_groups,

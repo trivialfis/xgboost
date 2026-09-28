@@ -64,8 +64,6 @@ struct HistTuning {
 namespace {
 constexpr std::int32_t kItemsPerThread = 8;
 
-// For reference only, the shared memory budget is derived from the device by
-// `DftStHistShmemBytes` and the occupancy by `HistKernel::BlocksPerMp`.
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#feature-set-compiler-targets
 // Technical Specifications                  7.5  | 8.0  | 8.6  8.7 | 8.9 | 9.0 10.0 | 11.0 12.0
 // Maximum number of resident blocks per SM  16   | 32   | 16       | 24  | 32       | 24
@@ -96,10 +94,7 @@ using MtHistBound = HistSm80;
 using MtHistBound = HistSm75;
 #endif
 
-// Single-target launch bounds
-// Maximize the number of threads instead of tuning for occupancy for single target, so the
-// block size is fixed. Only the tag type is needed on the host, the co-residency is
-// resolved in the device pass below.
+// Single-target launch bounds.
 struct StHistBound {
   static constexpr std::int32_t kBlockThreads = 1024;
 };
@@ -123,9 +118,7 @@ template <typename HistArchPolicy, std::int32_t ItemsPerThread, bool Dense, bool
           bool SharedMem>
 struct HistPolicy : public HistArchPolicy {
   static constexpr std::int32_t kItemsPerThread = ItemsPerThread;
-  // The scheduling granularity. Items are no longer processed in tiles by the accumulation
-  // loop, the tile is only the smallest unit of work handed to a block and the unit for
-  // accounting the cost of a flush.
+  // The smallest unit of work assigned to a block.
   static constexpr std::int32_t kTileSize = HistArchPolicy::kBlockThreads * kItemsPerThread;
   static constexpr bool kDense = Dense;
   static constexpr bool kCompressed = Compressed;
@@ -158,24 +151,8 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
   }
 }
 
-// Upper bound on the shared memory a histogram block may request.
-//
-// Without it, the derivation below gives 113KB on sm_90 and sm_100, where the previous
-// per-arch heuristic gave 96KB, and a small regression was reported on H200 after that
-// change. Every other supported arch derives less than this, so the cap only affects those
-// two, i.e. it restores exactly the budget they had before.
-//
-// FIXME(jiamingy): The reason a larger budget hurts there is not understood. It is not L1
-// capacity: shared memory and L1 share one unified data cache, and taking 113KB x 2 blocks
-// forces the maximum carve-out, which leaves L1 at its 28KB minimum instead of 60KB. That
-// mechanism is real and was measured on sm_120 (a synthetic kernel with a 48KB working set is
-// 8.7x slower under the large carve-out), but the histogram kernel does not depend on L1
-// capacity: it streams `gidx`, and the data it actually reuses (`d_ridx`, the segment arrays)
-// is only a few KB. Measured on sm_120 with interleaved pairs, shrinking the budget to keep
-// L1 was neutral for single target (ratio 0.985-1.004) and a consistent small loss for multi
-// target (1.015-1.033), so that is not the fix. Raise or drop this cap once someone can
-// profile an affected device.
-constexpr std::size_t kMaxShmemBytes = 96 * 1024;
+// Only sm_90 and sm_100 reach the cap, and a larger budget (113KB) is slower on H200.
+constexpr std::size_t kMaxShmemBytes = 96 /*kb*/ * 1024;
 
 /**
  * @brief The shared memory budget for a block, given the co-residency the launch bounds
@@ -297,7 +274,6 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     }
   };
 
-  // A single loop avoids carrying both a tile offset and an item offset through accumulation.
   for (bst_idx_t idx = begin + threadIdx.x; idx < end; idx += Policy::kBlockThreads) {
     process_item(idx);
   }
@@ -462,8 +438,7 @@ __global__ __launch_bounds__(
                                 seg.begin, seg.end);
       if constexpr (Policy::kSharedMem) {
         __syncthreads();
-        // Recompute the segment instead of keeping it alive across the histogram loop,
-        // which saves registers.
+        // Recompute instead of keeping the segment in registers.
         seg = find_segment(pos);
         group = feature_groups[seg.gidx];
         auto gmem_hist = target_hist(seg);
@@ -544,7 +519,6 @@ struct HistKernel {
         dh::safe_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            this->max_shared_bytes));
       }
-      // Use this as a limiter, works for root node. Not too bad an option for child nodes.
       dh::safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
           &it->second, kernel, Policy::kBlockThreads, shmem_bytes));
       CHECK_GT(it->second, 0);
@@ -583,7 +557,6 @@ struct HistKernel {
     bool use_shared = !force_global && shmem_bytes <= this->max_shared_bytes;
     shmem_bytes = use_shared ? shmem_bytes : 0;
 
-    // Stage the per-node metadata. The buffers are freed on the same stream as the kernel.
     dh::TemporaryArray<std::size_t> sizes_csum(h_sizes_csum.size());
     dh::TemporaryArray<RidxIterSpan> ridx_iters(h_ridx_iters.size());
     dh::TemporaryArray<common::Span<GradientPairInt64>> hists(h_hists.size());
