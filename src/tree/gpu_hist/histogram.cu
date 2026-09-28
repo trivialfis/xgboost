@@ -146,48 +146,33 @@ void DispatchCudaSm(std::int32_t device, Fn&& fn) {
 constexpr std::size_t kMaxShmemBytes = 96 /*kb*/ * 1024;
 
 /**
- * @brief The shared memory budget for a block, given the co-residency the launch bounds
- *        ask for.
+ * @brief The shared memory budget for a block when `min_blocks` blocks are co-resident.
  *
- * `__launch_bounds__(block_threads, min_blocks)` promises that `min_blocks` blocks can be
- * co-resident, and ptxas caps the registers per thread to make it so. Shared memory must not
- * then be the reason the promise can not be kept, so the shared memory of the SM is split
- * between exactly `min_blocks` blocks.
- *
- * Using less leaves shared memory unused and forces `FeatureGroups` to create more groups
- * than necessary. Using more costs a co-resident block, which the launch bounds already paid
- * for with a tighter register cap.
- *
- * Note that the aggregate shared memory used per SM is the full amount for any `min_blocks`,
- * only the per-block share changes.
- *
- * The budget is capped at `kMaxShmemBytes`, see there.
+ * The launch bounds cap the registers so that `min_blocks` blocks fit an SM, the shared
+ * memory of the SM is split between the same number of blocks. A smaller budget requires
+ * more feature groups, a larger one costs a co-resident block.
  */
 [[nodiscard]] std::size_t HistShmemBytes(std::int32_t device, std::int32_t min_blocks) {
   CHECK_GT(min_blocks, 0);
   auto optin = dh::MaxSharedMemoryOptin(device);
   std::int32_t smem_per_sm = 0, reserved = 0;
-  dh::safe_cuda(cudaDeviceGetAttribute(&smem_per_sm,
-                                       cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
   dh::safe_cuda(
-      cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
+      cudaDeviceGetAttribute(&smem_per_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
+  dh::safe_cuda(cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
 
   // Each block is additionally charged a fixed driver reservation. Round down to the
   // allocation granularity, otherwise the last block does not fit.
   constexpr std::int32_t kGranularity = 128;
   auto per_block = (smem_per_sm / min_blocks / kGranularity) * kGranularity - reserved;
   CHECK_GT(per_block, 0);
-  // A block can not request more than the opt-in maximum.
   return std::min({static_cast<std::size_t>(per_block), optin, kMaxShmemBytes});
 }
 
-// The co-residency the launch bounds ask for, as seen from the host. The device pass uses
-// `HistBound<Policy>::kMinBlocks`; these must agree, which is why both are derived from the
-// thread budget of the SM.
+// Host version of `kStMinBlocks`.
 [[nodiscard]] std::int32_t HistMinBlocks(std::int32_t device, std::int32_t block_threads) {
   std::int32_t max_threads_per_sm = 0;
-  dh::safe_cuda(cudaDeviceGetAttribute(&max_threads_per_sm,
-                                       cudaDevAttrMaxThreadsPerMultiProcessor, device));
+  dh::safe_cuda(
+      cudaDeviceGetAttribute(&max_threads_per_sm, cudaDevAttrMaxThreadsPerMultiProcessor, device));
   return std::max(1, max_threads_per_sm / block_threads);
 }
 }  // anonymous namespace
@@ -277,8 +262,7 @@ struct HistSegment {
 };
 
 // The largest index `i` in [0, n) with `begin(i) <= pos`, `begin` must be non-decreasing.
-// Ties resolve to the largest index, hence zero-width entries (empty nodes without
-// padding) are skipped.
+// Taking the largest index skips empty entries.
 template <typename Fn>
 XGBOOST_DEV_INLINE std::size_t UpperBoundIdx(std::size_t n, bst_idx_t pos, Fn&& begin) {
   std::size_t base = 0;
@@ -291,9 +275,7 @@ XGBOOST_DEV_INLINE std::size_t UpperBoundIdx(std::size_t n, bst_idx_t pos, Fn&& 
 }
 
 // Find the segment of the item at `pos`, and the range of items in this segment up to
-// `last`. Each segment is followed by `Policy::kSegmentCost` padding items to account for
-// the fixed cost of the segment when slicing items for blocks. The padding contains no
-// valid item.
+// `last`. Each segment is followed by `Policy::kSegmentCost` padding items.
 template <typename Policy, typename Accessor>
 XGBOOST_DEV_INLINE HistSegment FindSegment(Accessor const& matrix,
                                            FeatureGroupsAccessor const& feature_groups,
@@ -353,15 +335,13 @@ XGBOOST_DEV_INLINE HistSegment FindSegment(Accessor const& matrix,
  * @param items_per_block The number of items processed by each block.
  * @param n_items         The total number of items.
  *
- * The items of all nodes, feature groups, and targets are concatenated in this order, and
- * each block processes a contiguous range of items. The range of a block can span
- * multiple segments of (node, group, target); the block flushes its privatized histogram
- * once for each segment. As a result, the number of flushes is bounded by the number of
- * blocks plus the number of segments. Targets are the innermost dimension so that blocks
- * of different targets read the same bin indices around the same time, sharing them in L2.
+ * The items of all (node, feature group, target) segments are concatenated in this order,
+ * and each block processes a contiguous range of items. The block flushes its privatized
+ * histogram once for each segment in its range. Targets are innermost so that the bin
+ * indices read for different targets are shared in L2.
  *
  * Each segment is padded with the cost of its flush. Otherwise, a block can receive many
- * small segments (small nodes) and flush them sequentially while other blocks are idle.
+ * small segments and flush them sequentially while other blocks are idle.
  */
 template <typename Policy, typename Accessor, typename RidxIterSpan>
 __global__ __launch_bounds__(
@@ -386,8 +366,7 @@ __global__ __launch_bounds__(
   auto smem_hist = reinterpret_cast<GradientPairInt64*>(shmem);
 
   auto find_segment = [&](bst_idx_t pos) {
-    // The end of the range for this block. Derived from the position instead of the block
-    // index to avoid keeping it alive.
+    // The end of the range for this block.
     bst_idx_t last = cuda::std::min(pos - pos % items_per_block + items_per_block, n_items);
     return FindSegment<Policy>(matrix, feature_groups, sizes_csum, n_targets, pos, last);
   };
@@ -400,11 +379,9 @@ __global__ __launch_bounds__(
     return gmem_hist;
   };
 
-  // The position is the only state carried between segments. Ranges of blocks are aligned
-  // to `items_per_block`, the block reaches the end of its range when the position is
-  // aligned. `volatile` keeps the position in thread-local memory, it is accessed only
-  // between segments, allowing the flush metadata to be reconstructed without keeping it
-  // in registers across the accumulation loop.
+  // The block ends its range at the next multiple of `items_per_block`. The position is the
+  // only state carried between segments, `volatile` keeps it out of the registers during
+  // the accumulation.
   volatile bst_idx_t pos = blockIdx.x * items_per_block;
   do {
     auto seg = find_segment(pos);
@@ -435,28 +412,14 @@ __global__ __launch_bounds__(
   } while (pos < n_items && pos % items_per_block != 0);
 }
 
-namespace {
-// Stage the kernel metadata to the device. The host memory is pageable, the copy blocks
-// until the staging is done, hence the caller can free the host memory upon return. The
-// copy and the histogram kernel use the same stream.
-template <typename T>
-void CopyToDevice(Context const* ctx, std::vector<T> const& h_values,
-                  dh::TemporaryArray<T>* p_out) {
-  CHECK_EQ(p_out->size(), h_values.size());
-  dh::safe_cuda(cudaMemcpyAsync(p_out->data().get(), h_values.data(), h_values.size() * sizeof(T),
-                                cudaMemcpyHostToDevice, ctx->CUDACtx()->Stream()));
-}
-}  // namespace
-
 // Dispatcher for the histogram kernel.
 struct HistKernel {
   /**
    * @brief Split the items into equal ranges of whole tiles, one range for each block.
    *
-   * Each block zeroes and flushes the privatized histogram at least once, which is
-   * comparable to processing a tile. A block needs enough tiles to amortize this fixed
-   * cost. On the other hand, multiple waves of blocks balance the load between SMs. For
-   * small inputs, filling the device takes priority over amortizing the flush.
+   * A block needs enough tiles to amortize the zeroing and flushing of its histogram, while
+   * multiple waves of blocks balance the load between SMs. Small inputs fill the device
+   * first.
    *
    * @param n_items           The total number of items, including the segment padding.
    * @param n_resident_blocks The number of blocks that the device can run concurrently.
@@ -543,9 +506,10 @@ struct HistKernel {
     dh::TemporaryArray<std::size_t> sizes_csum(h_sizes_csum.size());
     dh::TemporaryArray<RidxIterSpan> ridx_iters(h_ridx_iters.size());
     dh::TemporaryArray<common::Span<GradientPairInt64>> hists(h_hists.size());
-    CopyToDevice(ctx, h_sizes_csum, &sizes_csum);
-    CopyToDevice(ctx, h_ridx_iters, &ridx_iters);
-    CopyToDevice(ctx, h_hists, &hists);
+    auto stream = ctx->CUDACtx()->Stream();
+    dh::CopyTo(h_sizes_csum, &sizes_csum, stream);
+    dh::CopyTo(h_ridx_iters, &ridx_iters, stream);
+    dh::CopyTo(h_hists, &hists, stream);
 
     auto launch = [&](auto policy) {
       using Policy = common::GetValueT<decltype(policy)>;
