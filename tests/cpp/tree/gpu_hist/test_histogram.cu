@@ -28,18 +28,13 @@ TEST(Histogram, HistShmemBytes) {
   auto device = ctx.Ordinal();
   auto optin = dh::MaxSharedMemoryOptin(device);
   std::int32_t max_carve_out = 0, reserved = 0;
-  dh::safe_cuda(cudaDeviceGetAttribute(&max_carve_out,
-                                       cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
   dh::safe_cuda(
-      cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
+      cudaDeviceGetAttribute(&max_carve_out, cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
+  dh::safe_cuda(cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
 
   for (auto budget : {DftStHistShmemBytes(device), DftMtHistShmemBytes(device)}) {
     ASSERT_GT(budget, 0);
-    // Must be requestable by a kernel.
     ASSERT_LE(budget, optin);
-    // A single block must fit, and so must the co-residency the launch bounds ask for. The
-    // latter is checked implicitly: the budget is at most `smem_per_sm / min_blocks`, so if
-    // one block fits then `min_blocks` of them fit the SM.
     ASSERT_LE(budget + reserved, static_cast<std::size_t>(max_carve_out));
   }
 }

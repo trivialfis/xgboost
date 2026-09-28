@@ -193,19 +193,13 @@ constexpr std::size_t kMaxShmemBytes = 96 /*kb*/ * 1024;
 }  // anonymous namespace
 
 std::size_t DftStHistShmemBytes(std::int32_t device) {
-  // Single target uses a fixed block size, see `StHistBound`.
   return HistShmemBytes(device, HistMinBlocks(device, StHistBound::kBlockThreads));
 }
 
 std::size_t DftMtHistShmemBytes(std::int32_t device) {
-  // Multi target picks the block size per arch, so the co-residency comes from the tuning
-  // rather than from the thread budget. `DispatchCudaSm` resolves the same tag the device
-  // pass resolves through `__CUDA_ARCH__`.
   std::size_t bytes = 0;
   DispatchCudaSm(device, [&](auto arch) {
     using Arch = common::GetValueT<decltype(arch)>;
-    // The budget this returns is larger than the per-arch heuristic it replaced on every
-    // arch, except where `kMaxShmemBytes` caps it. See there for the H200 regression.
     bytes = HistShmemBytes(device, Arch::kMinBlocks);
   });
   return bytes;
