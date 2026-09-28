@@ -1,12 +1,14 @@
 /**
  * Copyright 2019-2026, XGBoost contributors
  */
-#include <algorithm>  // for fill, max
+#include <algorithm>  // for fill, max, find_if
 #include <cstddef>    // for size_t
 #include <cstdint>    // for int8_t, uint64_t, uint32_t
 #include <memory>     // for shared_ptr, make_unique
+#include <mutex>      // for mutex, lock_guard
 #include <numeric>    // for accumulate
 #include <utility>    // for move
+#include <vector>     // for vector
 
 #include "../common/common.h"               // for HumanMemUnit, safe_cuda
 #include "../common/cuda_context.cuh"       // for CUDAContext
@@ -25,13 +27,70 @@
 
 namespace xgboost::data {
 /**
+ * @brief Device buffers for the pages copied from the host cache.
+ *
+ * Allocating a page from the memory pool can be slow, a released buffer is kept for the
+ * next page instead. The number of buffers, in use or not, doesn't exceed the number of
+ * pages in flight. A buffer is reused only for a page of the same size to avoid holding
+ * more memory than the page needs.
+ *
+ * Buffers are reused without stream ordering, a page must be synchronized before release.
+ */
+class DevicePageBuffers : public std::enable_shared_from_this<DevicePageBuffers> {
+  std::mutex lock_;
+  std::vector<std::unique_ptr<common::CudaMallocResource>> free_;
+  std::int32_t n_buffers_{0};
+
+ public:
+  [[nodiscard]] std::shared_ptr<common::ResourceHandler> Get(std::size_t n_bytes) {
+    std::unique_ptr<common::CudaMallocResource> buf, unfit;
+    {
+      std::lock_guard guard{lock_};
+      auto it = std::find_if(free_.begin(), free_.end(),
+                             [&](auto const& v) { return v->Size() == n_bytes; });
+      if (it != free_.end()) {
+        buf = std::move(*it);
+        free_.erase(it);
+      } else if (!free_.empty()) {
+        unfit = std::move(free_.back());
+        free_.pop_back();
+        --n_buffers_;
+      }
+      if (!buf) {
+        if (n_buffers_ >= ::xgboost::cuda_impl::DftPrefetchBatches()) {
+          return std::make_shared<common::CudaMallocResource>(n_bytes);
+        }
+        ++n_buffers_;
+      }
+    }
+    unfit.reset();
+    if (!buf) {
+      buf = std::make_unique<common::CudaMallocResource>(n_bytes);
+    }
+    return std::shared_ptr<common::ResourceHandler>{
+        buf.release(), [self = this->shared_from_this()](common::ResourceHandler* p) {
+          std::lock_guard guard{self->lock_};
+          self->free_.emplace_back(static_cast<common::CudaMallocResource*>(p));
+        }};
+  }
+  // Free the unused buffers.
+  void Release() {
+    std::vector<std::unique_ptr<common::CudaMallocResource>> unused;
+    std::lock_guard guard{lock_};
+    n_buffers_ -= static_cast<std::int32_t>(free_.size());
+    unused.swap(free_);
+  }
+};
+
+/**
  * Cache
  */
 EllpackMemCache::EllpackMemCache(EllpackCacheInfo cinfo)
     : cache_mapping{std::move(cinfo.cache_mapping)},
       buffer_bytes{std::move(cinfo.buffer_bytes)},
       buffer_rows{std::move(cinfo.buffer_rows)},
-      cache_host_ratio{cinfo.cache_host_ratio} {
+      cache_host_ratio{cinfo.cache_host_ratio},
+      d_buffers{std::make_shared<DevicePageBuffers>()} {
   CHECK_EQ(buffer_bytes.size(), buffer_rows.size());
   CHECK(!detail::HostRatioIsAuto(this->cache_host_ratio));
   CHECK_GE(this->cache_host_ratio, 0.0) << error::CacheHostRatioInvalid();
@@ -245,7 +304,9 @@ class EllpackHostCacheStreamImpl {
       // Copy the data in the same order as written
       // Host cache
       auto n_bytes = this->cache_->GidxSizeBytes(this->ptr_);
-      out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n_bytes);
+      auto d_res = this->cache_->d_buffers->Get(n_bytes);
+      out_impl->gidx_buffer = common::RefResourceView{d_res->DataAs<common::CompressedByteT>(),
+                                                      n_bytes, std::move(d_res)};
       if (!h_page->gidx_buffer.empty()) {
         dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), h_page->gidx_buffer.data(),
                                       h_page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
@@ -259,7 +320,8 @@ class EllpackHostCacheStreamImpl {
                                       cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
       }
     } else {
-      // Direct access
+      // Direct access, the buffers are not needed until the next pass copies pages.
+      this->cache_->d_buffers->Release();
       auto h_res = h_page->gidx_buffer.Resource();
       CHECK(h_res->DataAs<common::CompressedByteT>() == h_page->gidx_buffer.data());
       out_impl->gidx_buffer = common::RefResourceView<common::CompressedByteT>{
