@@ -48,6 +48,8 @@ struct EllpackCacheInfo {
   [[nodiscard]] std::size_t NumBatchesCc() const { return this->buffer_rows.size(); }
 };
 
+class DevicePageBuffers;
+
 // We need to decouple the storage and the view of the storage so that we can implement
 // concurrent read. As a result, there are two classes, one for cache storage, another one
 // for stream.
@@ -73,6 +75,8 @@ struct EllpackMemCache {
   std::vector<std::size_t> const buffer_bytes;
   std::vector<bst_idx_t> const buffer_rows;
   double const cache_host_ratio;
+  // Device buffers for the pages copied from the host cache.
+  std::shared_ptr<DevicePageBuffers> const d_buffers;
 
   explicit EllpackMemCache(EllpackCacheInfo cinfo);
   ~EllpackMemCache();
