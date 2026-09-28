@@ -99,19 +99,11 @@ struct StHistBound {
   static constexpr std::int32_t kBlockThreads = 1024;
 };
 
-// `__launch_bounds__` caps the registers per thread at
-// `regs_per_sm / (block_threads * min_blocks)`, so `min_blocks` is the number of blocks we
-// want co-resident on an SM. Asking for more than can actually fit does not gain occupancy,
-// it only tightens the register cap and spills.
-//
-// Fill the SM: as many blocks as its thread budget allows. `DftStHistShmemBytes` then splits
-// the shared memory of the SM between exactly this many blocks, so the shared memory can
-// never be the reason a block fails to be co-resident. Both derive from the thread budget of
-// the SM, hence they can not disagree. The multi-target tuning already targets full
-// occupancy, so its thread budget is the same quantity.
-constexpr std::int32_t kStMinBlocks =
-    std::max(1, MtHistBound::kBlockThreads * MtHistBound::kMinBlocks /
-                    StHistBound::kBlockThreads);
+// The multi-target tuning is for full occupancy.
+constexpr std::int32_t kMaxThreadsPerSm = MtHistBound::kBlockThreads * MtHistBound::kMinBlocks;
+// As many blocks as the threads of an SM allow, asking for more only tightens the register
+// cap. Must match `HistMinBlocks` on the host.
+constexpr std::int32_t kStMinBlocks = std::max(1, kMaxThreadsPerSm / StHistBound::kBlockThreads);
 using StHistDeviceBound = HistTuning<StHistBound::kBlockThreads, kStMinBlocks>;
 
 template <typename HistArchPolicy, std::int32_t ItemsPerThread, bool Dense, bool Compressed,
@@ -131,8 +123,7 @@ struct HistPolicy : public HistArchPolicy {
 // The launch bounds depend on `__CUDA_ARCH__`, they must be resolved in the device
 // compilation pass instead of being used as template arguments.
 template <typename Policy>
-using HistBound =
-    std::conditional_t<Policy::kSingleTarget, StHistDeviceBound, MtHistBound>;
+using HistBound = std::conditional_t<Policy::kSingleTarget, StHistDeviceBound, MtHistBound>;
 
 template <typename Fn>
 void DispatchCudaSm(std::int32_t device, Fn&& fn) {
@@ -411,8 +402,7 @@ __global__ __launch_bounds__(
     // With a target-major layout, we don't have to pack the histogram for all targets into
     // the shared memory.
     auto gmem_hist = d_node_hist.data() + seg.target_idx * (d_node_hist.size() / n_targets);
-    // The pointer is loaded from global memory, without the hint, the compiler emits generic
-    // atomics for the flush.
+    // Without the hint, the compiler emits generic atomics for the flush.
     __builtin_assume(__isGlobal(gmem_hist));
     return gmem_hist;
   };
