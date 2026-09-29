@@ -18,22 +18,6 @@
 #include "xgboost/base.h"
 
 namespace xgboost::tree {
-namespace {
-/**
- * @brief The index of an entry in `matrix.gidx_iter`.
- *
- * Each Ellpack row has `row_stride` entries, and `ridx` is global while the batch starts at
- * `base_rowid`. With the dense layout (`kCompressed`), the entries of a row are its
- * features, and `fidx` is a feature index. With the sparse layout, `fidx` is an entry in the
- * padded row, and the bin stored there identifies the feature.
- */
-template <typename IterT>
-XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix,
-                                     RowPartitioner::RowIndexT ridx, bst_feature_t fidx) {
-  return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
-}
-}  // anonymous namespace
-
 XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
                                              xgboost::GradientPairInt64 const& gpair) {
   auto dst_ptr = reinterpret_cast<int64_t*>(dest);
@@ -101,7 +85,7 @@ struct StHistBound {
 
 // The number of co-resident single-target blocks: as many as the threads of an SM allow,
 // asking for more only tightens the register cap. The multi-target tuning of the arch is for
-// full occupancy, so it has the threads of an SM.
+// full occupancy, so it has the threads of an SM. Must match `DftStHistShmemBytes` on the host.
 template <typename Arch>
 constexpr std::int32_t StMinBlocks() {
   return std::max(1, Arch::kBlockThreads * Arch::kMinBlocks / StHistBound::kBlockThreads);
@@ -144,47 +128,6 @@ decltype(auto) DispatchCudaSm(std::int32_t device, Fn&& fn) {
   return fn(HistSm75{});
 }
 
-// Only sm_90 and sm_100 reach the cap, and a larger budget (113KB) is slower on H200.
-constexpr std::size_t kMaxShmemBytes = 96 /*kb*/ * 1024;
-// The shared memory of a block is allocated in units of this size.
-constexpr std::int32_t kShmemAllocGranularity = 128;
-
-/**
- * @brief The shared memory budget for a block when `min_blocks` blocks are co-resident.
- *
- * The launch bounds cap the registers so that `min_blocks` blocks fit an SM, the shared
- * memory of the SM is split between the same number of blocks.
- */
-[[nodiscard]] std::size_t HistShmemBytes(std::int32_t device, std::int32_t min_blocks) {
-  CHECK_GT(min_blocks, 0);
-  auto optin = dh::MaxSharedMemoryOptin(device);
-  std::int32_t smem_per_sm = 0, reserved = 0;
-  dh::safe_cuda(
-      cudaDeviceGetAttribute(&smem_per_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, device));
-  dh::safe_cuda(cudaDeviceGetAttribute(&reserved, cudaDevAttrReservedSharedMemoryPerBlock, device));
-
-  // Each block is additionally charged a fixed driver reservation. Round down to the
-  // allocation granularity, otherwise the last block does not fit.
-  auto n_bytes_per_block =
-      (smem_per_sm / min_blocks / kShmemAllocGranularity) * kShmemAllocGranularity - reserved;
-  CHECK_GT(n_bytes_per_block, 0);
-  return std::min({static_cast<std::size_t>(n_bytes_per_block), optin, kMaxShmemBytes});
-}
-}  // anonymous namespace
-
-std::size_t DftStHistShmemBytes(std::int32_t device) {
-  return DispatchCudaSm(device, [&](auto arch) {
-    return HistShmemBytes(device, StMinBlocks<common::GetValueT<decltype(arch)>>());
-  });
-}
-
-std::size_t DftMtHistShmemBytes(std::int32_t device) {
-  return DispatchCudaSm(device, [&](auto arch) {
-    return HistShmemBytes(device, common::GetValueT<decltype(arch)>::kMinBlocks);
-  });
-}
-
-namespace {
 __device__ GradientPairInt64 LoadGpair(GradientPairInt64 const* XGBOOST_RESTRICT gpairs) {
   static_assert(sizeof(int4) == sizeof(GradientPairInt64));
   auto g = *reinterpret_cast<int4 const*>(gpairs);
@@ -198,6 +141,7 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
                                   GradientPairInt64* smem_hist, GradientPairInt64* gmem_hist,
                                   bst_idx_t begin, bst_idx_t end) {
   bst_feature_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
+  auto const* cut_ptr = matrix.feature_segments + group.start_feature;
 
   using Idx = RowPartitioner::RowIndexT;
 
@@ -222,13 +166,15 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     Idx fidx_in_set = idx - ridx_in_set * feature_stride;
 
     Idx ridx = d_ridx[ridx_in_set];
-    auto fidx = fidx_in_set + group.start_feature;
-
-    bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+    bst_idx_t entry = (ridx - matrix.base_rowid) * feature_stride + fidx_in_set;
+    if constexpr (Policy::kCompressed) {
+      entry += group.start_feature * matrix.n_rows;
+    }
+    bst_bin_t compressed_bin = matrix.gidx_iter[entry];
     if (Policy::kDense || compressed_bin != static_cast<bst_bin_t>(matrix.NullValue())) {
       auto g = LoadGpair(gpair + ridx);
       if constexpr (Policy::kCompressed) {
-        compressed_bin += matrix.feature_segments[fidx];
+        compressed_bin += cut_ptr[fidx_in_set];
       }
       if constexpr (Policy::kSharedMem) {
         compressed_bin -= group.start_bin;

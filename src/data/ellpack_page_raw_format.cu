@@ -72,6 +72,9 @@ template <typename T>
   impl->SetNumSymbols(n_symbols);
 
   impl->SetCuts(this->cuts_);
+  std::vector<bst_feature_t> groups;
+  RET_IF_NOT(common::ReadVec(fi, &groups));
+  impl->feature_groups = std::make_shared<common::FeatureGroups>(*this->cuts_, std::move(groups));
 
   ctx_->CUDACtx()->Stream().Sync();
   return true;
@@ -92,6 +95,7 @@ template <typename T>
   bytes += common::WriteVec(fo, h_gidx_buffer);
   bytes += fo->Write(impl->base_rowid);
   bytes += fo->Write(impl->NumSymbols());
+  bytes += common::WriteVec(fo, impl->feature_groups->feature_segments.ConstHostVector());
 
   ctx_->CUDACtx()->Stream().Sync();
   return bytes;

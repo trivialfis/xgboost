@@ -11,6 +11,7 @@
 #include "../common/categorical.h"
 #include "../common/compressed_iterator.h"
 #include "../common/device_helpers.cuh"
+#include "../common/feature_groups.cuh"
 #include "../common/hist_util.h"
 #include "../common/ref_resource_view.h"  // for RefResourceView
 #include "ellpack_page.h"
@@ -54,23 +55,30 @@ struct EllpackAccessorImpl {
   common::Span<const float> gidx_fvalue_map;
   /** @brief Type of each feature, categorical or numerical. */
   common::Span<const FeatureType> feature_types;
+  common::FeatureGroupsAccessor groups;
+  common::FeatureGroupIndex const* feature_group_index;
 
   EllpackAccessorImpl() = delete;
   EllpackAccessorImpl(Context const* ctx, std::shared_ptr<const common::HistogramCuts> cuts,
                       bst_idx_t row_stride, bst_idx_t base_rowid, bst_idx_t n_rows,
                       IterType gidx_iter, bst_idx_t null_value, bool is_dense,
-                      common::Span<FeatureType const> feature_types)
+                      common::Span<FeatureType const> feature_types,
+                      common::FeatureGroups const& groups)
       : null_value_{null_value},
         row_stride{row_stride},
         base_rowid{base_rowid},
         n_rows{n_rows},
         n_features{cuts->NumFeatures()},
         gidx_iter{gidx_iter},
-        feature_types{feature_types} {
+        feature_types{feature_types},
+        groups{ctx->IsCUDA() ? groups.DeviceAccessor(ctx->Device()) : groups.HostAccessor()} {
     if (ctx->IsCUDA()) {
+      groups.feature_group_index.SetDevice(ctx->Device());
+      feature_group_index = groups.feature_group_index.ConstDevicePointer();
       gidx_fvalue_map = cuts->cut_values_.ConstDeviceSpan();
       feature_segments = cuts->cut_ptrs_.ConstDevicePointer();
     } else {
+      feature_group_index = groups.feature_group_index.ConstHostPointer();
       gidx_fvalue_map = cuts->cut_values_.ConstHostSpan();
       feature_segments = cuts->cut_ptrs_.ConstHostPointer();
     }
@@ -87,6 +95,15 @@ struct EllpackAccessorImpl {
   }
   [[nodiscard]] XGBOOST_HOST_DEV_INLINE bool IsDenseCompressed() const {
     return this->row_stride == this->NumFeatures();
+  }
+  /** @brief Physical index of a local row and column (a row slot for sparse pages). */
+  [[nodiscard]] XGBOOST_HOST_DEV_INLINE bst_idx_t IterIdx(bst_idx_t ridx,
+                                                          bst_feature_t fidx) const {
+    if (feature_group_index) {
+      auto group = feature_group_index[fidx];
+      return group.start_feature * n_rows + ridx * group.num_features + fidx - group.start_feature;
+    }
+    return ridx * row_stride + fidx;
   }
   /**
    * @brief Given a row index and a feature index, returns the corresponding bin index.
@@ -111,7 +128,7 @@ struct EllpackAccessorImpl {
                                                feature_segments[fidx], feature_segments[fidx + 1]);
       return gidx;
     }
-    bst_bin_t gidx = gidx_iter[row_begin + fidx];
+    bst_bin_t gidx = gidx_iter[this->IterIdx(ridx, fidx)];
     if (gidx == static_cast<bst_bin_t>(this->NullValue())) {
       // Missing value in a dense ellpack
       return -1;
@@ -177,6 +194,7 @@ class GHistIndexMatrix;
  * When there's no compression can be made by using ellpack, we use this structure as a
  * simple dense matrix. For dense matrix, we can provide extra compression by counting the
  * histogram bin for each feature instead of for the entire dataset.
+ * Dense pages store each feature group as a contiguous row-major slab.
  */
 class EllpackPageImpl {
  public:
@@ -195,7 +213,8 @@ class EllpackPageImpl {
    * Ellpack page and the given number of rows.
    */
   EllpackPageImpl(Context const* ctx, std::shared_ptr<common::HistogramCuts const> cuts,
-                  bool is_dense, bst_idx_t row_stride, bst_idx_t n_rows);
+                  bool is_dense, bst_idx_t row_stride, bst_idx_t n_rows,
+                  std::shared_ptr<common::FeatureGroups const> groups = nullptr);
   /**
    * @brief Constructor used for external memory with DMatrix.
    */
@@ -217,7 +236,8 @@ class EllpackPageImpl {
   explicit EllpackPageImpl(Context const* ctx, AdapterBatch batch, float missing, bool is_dense,
                            common::Span<bst_idx_t const> row_counts_span,
                            common::Span<FeatureType const> feature_types, bst_idx_t row_stride,
-                           bst_idx_t n_rows, std::shared_ptr<common::HistogramCuts const> cuts);
+                           bst_idx_t n_rows, std::shared_ptr<common::HistogramCuts const> cuts,
+                           std::shared_ptr<common::FeatureGroups const> groups = nullptr);
   /**
    * @brief Constructor from an existing CPU gradient index.
    */
@@ -287,6 +307,7 @@ class EllpackPageImpl {
     this->info.row_stride = page->info.row_stride;
     this->SetBaseRowId(page->base_rowid);
     this->SetNumSymbols(page->NumSymbols());
+    this->feature_groups = page->feature_groups;
   }
   /**
    * @brief Get an accessor backed by the device storage.
@@ -359,6 +380,8 @@ class EllpackPageImpl {
   std::shared_ptr<common::HistogramCuts const> cuts_;
 
  public:
+  /** @brief Group boundaries shared by the page layout and histogram construction. */
+  std::shared_ptr<common::FeatureGroups const> feature_groups;
   bool is_dense{false};
 
   bst_idx_t base_rowid{0};

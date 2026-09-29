@@ -18,13 +18,6 @@
 #include "xgboost/span.h"                   // for Span
 
 namespace xgboost::tree {
-// Single-target shared memory policy. The largest budget for a block that doesn't reduce the
-// number of co-resident blocks.
-[[nodiscard]] std::size_t DftStHistShmemBytes(std::int32_t device);
-
-// Multi-target shared memory policy, same rule with the per-arch block size.
-[[nodiscard]] std::size_t DftMtHistShmemBytes(std::int32_t device);
-
 /**
  * @brief An atomicAdd designed for gradient pair with better performance.  For general
  *        int64_t atomicAdd, one can simply cast it to unsigned long long. Exposed for testing.

@@ -177,7 +177,7 @@ struct ReadRowFunction {
 
 TEST(EllpackPage, Copy) {
   constexpr size_t kRows = 1024;
-  constexpr size_t kCols = 16;
+  constexpr size_t kCols = 53;
 
   // Create a DMatrix with multiple batches.
   auto dmat =
@@ -225,7 +225,7 @@ namespace {
 // Test for treating sparse ellpack as a dense
 class CompressedDense : public ::testing::TestWithParam<std::size_t> {
   auto InitSparsePage(std::size_t null_column) const {
-    bst_idx_t n_samples = 16, n_features = 8;
+    bst_idx_t n_samples = 128, n_features = 53;
     std::vector<float> data(n_samples * n_features);
 
     std::iota(data.begin(), data.end(), 0.0f);
@@ -250,9 +250,10 @@ class CompressedDense : public ::testing::TestWithParam<std::size_t> {
       for (std::size_t i = 0; i < h_acc.row_stride * h_acc.n_rows; ++i) {
         auto [m, n] = linalg::UnravelIndex(i, h_acc.n_rows, h_acc.row_stride);
         if (n == null_column && m != 0) {
-          ASSERT_EQ(static_cast<std::int32_t>(h_acc.gidx_iter[i]), h_acc.NullValue());
+          ASSERT_EQ(static_cast<std::int32_t>(h_acc.gidx_iter[h_acc.IterIdx(m, n)]),
+                    h_acc.NullValue());
         } else {
-          ASSERT_EQ(static_cast<std::int32_t>(h_acc.gidx_iter[i]), m);
+          ASSERT_EQ(static_cast<std::int32_t>(h_acc.gidx_iter[h_acc.IterIdx(m, n)]), m);
         }
       }
     });
@@ -272,7 +273,7 @@ class CompressedDense : public ::testing::TestWithParam<std::size_t> {
   }
 
   void CheckFromAdapter(std::size_t null_column) {
-    bst_idx_t n_samples = 16, n_features = 8;
+    bst_idx_t n_samples = 128, n_features = 53;
 
     auto ctx = MakeCUDACtx(0);
     HostDeviceVector<float> data(n_samples * n_features, 0.0f, ctx.Device());

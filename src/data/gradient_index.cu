@@ -30,11 +30,10 @@ void SetIndexData(Context const* ctx, EllpackPageImpl const* page,
     bool dense_compressed = page->IsDenseCompressed() && !page->IsDense();
     common::ParallelFor(page->Size(), ctx->Threads(), [&](auto ridx) {
       auto tid = omp_get_thread_num();
-      size_t in_rbegin = page->info.row_stride * ridx;
       size_t out_rbegin = out->row_ptr[ridx];
       if (dense_compressed) {
         for (std::size_t j = 0, k = 0; j < page->info.row_stride; ++j) {
-          bst_bin_t bin_idx = accessor.gidx_iter[in_rbegin + j];
+          bst_bin_t bin_idx = accessor.gidx_iter[accessor.IterIdx(ridx, j)];
           if (XGBOOST_EXPECT((bin_idx != kNull), true)) {  // relatively dense
             bin_idx = get_offset(bin_idx, j);
             index_data_span[out_rbegin + k++] = bin_idx;
@@ -44,7 +43,7 @@ void SetIndexData(Context const* ctx, EllpackPageImpl const* page,
       } else {
         auto r_size = out->row_ptr[ridx + 1] - out->row_ptr[ridx];
         for (size_t j = 0; j < r_size; ++j) {
-          bst_bin_t bin_idx = accessor.gidx_iter[in_rbegin + j];
+          bst_bin_t bin_idx = accessor.gidx_iter[accessor.IterIdx(ridx, j)];
           assert(bin_idx != kNull);
           index_data_span[out_rbegin + j] = bin_idx;
           ++hit_count_tloc[tid * n_bins_total + get_offset(bin_idx, j)];
@@ -65,9 +64,8 @@ void GetRowPtrFromEllpack(Context const* ctx, EllpackPageImpl const* page,
       auto const kNull = static_cast<bst_bin_t>(accessor.NullValue());
 
       common::ParallelFor(page->Size(), ctx->Threads(), [&](auto i) {
-        size_t ibegin = page->info.row_stride * i;
         for (size_t j = 0; j < page->info.row_stride; ++j) {
-          bst_bin_t bin_idx = accessor.gidx_iter[ibegin + j];
+          bst_bin_t bin_idx = accessor.gidx_iter[accessor.IterIdx(i, j)];
           if (bin_idx != kNull) {
             row_ptr[i + 1]++;
           }

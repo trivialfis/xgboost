@@ -146,14 +146,17 @@ def test_invalid_device_extmem_qdm() -> None:
     [("reg:absoluteerror", 1), ("reg:squarederror", 1), ("reg:squarederror", 2)],
 )
 @pytest.mark.parametrize("cache_host_ratio", [0.0, 0.5, 1.0])
-def test_concat_pages(objective: str, n_targets: int, cache_host_ratio: float) -> None:
+@pytest.mark.parametrize("sparsity", [0.0, 0.01, 0.5])
+def test_concat_pages(
+    objective: str, n_targets: int, cache_host_ratio: float, sparsity: float
+) -> None:
     """Rebatching uneven inputs preserves trees and predictions exactly."""
     import cupy as cp
 
     rng = np.random.default_rng(2026)
     X = rng.normal(size=(512, 32)).astype(np.float32)
     y = cp.asarray(rng.normal(size=(512, n_targets)), dtype=cp.float32)
-    X[rng.random(X.shape) < 0.5] = np.nan
+    X[rng.random(X.shape) < sparsity] = np.nan
     X = cp.asarray(X)
     batches = list(pairwise([0, 64, 144, 240, 400, 512]))
 

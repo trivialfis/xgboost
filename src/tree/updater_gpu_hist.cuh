@@ -17,7 +17,6 @@
 #include "../common/random.h"                  // for ColumnSampler
 #include "constraints.cuh"                     // for FeatureInteractionConstraintDevice
 #include "driver.h"                            // for Driver
-#include "gpu_hist/feature_groups.cuh"         // for FeatureGroups
 #include "gpu_hist/histogram.cuh"              // for DeviceHistogramBuilder
 #include "gpu_hist/leaf_sum.cuh"               // for LeafGradSum
 #include "gpu_hist/multi_evaluate_splits.cuh"  // for MultiHistEvaluator
@@ -118,7 +117,6 @@ class MultiTargetHistMaker {
 
   HistMakerTrainParam const* hist_param_;
   std::shared_ptr<common::HistogramCuts const> const cuts_;
-  std::unique_ptr<FeatureGroups> feature_groups_;
   DeviceHistogramBuilder histogram_;
   std::unique_ptr<GradientQuantiserGroup> split_quantizer_;
   std::unique_ptr<GradientQuantiserGroup> value_quantizer_;
@@ -164,8 +162,8 @@ class MultiTargetHistMaker {
       h_hists.push_back(histogram_.GetNodeHistogram(nidx));
     }
 
-    this->histogram_.BuildHistogram(this->ctx_, acc, *this->feature_groups_, d_gpair, h_ridxs,
-                                    h_hists);
+    this->histogram_.BuildHistogram(this->ctx_, acc, *page.Impl()->feature_groups, d_gpair,
+                                    h_ridxs, h_hists);
   }
 
   auto MakeSharedInputs(bst_feature_t max_active_feature) const {
@@ -685,16 +683,13 @@ class MultiTargetHistMaker {
                                 HistMakerTrainParam const* hist_param,
                                 std::shared_ptr<common::ColumnSampler> column_sampler,
                                 std::vector<bst_idx_t> batch_ptr,
-                                std::shared_ptr<common::HistogramCuts const> cuts,
-                                bool dense_compressed)
+                                std::shared_ptr<common::HistogramCuts const> cuts)
       : ctx_{ctx},
         param_{std::move(param)},
         batch_ptr_{std::move(batch_ptr)},
         sampler_{batch_ptr_.back(), param_.subsample, param_.sampling_method},
         hist_param_{hist_param},
         cuts_{std::move(cuts)},
-        feature_groups_{std::make_unique<FeatureGroups>(*cuts_, dense_compressed,
-                                                        DftMtHistShmemBytes(ctx_->Ordinal()))},
         column_sampler_{std::move(column_sampler)},
         interaction_constraints_{
             std::make_unique<FeatureInteractionConstraintDevice>(param_, cuts_->NumFeatures())} {}

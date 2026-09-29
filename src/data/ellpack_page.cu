@@ -62,7 +62,8 @@ __global__ void CompressBinEllpackKernel(
     const uint32_t* __restrict__ cut_ptrs,         // HistogramCuts::cut_ptrs_
     common::Span<FeatureType const> feature_types,
     size_t base_row,  // batch_row_begin
-    size_t n_rows, size_t row_stride, std::uint32_t null_gidx_value) {
+    size_t n_rows, size_t row_stride, std::uint32_t null_gidx_value,
+    common::FeatureGroupIndex const* feature_group_index, bst_idx_t page_rows) {
   auto irow = threadIdx.x + blockIdx.x * blockDim.x;
   auto cpr_fidx = threadIdx.y + blockIdx.y * blockDim.y;  // compressed fidx
   if (irow >= n_rows || cpr_fidx >= row_stride) {
@@ -70,6 +71,14 @@ __global__ void CompressBinEllpackKernel(
   }
   auto row_length = static_cast<decltype(cpr_fidx)>(row_ptrs[irow + 1] - row_ptrs[irow]);
   std::uint32_t bin = null_gidx_value;
+  auto output_position = (irow + base_row) * row_stride + cpr_fidx;
+  if constexpr (kDenseCompressed) {
+    if (feature_group_index) {
+      auto group = feature_group_index[cpr_fidx];
+      output_position = group.start_feature * page_rows + (irow + base_row) * group.num_features +
+                        cpr_fidx - group.start_feature;
+    }
+  }
 
   // When treating a sparse matrix as dense, we need to write null values in between valid
   // values. But we don't know where to write if the feature index is not recorded for a
@@ -82,7 +91,7 @@ __global__ void CompressBinEllpackKernel(
     auto it_end = it + cuda::std::distance(row_beg, row_end);
     auto res_it = thrust::lower_bound(thrust::seq, it, it_end, cpr_fidx);
     if (res_it == it_end || cpr_fidx != *res_it) {
-      wr.AtomicWriteSymbol(buffer, bin, (irow + base_row) * row_stride + cpr_fidx);
+      wr.AtomicWriteSymbol(buffer, bin, output_position);
       return;
     }
     cpr_fidx = cuda::std::distance(it, res_it);
@@ -123,13 +132,10 @@ __global__ void CompressBinEllpackKernel(
       // Sparse data, use the compressed fidx.  Add the number of bins in previous
       // features since we can't compress it based on feature-local index.
       bin += cut_ptrs[fidx];
-    } else {
-      // Write to the actual fidx for dense data.
-      cpr_fidx = fidx;
     }
   }
   // Write to the gidx buffer for non-missing values.
-  wr.AtomicWriteSymbol(buffer, bin, (irow + base_row) * row_stride + cpr_fidx);
+  wr.AtomicWriteSymbol(buffer, bin, output_position);
 }
 
 // Calculate the number of symbols for the compressed ellpack. Similar to what the CPU
@@ -178,8 +184,10 @@ __global__ void CompressBinEllpackKernel(
 // Construct an ELLPACK matrix with the given number of empty rows.
 EllpackPageImpl::EllpackPageImpl(Context const* ctx,
                                  std::shared_ptr<common::HistogramCuts const> cuts, bool is_dense,
-                                 bst_idx_t row_stride, bst_idx_t n_rows)
+                                 bst_idx_t row_stride, bst_idx_t n_rows,
+                                 std::shared_ptr<common::FeatureGroups const> groups)
     : cuts_{std::move(cuts)},
+      feature_groups{std::move(groups)},
       is_dense{is_dense},
       n_rows{n_rows},
       info{CalcNumSymbols(ctx, row_stride, is_dense, this->cuts_)} {
@@ -196,6 +204,7 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx,
                                  common::Span<FeatureType const> feature_types)
     : cuts_{std::move(cuts)},
       is_dense{is_dense},
+      base_rowid{page.base_rowid},
       n_rows{page.Size()},
       info{CalcNumSymbols(ctx, row_stride, is_dense, this->cuts_)} {
   monitor_.Init("ellpack_page");
@@ -272,10 +281,11 @@ struct WriteCompressedEllpackFunctor {
   // Used for dense or as dense data.
   __device__ void operator()(bst_idx_t i) {
     auto e = batch.GetElement(i);
+    auto position = accessor.IterIdx(e.row_idx, e.column_idx);
     if (is_valid(e)) {
-      this->Write<true>(e, i);
+      this->Write<true>(e, position);
     } else {
-      writer.AtomicWriteSymbol(d_buffer, accessor.NullValue(), i);
+      writer.AtomicWriteSymbol(d_buffer, accessor.NullValue(), position);
     }
   }
   // Used for sparse data.
@@ -377,8 +387,9 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, AdapterBatch batch, float m
                                  bool is_dense, common::Span<bst_idx_t const> row_counts,
                                  common::Span<FeatureType const> feature_types,
                                  bst_idx_t row_stride, bst_idx_t n_rows,
-                                 std::shared_ptr<common::HistogramCuts const> cuts)
-    : EllpackPageImpl{ctx, cuts, is_dense, row_stride, n_rows} {
+                                 std::shared_ptr<common::HistogramCuts const> cuts,
+                                 std::shared_ptr<common::FeatureGroups const> groups)
+    : EllpackPageImpl{ctx, cuts, is_dense, row_stride, n_rows, std::move(groups)} {
   curt::SetDevice(ctx->Ordinal());
 
   if (this->IsDenseCompressed()) {
@@ -394,7 +405,8 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, AdapterBatch batch, float m
       Context const* ctx, __BATCH_T batch, float missing, bool is_dense,                     \
       common::Span<bst_idx_t const> row_counts_span,                                         \
       common::Span<FeatureType const> feature_types, bst_idx_t row_stride, bst_idx_t n_rows, \
-      std::shared_ptr<common::HistogramCuts const> cuts);
+      std::shared_ptr<common::HistogramCuts const> cuts,                                     \
+      std::shared_ptr<common::FeatureGroups const> groups);
 
 ELLPACK_BATCH_SPECIALIZE(data::CudfAdapterBatch)
 ELLPACK_BATCH_SPECIALIZE(data::EncCudfAdapterBatch)
@@ -408,7 +420,8 @@ void CopyGHistToEllpack(Context const* ctx, GHistIndexMatrix const& page,
                         common::Span<bst_idx_t const> d_row_ptr, bst_idx_t row_stride,
                         bst_bin_t null, bst_idx_t n_symbols,
                         common::Span<bst_feature_t const> d_cut_ptrs,
-                        common::CompressedByteT* d_compressed_buffer) {
+                        common::CompressedByteT* d_compressed_buffer,
+                        common::FeatureGroupIndex const* feature_group_index) {
   dh::device_vector<uint8_t> data(page.index.begin(), page.index.end());
   auto d_data = dh::ToSpan(data);
 
@@ -443,6 +456,10 @@ void CopyGHistToEllpack(Context const* ctx, GHistIndexMatrix const& page,
       bin_idx = ptr[r_begin + fidx];
     }
 
+    if (feature_group_index) {
+      auto group = feature_group_index[fidx];
+      i = group.start_feature * n_samples + ridx * group.num_features + fidx - group.start_feature;
+    }
     writer.AtomicWriteSymbol(d_compressed_buffer, bin_idx, i);
   };
   thrust::for_each_n(cuctx->CTP(), cnt, row_stride * page.Size(), fn);
@@ -488,7 +505,7 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, GHistIndexMatrix const& pag
       using T = decltype(t);
       CopyGHistToEllpack<T>(ctx, page, d_row_ptr, this->info.row_stride, accessor.NullValue(),
                             this->NumSymbols(), this->cuts_->cut_ptrs_.ConstDeviceSpan(),
-                            d_compressed_buffer);
+                            d_compressed_buffer, accessor.feature_group_index);
     });
   });
   this->monitor_.Stop("CopyGHistToEllpack");
@@ -497,22 +514,28 @@ EllpackPageImpl::EllpackPageImpl(Context const* ctx, GHistIndexMatrix const& pag
 EllpackPageImpl::~EllpackPageImpl() noexcept(false) = default;
 
 // A functor that copies the data from one EllpackPage to another.
-template <typename IterT>
+template <typename Src, typename Dst>
 struct CopyPage {
   common::CompressedBufferWriter cbw;
   common::CompressedByteT* dst_data_d;
-  IterT src_iterator_d;
+  Src src;
+  Dst dst;
   // The number of elements to skip.
   size_t offset;
 
-  CopyPage(EllpackPageImpl* dst, EllpackAccessorImpl<IterT> src, size_t offset)
-      : cbw{dst->NumSymbols()},
-        dst_data_d{dst->gidx_buffer.data()},
-        src_iterator_d{src.gidx_iter},
+  CopyPage(EllpackPageImpl* page, Src src, Dst dst, size_t offset)
+      : cbw{page->NumSymbols()},
+        dst_data_d{page->gidx_buffer.data()},
+        src{src},
+        dst{dst},
         offset{offset} {}
 
   __device__ void operator()(std::size_t element_id) {
-    cbw.AtomicWriteSymbol(dst_data_d, src_iterator_d[element_id], element_id + offset);
+    auto row = element_id / src.row_stride;
+    auto col = element_id % src.row_stride;
+    auto bin = src.gidx_iter[src.IterIdx(row, col)];
+    auto out = element_id + offset;
+    cbw.AtomicWriteSymbol(dst_data_d, bin, dst.IterIdx(out / dst.row_stride, out % dst.row_stride));
   }
 };
 
@@ -525,8 +548,10 @@ bst_idx_t EllpackPageImpl::Copy(Context const* ctx, EllpackPageImpl const* page,
   CHECK_EQ(this->NumSymbols(), page->NumSymbols());
   CHECK_GE(this->n_rows * this->info.row_stride, offset + n_elements);
   page->Visit(ctx, {}, [&](auto&& src) {
-    thrust::for_each_n(ctx->CUDACtx()->CTP(), dh::make_counting_iterator(0ul), n_elements,
-                       CopyPage{this, src, offset});
+    this->Visit(ctx, {}, [&](auto&& dst) {
+      thrust::for_each_n(ctx->CUDACtx()->CTP(), dh::make_counting_iterator(0ul), n_elements,
+                         CopyPage{this, src, dst, offset});
+    });
   });
   monitor_.Stop(__func__);
   return n_elements;
@@ -539,6 +564,13 @@ void EllpackPageImpl::SetCuts(std::shared_ptr<common::HistogramCuts const> cuts)
 // Initialize the buffer to stored compressed features.
 void EllpackPageImpl::InitCompressedData(Context const* ctx) {
   monitor_.Start(__func__);
+  if (!this->feature_groups) {
+    // A page can be reused by both single- and multi-target histogram builders.
+    auto shmem = std::min(common::DftStHistShmemBytes(ctx->Ordinal()),
+                          common::DftMtHistShmemBytes(ctx->Ordinal()));
+    this->feature_groups =
+        std::make_shared<common::FeatureGroups>(*cuts_, this->IsDenseCompressed(), shmem);
+  }
   auto num_symbols = this->NumSymbols();
   // Required buffer size for storing data matrix in ELLPack format.
   std::size_t compressed_size_bytes = common::CompressedBufferWriter::CalculateBufferSize(
@@ -610,7 +642,9 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
         dh::LaunchKernel{grid3, block3, 0, ctx->CUDACtx()->Stream()}(  // NOLINT
             kernel, writer, gidx_buffer_data, row_ptrs.data(), entries_d.data(),
             device_accessor.gidx_fvalue_map.data(), device_accessor.feature_segments, feature_types,
-            batch_row_begin, batch_nrows, this->info.row_stride, null_gidx_value);
+            batch_row_begin + row_batch.base_rowid - this->base_rowid, batch_nrows,
+            this->info.row_stride, null_gidx_value, device_accessor.feature_group_index,
+            this->n_rows);
       });
     };
     if (this->IsDense()) {
@@ -644,13 +678,13 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
     auto iter = common::CompressedIterator<std::uint32_t>{gidx_buffer.data(), this->NumSymbols()};
     return EllpackDeviceAccessor{
         ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        iter, null,        this->IsDense(),       feature_types,    *this->feature_groups};
   } else {
     auto iter = common::DoubleCompressedIter<std::uint32_t>{
         gidx_buffer.data(), gidx_buffer.size_bytes(), d_gidx_buffer.data(), this->NumSymbols()};
     return DoubleEllpackAccessor{
         ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        iter, null,        this->IsDense(),       feature_types,    *this->feature_groups};
   }
 }
 
@@ -660,6 +694,8 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
   CHECK_GE(this->gidx_buffer.size_bytes() + this->d_gidx_buffer.size_bytes(), 5);
   auto null = this->NullValue();
 
+  Context cpu_ctx;
+  auto sctx = ctx->IsCPU() ? ctx : &cpu_ctx;
   h_gidx_buffer->resize(this->gidx_buffer.size() + this->d_gidx_buffer.size());
   if (!this->gidx_buffer.empty()) {
     dh::safe_cuda(cudaMemcpyAsync(h_gidx_buffer->data(), this->gidx_buffer.data(),
@@ -676,16 +712,14 @@ void EllpackPageImpl::CreateHistIndices(Context const* ctx, const SparsePage& ro
     auto iter = common::DoubleCompressedIter<std::uint32_t>{
         h_gidx_buffer->data(), gidx_buffer.size_bytes(), dst, this->NumSymbols()};
     return DoubleEllpackAccessor{
-        ctx,  this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-        iter, null,        this->IsDense(),       feature_types};
+        sctx, this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
+        iter, null,        this->IsDense(),       feature_types,    *this->feature_groups};
   }
 
   auto iter = common::CompressedIterator<std::uint32_t>{h_gidx_buffer->data(), this->NumSymbols()};
-  Context cpu_ctx;
-  auto sctx = ctx->IsCPU() ? ctx : &cpu_ctx;
   return EllpackDeviceAccessor{
       sctx, this->cuts_, this->info.row_stride, this->base_rowid, this->n_rows,
-      iter, null,        this->IsDense(),       feature_types};
+      iter, null,        this->IsDense(),       feature_types,    *this->feature_groups};
 }
 
 namespace {

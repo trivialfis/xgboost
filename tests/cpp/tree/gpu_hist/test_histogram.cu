@@ -86,9 +86,7 @@ TEST(Histogram, SubtractionTrick) {
   auto ctx = MakeCUDACtx(0);
 
   auto page = BuildEllpackPage(&ctx, 64, 4);
-  auto cuts = page->CutsShared();
-  FeatureGroups fg{*cuts, true, std::numeric_limits<std::size_t>::max()};
-  auto n_total_bins = cuts->TotalBins();
+  auto n_total_bins = page->Cuts().TotalBins();
 
   // 2 nodes
   auto max_cached_hist_nodes = 2ull;
@@ -143,12 +141,11 @@ void TestGPUHistogramCategorical(size_t num_categories) {
    */
   for (auto const& batch : cat_m->GetBatches<EllpackPage>(&ctx, batch_param)) {
     auto* page = batch.Impl();
-    FeatureGroups single_group(page->Cuts());
     DeviceHistogramBuilder builder;
     builder.Reset(&ctx, HistMakerTrainParam::CudaDefaultNodes(), num_categories, false);
     page->Visit(&ctx, {}, [&](auto&& acc) {
-      builder.BuildHistogram(&ctx, acc, single_group, gpairs_i64.View(ctx.Device()).Values(), ridx,
-                             dh::ToSpan(cat_hist));
+      builder.BuildHistogram(&ctx, acc, *page->feature_groups,
+                             gpairs_i64.View(ctx.Device()).Values(), ridx, dh::ToSpan(cat_hist));
     });
   }
 
@@ -160,12 +157,11 @@ void TestGPUHistogramCategorical(size_t num_categories) {
   dh::device_vector<GradientPairInt64> encode_hist(2 * num_categories);
   for (auto const& batch : encode_m->GetBatches<EllpackPage>(&ctx, batch_param)) {
     auto* page = batch.Impl();
-    FeatureGroups single_group(page->Cuts());
     DeviceHistogramBuilder builder;
     builder.Reset(&ctx, HistMakerTrainParam::CudaDefaultNodes(), encode_hist.size(), false);
     page->Visit(&ctx, {}, [&](auto&& acc) {
-      builder.BuildHistogram(&ctx, acc, single_group, gpairs_i64.View(ctx.Device()).Values(), ridx,
-                             dh::ToSpan(encode_hist));
+      builder.BuildHistogram(&ctx, acc, *page->feature_groups,
+                             gpairs_i64.View(ctx.Device()).Values(), ridx, dh::ToSpan(encode_hist));
     });
   }
 
@@ -294,10 +290,10 @@ class HistogramExternalMemoryTest
  public:
   void Run(float sparsity, bool force_global, CacheMode cache_mode) {
     auto ctx = MakeCUDACtx(0);
-    bst_idx_t n_samples{512}, n_features{12}, n_batches{3};
+    bst_idx_t n_samples{512}, n_features{53}, n_batches{3};
     std::vector<std::unique_ptr<RowPartitioner>> partitioners;
     auto rng = RandomDataGenerator{n_samples, n_features, sparsity}.Batches(n_batches);
-    bst_bin_t n_bins = 16;
+    bst_bin_t n_bins = 256;
     std::shared_ptr<DMatrix> p_fmat;
     switch (cache_mode) {
       case kCopy:
@@ -306,7 +302,7 @@ class HistogramExternalMemoryTest
                      .Device(ctx.Device())
                      .Bins(n_bins)
                      .OnHost(true)
-                     .MinPageCacheBytes(n_bins * n_features)
+                     .MinPageCacheBytes(0)
                      .GenerateExtMemQuantileDMatrix("cache", true);
         break;
       }
@@ -323,7 +319,6 @@ class HistogramExternalMemoryTest
       p.prefetch_copy = true;
     }
 
-    std::unique_ptr<FeatureGroups> fg;
     dh::device_vector<GradientPairInt64> single_hist;
     dh::device_vector<GradientPairInt64> multi_hist;
 
@@ -341,7 +336,6 @@ class HistogramExternalMemoryTest
         row_stride = impl->info.row_stride;
         if (k == 0) {
           // Initialization
-          fg = std::make_unique<FeatureGroups>(impl->Cuts());
           auto init = GradientPairInt64{0, 0};
           multi_hist = decltype(multi_hist)(impl->Cuts().TotalBins(), init);
           single_hist = decltype(single_hist)(impl->Cuts().TotalBins(), init);
@@ -357,8 +351,8 @@ class HistogramExternalMemoryTest
         builder.Reset(&ctx, HistMakerTrainParam::CudaDefaultNodes(), d_histogram.size(),
                       force_global);
         impl->Visit(&ctx, {}, [&](auto&& acc) {
-          builder.BuildHistogram(&ctx, acc, *fg, gpair.View(ctx.Device()).Values(), ridx,
-                                 d_histogram);
+          builder.BuildHistogram(&ctx, acc, *impl->feature_groups,
+                                 gpair.View(ctx.Device()).Values(), ridx, d_histogram);
         });
         ++k;
       }
@@ -385,8 +379,8 @@ class HistogramExternalMemoryTest
       builder.Reset(&ctx, HistMakerTrainParam::CudaDefaultNodes(), d_histogram.size(),
                     force_global);
       concat.Visit(&ctx, {}, [&](auto&& acc) {
-        builder.BuildHistogram(&ctx, acc, *fg, gpair.View(ctx.Device()).Values(), ridx,
-                               d_histogram);
+        builder.BuildHistogram(&ctx, acc, *concat.feature_groups,
+                               gpair.View(ctx.Device()).Values(), ridx, d_histogram);
       });
     }
 
@@ -409,12 +403,13 @@ TEST_P(HistogramExternalMemoryTest, ExternalMemory) {
 
 INSTANTIATE_TEST_SUITE_P(
     Histogram, HistogramExternalMemoryTest,
-    ::testing::Combine(::testing::Values(0.0f, 0.2f, 0.8f), ::testing::Bool(),
+    ::testing::Combine(::testing::Values(0.0f, 0.01f, 0.2f, 0.8f), ::testing::Bool(),
                        ::testing::Values(kNoCache, kDirect, kCopy)),
     [](::testing::TestParamInfo<HistogramExternalMemoryTest::ParamType> const& info) {
       std::stringstream ss;
       auto const& p = info.param;
-      ss << "sparsity_0" << (std::get<0>(p) * 10) << "_global_" << std::get<1>(p) << "_dcache_";
+      ss << "sparsity_" << static_cast<int>(std::get<0>(p) * 100) << "_global_" << std::get<1>(p)
+         << "_dcache_";
       switch (std::get<2>(p)) {
         case kNoCache:
           ss << "nocache";
@@ -505,7 +500,8 @@ struct HistInput {
   }
 
   // Cut values are `b + 1` for bin `b` and the feature values are `b + 0.5`.
-  [[nodiscard]] std::unique_ptr<EllpackPageImpl> MakeEllpack(Context const* ctx) const {
+  [[nodiscard]] std::unique_ptr<EllpackPageImpl> MakeEllpack(Context const* ctx,
+                                                             std::size_t shmem_bytes = 0) const {
     auto p_cuts = std::make_shared<common::HistogramCuts>(this->n_features);
     std::vector<std::uint32_t> ptrs(this->n_features + 1);
     std::vector<float> cut_values;
@@ -532,9 +528,13 @@ struct HistInput {
         data::GetRowCounts(ctx, adapter.Value(), dh::ToSpan(row_counts), ctx->Device(), missing);
     bool is_dense =
         std::none_of(this->bins.cbegin(), this->bins.cend(), [](bst_bin_t b) { return b < 0; });
+    std::shared_ptr<FeatureGroups const> groups;
+    if (shmem_bytes != 0) {
+      groups = std::make_shared<FeatureGroups>(*p_cuts, row_stride == n_features, shmem_bytes);
+    }
     return std::make_unique<EllpackPageImpl>(
         ctx, adapter.Value(), missing, is_dense, dh::ToSpan(row_counts),
-        common::Span<FeatureType const>{}, row_stride, this->n_samples, p_cuts);
+        common::Span<FeatureType const>{}, row_stride, this->n_samples, p_cuts, groups);
   }
 
   // One target-major histogram for each node.
@@ -576,17 +576,11 @@ void TestBuildHistogram(bst_idx_t n_samples, bst_feature_t n_features, bst_bin_t
   HistInput input{n_samples, n_features, n_bins, n_targets, layout, root};
   auto expected = input.Expected();
 
-  auto page = input.MakeEllpack(&ctx);
+  // Four features in each small group, so nodes span many segments.
+  auto page = input.MakeEllpack(&ctx, small_groups ? sizeof(GradientPairInt64) * n_bins * 4 : 0);
   ASSERT_EQ(page->IsDense(), layout == Layout::kDense);
   ASSERT_EQ(page->IsDenseCompressed(), layout != Layout::kSparse);
-
-  auto shmem_bytes =
-      n_targets == 1 ? DftStHistShmemBytes(ctx.Ordinal()) : DftMtHistShmemBytes(ctx.Ordinal());
-  if (small_groups) {
-    // Four features in each group, the nodes are split into many segments.
-    shmem_bytes = sizeof(GradientPairInt64) * n_bins * 4;
-  }
-  FeatureGroups fg{page->Cuts(), page->IsDenseCompressed(), shmem_bytes};
+  auto const& fg = *page->feature_groups;
   if (small_groups && page->IsDenseCompressed()) {
     ASSERT_GT(fg.feature_segments.Size(), 3);
   }
@@ -610,8 +604,8 @@ void TestBuildHistogram(bst_idx_t n_samples, bst_feature_t n_features, bst_bin_t
     hists.push_back(builder.GetNodeHistogram(i));
     beg += input.sizes[i];
   }
-  builder.BuildHistogram(&ctx, page->GetDeviceEllpack(&ctx, {}), fg, input.gpair.View(ctx.Device()),
-                         ridxs, hists);
+  builder.BuildHistogram(&ctx, page->GetDeviceEllpack(&ctx, {}), fg,
+                         input.gpair.View(ctx.Device()), ridxs, hists);
 
   for (bst_node_t i = 0; i < n_nodes; ++i) {
     std::vector<GradientPairInt64> got(hists[i].size());
@@ -635,6 +629,49 @@ std::string HistogramBuildName(
   return ss.str();
 }
 }  // namespace
+
+void TestGroupedEllpackLayout() {
+  auto ctx = MakeCUDACtx(0);
+  for (auto layout : {Layout::kDense, Layout::kDenseMissing}) {
+    HistInput input{73, 13, 7, 1, layout, true};
+    auto page = input.MakeEllpack(&ctx, sizeof(GradientPairInt64) * 7 * 4);
+    auto const& segments = page->feature_groups->feature_segments.ConstHostVector();
+    ASSERT_EQ(segments, (std::vector<bst_feature_t>{0, 4, 8, 12, 13}));
+    page->VisitOnHost(&ctx, [&](auto const& acc) {
+      bst_idx_t position = 0;
+      for (std::size_t g = 0; g + 1 < segments.size(); ++g) {
+        for (bst_idx_t r = 0; r < input.n_samples; ++r) {
+          for (auto f = segments[g]; f < segments[g + 1]; ++f) {
+            auto bin = input.bins[r * input.n_features + f];
+            ASSERT_EQ(acc.gidx_iter[position++], bin < 0 ? acc.NullValue() : bin);
+          }
+        }
+      }
+    });
+
+    // Copy into a different grouping and row count, with a nonzero row offset.
+    auto groups =
+        std::make_shared<FeatureGroups>(page->Cuts(), std::vector<bst_feature_t>{0, 3, 5, 13});
+    EllpackPageImpl copied{
+        &ctx, page->CutsShared(), page->IsDense(), input.n_features, input.n_samples + 5, groups};
+    copied.Copy(&ctx, page.get(), 5 * input.n_features);
+    copied.SetBaseRowId(17);
+    dh::device_vector<bst_bin_t> bins(input.bins.size());
+    auto d_bins = dh::ToSpan(bins);
+    auto acc = std::get<EllpackDeviceAccessor>(copied.GetDeviceEllpack(&ctx));
+    dh::LaunchN(d_bins.size(), ctx.CUDACtx()->Stream(), [=] __device__(std::size_t i) {
+      d_bins[i] = acc.GetBinIndex(i / 13 + 5 + 17, i % 13);
+    });
+    std::vector<bst_bin_t> got(bins.size());
+    dh::CopyDeviceSpanToVector(&got, d_bins);
+    for (std::size_t i = 0; i < got.size(); ++i) {
+      auto bin = input.bins[i];
+      ASSERT_EQ(got[i], bin < 0 ? -1 : bin + static_cast<bst_bin_t>(i % 13) * 7);
+    }
+  }
+}
+
+TEST(Histogram, GroupedEllpackLayout) { TestGroupedEllpackLayout(); }
 
 TEST_P(HistogramBuildTest, Build) {
   auto [layout, n_targets, root, force_global, small_groups] = this->GetParam();

@@ -36,13 +36,13 @@ namespace {
 class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
  public:
   template <typename FormatStreamPolicy>
-  void Run(FormatStreamPolicy *p_policy, bool prefetch_copy) {
+  void Run(FormatStreamPolicy *p_policy, bool prefetch_copy, float sparsity) {
     auto &policy = *p_policy;
     auto ctx = MakeCUDACtx(0);
     auto param = BatchParam{256, tree::TrainParam::DftSparseThreshold()};
     param.prefetch_copy = prefetch_copy;
 
-    auto m = RandomDataGenerator{100, 14, 0.5}.GenerateDMatrix();
+    auto m = RandomDataGenerator{257, 53, sparsity}.GenerateDMatrix();
     common::TemporaryDirectory tmpdir;
     std::string path = tmpdir.Str() + "/ellpack.page";
 
@@ -79,6 +79,12 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
       ASSERT_EQ(loaded->Cuts().Values(), orig->Cuts().Values());
       ASSERT_EQ(loaded->base_rowid, orig->base_rowid);
       ASSERT_EQ(loaded->info.row_stride, orig->info.row_stride);
+      ASSERT_EQ(loaded->feature_groups->feature_segments.ConstHostVector(),
+                orig->feature_groups->feature_segments.ConstHostVector());
+      if (sparsity <= 0.01f) {
+        ASSERT_TRUE(orig->IsDenseCompressed());
+        ASSERT_GT(orig->feature_groups->feature_segments.Size(), 2);
+      }
       std::vector<common::CompressedByteT> h_loaded, h_orig;
       [[maybe_unused]] auto h_loaded_acc = loaded->GetHostEllpack(&ctx, &h_loaded);
       [[maybe_unused]] auto h_orig_acc = orig->GetHostEllpack(&ctx, &h_orig);
@@ -89,23 +95,27 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
 }  // anonymous namespace
 
 TEST_P(TestEllpackPageRawFormat, DiskIO) {
-  EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{false};
-  this->Run(&policy, this->GetParam());
+  for (auto sparsity : {0.0f, 0.01f, 0.5f}) {
+    EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{false};
+    this->Run(&policy, this->GetParam(), sparsity);
+  }
 }
 
 TEST_P(TestEllpackPageRawFormat, DiskIOHmm) {
   if (curt::SupportsPageableMem()) {
-    EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{true};
-    this->Run(&policy, this->GetParam());
+    for (auto sparsity : {0.0f, 0.01f, 0.5f}) {
+      EllpackMmapStreamPolicy<EllpackPage, EllpackFormatPolicy> policy{true};
+      this->Run(&policy, this->GetParam(), sparsity);
+    }
   } else {
     GTEST_SKIP_("HMM is not supported.");
   }
 }
 
 TEST_P(TestEllpackPageRawFormat, HostIO) {
-  {
+  for (auto sparsity : {0.0f, 0.01f, 0.5f}) {
     EllpackCacheStreamPolicy<EllpackPage, EllpackFormatPolicy> policy;
-    this->Run(&policy, this->GetParam());
+    this->Run(&policy, this->GetParam(), sparsity);
   }
   {
     auto ctx = MakeCUDACtx(0);

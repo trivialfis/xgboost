@@ -10,6 +10,7 @@
 #include "cuda_stream.h"  // for DefaultStream
 #include "device_helpers.cuh"
 #include "device_vector.cuh"  // for DeviceUVector
+#include "feature_groups.cuh"  // for FeatureGroupIndex
 #include "xgboost/data.h"
 #include "xgboost/host_device_vector.h"
 #include "xgboost/tree_model.h"  // for RegTree
@@ -422,6 +423,7 @@ void HostDeviceVector<T>::Resize(std::size_t new_size, T v) {
 }
 
 // explicit instantiations are required, as HostDeviceVector isn't header-only
+template class HostDeviceVector<common::FeatureGroupIndex>;
 template class HostDeviceVector<bst_float>;
 template class HostDeviceVector<double>;
 template class HostDeviceVector<GradientPair>;
