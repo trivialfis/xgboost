@@ -72,6 +72,7 @@ class EllpackHostCacheTest
   void Run(float sparsity, bool is_concat, float cache_host_ratio, bst_idx_t n_batches) const {
     auto ctx = MakeCUDACtx(0);
     auto param = BatchParam{NumBins(), tree::TrainParam::DftSparseThreshold()};
+    param.n_prefetch_batches = cuda_impl::DftPrefetchBatches();
     auto p_fmat = RandomDataGenerator{NumSamples(), NumFeatures(), sparsity}
                       .Device(ctx.Device())
                       .GenerateDMatrix();

@@ -7,7 +7,7 @@
 
 #include <cstdint>  // for int32_t
 #include <limits>   // for numeric_limits
-#include <memory>   // for shared_ptr
+#include <memory>   // for shared_ptr, unique_ptr
 #include <tuple>    // for tuple
 #include <utility>  // for move
 #include <vector>   // for vector
@@ -131,8 +131,9 @@ class EllpackHostCacheStream {
    *
    * @param page[out] The returned page.
    * @param prefetch_copy[in] Does the stream need to copy the page?
+   * @param pool[in,out] Pool for the device copy. Must not be null.
    */
-  void Read(Context const* ctx, EllpackPage* page, bool prefetch_copy) const;
+  void Read(Context const* ctx, EllpackPage* page, bool prefetch_copy, EllpackPagePool* pool) const;
   /**
    * @brief Add a new page to the host cache.
    *
@@ -158,6 +159,7 @@ class EllpackFormatPolicy {
   Context const* ctx_{nullptr};
 
   EllpackCacheInfo cache_info_;
+  std::unique_ptr<EllpackPagePool> pool_;
   static_assert(std::is_same_v<S, EllpackPage>);
 
  public:
@@ -193,7 +195,8 @@ class EllpackFormatPolicy {
 
   [[nodiscard]] auto CreatePageFormat(BatchParam const& param) const {
     CHECK_EQ(cuts_->cut_values_.Device(), device_);
-    std::unique_ptr<FormatT> fmt{new EllpackPageRawFormat{ctx_, cuts_, device_, param, has_hmm_}};
+    std::unique_ptr<FormatT> fmt{
+        new EllpackPageRawFormat{ctx_, cuts_, device_, param, has_hmm_, pool_.get()}};
     return fmt;
   }
   void SetCuts(Context const* ctx, std::shared_ptr<common::HistogramCuts const> cuts,
@@ -211,6 +214,10 @@ class EllpackFormatPolicy {
   [[nodiscard]] auto Device() const { return this->device_; }
   [[nodiscard]] auto const& CacheInfo() { return this->cache_info_; }
   [[nodiscard]] auto Ctx() const { return this->ctx_; }
+  void InitPagePool(Cache const& cache) {
+    CHECK(!pool_);
+    pool_ = std::make_unique<EllpackPagePool>(cache);
+  }
   void DestroyPage(std::shared_ptr<S>* page) const;
 };
 
@@ -298,6 +305,13 @@ class EllpackPageSourceImpl : public PageSourceIncMixIn<EllpackPage, F> {
   }
 
   void Fetch() final;
+  void EndIter() final {
+    bool init_pool = !this->cache_info_->written;
+    Super::EndIter();
+    if (init_pool) {
+      this->InitPagePool(*this->cache_info_);
+    }
+  }
 };
 
 // Cache to host
@@ -349,8 +363,9 @@ class ExtEllpackPageSourceImpl : public ExtQantileSourceMixin<EllpackPage, Forma
       CHECK_EQ(this->Iter(), this->cache_info_->Size());
     } else {
       CHECK_LE(this->cache_info_->Size(), this->ext_info_.n_batches);
+      this->cache_info_->Commit();
+      this->InitPagePool(*this->cache_info_);
     }
-    this->cache_info_->Commit();
     CHECK_GE(this->count_, 1);
     this->count_ = 0;
   }

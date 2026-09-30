@@ -43,6 +43,7 @@ TEST(SparsePageDMatrix, EllpackSkipSparsePage) {
   bst_bin_t n_bins{256};
   double sparse_thresh{0.8};
   BatchParam batch_param{n_bins, sparse_thresh};
+  batch_param.n_prefetch_batches = cuda_impl::DftPrefetchBatches();
 
   auto check_ellpack = [&]() {
     std::int32_t k = 0;
@@ -133,6 +134,9 @@ TEST(SparsePageDMatrix, RetainEllpackPage) {
   auto param = BatchParam{32, tree::TrainParam::DftSparseThreshold()};
   auto m = RandomDataGenerator{2048, 4, 0.0f}.Batches(8).GenerateSparsePageDMatrix("temp", true);
 
+  // Finish writing the cache so that the retained pages below use the pool.
+  for ([[maybe_unused]] auto const& page : m->GetBatches<EllpackPage>(&ctx, param)) {
+  }
   auto batches = m->GetBatches<EllpackPage>(&ctx, param);
   auto begin = batches.begin();
   auto end = batches.end();
@@ -151,9 +155,6 @@ TEST(SparsePageDMatrix, RetainEllpackPage) {
   ASSERT_EQ(iterators.size(), 8);
 
   for (size_t i = 0; i < iterators.size(); ++i) {
-    std::vector<common::CompressedByteT> h_buf;
-    [[maybe_unused]] auto h_acc = (*iterators[i]).Impl()->GetHostEllpack(&ctx, &h_buf);
-    ASSERT_EQ(h_buf, gidx_buffers.at(i).HostVector());
     // The last page is still kept in the DMatrix until Reset is called.
     if (i == iterators.size() - 1) {
       ASSERT_EQ(iterators[i].use_count(), 2);
@@ -168,9 +169,12 @@ TEST(SparsePageDMatrix, RetainEllpackPage) {
     break;
   }
 
-  // The above iteration clears out all references inside DMatrix.
-  for (auto const& ptr : iterators) {
-    ASSERT_TRUE(ptr.unique());
+  // Restarting clears the DMatrix's references without overwriting retained pages.
+  for (size_t i = 0; i < iterators.size(); ++i) {
+    ASSERT_TRUE(iterators[i].unique());
+    std::vector<common::CompressedByteT> h_buf;
+    [[maybe_unused]] auto h_acc = iterators[i]->Impl()->GetHostEllpack(&ctx, &h_buf);
+    ASSERT_EQ(h_buf, gidx_buffers.at(i).HostVector());
   }
 }
 

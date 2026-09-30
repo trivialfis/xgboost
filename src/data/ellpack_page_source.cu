@@ -227,7 +227,7 @@ class EllpackHostCacheStreamImpl {
     return new_page;
   }
 
-  void Read(Context const* ctx, EllpackPage* out, bool prefetch_copy) const {
+  void Read(Context const* ctx, EllpackPage* out, bool prefetch_copy, EllpackPagePool* pool) const {
     CHECK_EQ(this->cache_->h_pages.size(), this->cache_->d_pages.size());
     auto [h_page, d_page] = this->cache_->At(this->ptr_);
     // Skip copy if the full page is on device
@@ -245,7 +245,7 @@ class EllpackHostCacheStreamImpl {
       // Copy the data in the same order as written
       // Host cache
       auto n_bytes = this->cache_->GidxSizeBytes(this->ptr_);
-      out_impl->gidx_buffer = common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n_bytes);
+      out_impl->gidx_buffer = pool->Allocate(n_bytes);
       if (!h_page->gidx_buffer.empty()) {
         dh::safe_cuda(cudaMemcpyAsync(out_impl->gidx_buffer.data(), h_page->gidx_buffer.data(),
                                       h_page->gidx_buffer.size_bytes(), cudaMemcpyDefault,
@@ -289,8 +289,9 @@ std::shared_ptr<EllpackMemCache const> EllpackHostCacheStream::Share() const {
 
 void EllpackHostCacheStream::Seek(bst_idx_t offset_bytes) { this->p_impl_->Seek(offset_bytes); }
 
-void EllpackHostCacheStream::Read(Context const* ctx, EllpackPage* page, bool prefetch_copy) const {
-  this->p_impl_->Read(ctx, page, prefetch_copy);
+void EllpackHostCacheStream::Read(Context const* ctx, EllpackPage* page, bool prefetch_copy,
+                                EllpackPagePool* pool) const {
+  this->p_impl_->Read(ctx, page, prefetch_copy, pool);
 }
 
 [[nodiscard]] bool EllpackHostCacheStream::Write(Context const* ctx, EllpackPage const& page) {

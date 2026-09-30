@@ -1,8 +1,11 @@
 /**
- * Copyright 2021-2025, XGBoost contributors
+ * Copyright 2021-2026, XGBoost contributors
  */
 #include <gtest/gtest.h>
 #include <xgboost/data.h>
+
+#include <memory>       // for weak_ptr
+#include <type_traits>  // for is_same_v
 
 #include "../../../src/data/batch_utils.h"              // for AutoHostRatio
 #include "../../../src/data/ellpack_page.cuh"           // for EllpackPage, GetRowStride
@@ -13,6 +16,41 @@
 #include "../helpers.h"
 
 namespace xgboost::data {
+TEST(EllpackPagePool, Reuse) {
+  curt::SetDevice(0);
+  Cache cache{false, "name", ".ellpack.page", true};
+  cache.Push(16);
+  cache.Push(64);
+  cache.Push(32);
+  cache.Commit();
+  EllpackPagePool pool{cache};
+  auto first = pool.Allocate(16);
+  auto second = pool.Allocate(32);
+  ASSERT_EQ(first.size(), 16);
+  ASSERT_EQ(second.size(), 32);
+  ASSERT_EQ(first.Resource()->Size(), 64);
+  ASSERT_EQ(second.Resource()->Size(), 64);
+  ASSERT_NE(first.data(), second.data());
+
+  auto ptr = first.data();
+  // A reference to the storage keeps the first buffer leased after its view is released.
+  auto retained = first.Resource();
+  first = {};
+  std::weak_ptr<common::ResourceHandler> ephemeral;
+  {
+    auto extra = pool.Allocate(64);
+    ASSERT_NE(extra.data(), ptr);
+    ASSERT_NE(extra.data(), second.data());
+    ephemeral = extra.Resource();
+  }
+  ASSERT_TRUE(ephemeral.expired());
+
+  retained.reset();
+  auto reused = pool.Allocate(64);
+  ASSERT_EQ(reused.data(), ptr);
+  ASSERT_EQ(reused.size(), 64);
+}
+
 namespace {
 [[nodiscard]] EllpackCacheInfo CInfoForTest(Context const *ctx, DMatrix *Xy, bst_idx_t row_stride,
                                             BatchParam param,
@@ -44,7 +82,9 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
 
     auto m = RandomDataGenerator{100, 14, 0.5}.GenerateDMatrix();
     common::TemporaryDirectory tmpdir;
-    std::string path = tmpdir.Str() + "/ellpack.page";
+    Cache cache{false, tmpdir.Str() + "/ellpack", ".page",
+                std::is_same_v<typename FormatStreamPolicy::WriterT, EllpackHostCacheStream>};
+    auto path = cache.ShardName();
 
     std::shared_ptr<common::HistogramCuts const> cuts;
     for (auto const &page : m->GetBatches<EllpackPage>(&ctx, param)) {
@@ -60,16 +100,19 @@ class TestEllpackPageRawFormat : public ::testing::TestWithParam<bool> {
 
     std::unique_ptr<EllpackPageRawFormat> format{policy.CreatePageFormat(param)};
 
-    std::size_t n_bytes{0};
     {
       auto fo = policy.CreateWriter(StringView{path}, 0);
       for (auto const &ellpack : m->GetBatches<EllpackPage>(&ctx, param)) {
-        n_bytes += format->Write(ellpack, fo.get());
+        cache.Push(format->Write(ellpack, fo.get()));
       }
     }
+    cache.Commit();
 
     EllpackPage page;
-    auto fi = policy.CreateReader(StringView{path}, static_cast<bst_idx_t>(0), n_bytes);
+    policy.InitPagePool(cache);
+    format = policy.CreatePageFormat(param);
+    auto [offset, n_bytes] = cache.View(0);
+    auto fi = policy.CreateReader(StringView{path}, offset, n_bytes);
     ASSERT_TRUE(format->Read(&page, fi.get()));
 
     for (auto const &ellpack : m->GetBatches<EllpackPage>(&ctx, param)) {
@@ -140,6 +183,8 @@ TEST_P(TestEllpackPageRawFormat, HostIO) {
       }
     }
     cache.Commit();
+    policy.InitPagePool(cache);
+    format = policy.CreatePageFormat(param);
 
     for (std::size_t i = 0; i < 3; ++i) {
       auto reader = policy.CreateReader({}, cache.offset[i], cache.Bytes(i));

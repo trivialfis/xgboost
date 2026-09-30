@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2025, XGBoost contributors
+ * Copyright 2020-2026, XGBoost contributors
  */
 #include <memory>   // for shared_ptr
 #include <utility>  // for move
@@ -130,7 +130,7 @@ void IterativeDMatrix::Save(common::AlignedFileWriteStream* fo) const {
   p_cuts->Save(fo);
   // Save ellpack
   auto fmt = std::make_unique<EllpackPageRawFormat>(this->Ctx(), p_cuts, this->Ctx()->Device(),
-                                                    BatchParam{}, false);
+                                                    BatchParam{}, false, nullptr);
   auto n_bytes = fmt->Write(*this->ellpack_, fo);
   CHECK_GE(n_bytes, this->ellpack_->Impl()->MemCostBytes());
 }
@@ -141,8 +141,9 @@ IterativeDMatrix* IterativeDMatrix::Load(Context const* ctx,
   // Load cuts
   std::shared_ptr<common::HistogramCuts> p_cuts{common::HistogramCuts::Load(fi)};
   // Load ellpack
+  EllpackPagePool pool{fi->Share()->Size() - fi->Tell()};
   auto fmt =
-      std::make_unique<EllpackPageRawFormat>(ctx, p_cuts, ctx->Device(), BatchParam{}, false);
+      std::make_unique<EllpackPageRawFormat>(ctx, p_cuts, ctx->Device(), BatchParam{}, false, &pool);
   auto ellpack = std::make_shared<EllpackPage>();
   CHECK(fmt->Read(ellpack.get(), fi));
   return new IterativeDMatrix{std::move(ellpack)};

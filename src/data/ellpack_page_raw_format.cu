@@ -3,14 +3,16 @@
  */
 #include <dmlc/registry.h>
 
-#include <cstddef>  // for size_t
-#include <vector>   // for vector
+#include <algorithm>  // for max
+#include <cstddef>    // for size_t
+#include <vector>     // for vector
 
 #include "../common/cuda_context.cuh"       // for CUDAContext
 #include "../common/cuda_stream.h"          // for Event
 #include "../common/io.h"                   // for AlignedResourceReadStream, AlignedFileWriteStream
 #include "../common/ref_resource_view.cuh"  // for MakeFixedVecWithCudaMalloc
 #include "../common/ref_resource_view.h"    // for ReadVec, WriteVec
+#include "../common/resource.cuh"           // for CudaMallocResource
 #include "ellpack_page.cuh"                 // for EllpackPage
 #include "ellpack_page_raw_format.h"
 #include "ellpack_page_source.h"
@@ -18,11 +20,38 @@
 namespace xgboost::data {
 DMLC_REGISTRY_FILE_TAG(ellpack_page_raw_format);
 
+EllpackPagePool::EllpackPagePool(Cache const& cache) : max_page_bytes_{0} {
+  CHECK(cache.written);
+  // Stored page sizes include metadata and bound the device buffer sizes for
+  // both host and disk caches, including concatenated pages.
+  for (std::size_t i = 0; i < cache.Size(); ++i) {
+    max_page_bytes_ = std::max(max_page_bytes_, cache.Bytes(i));
+  }
+}
+
+common::RefResourceView<common::CompressedByteT> EllpackPagePool::Allocate(std::size_t n_bytes) {
+  CHECK_LE(n_bytes, max_page_bytes_);
+  {
+    std::lock_guard<std::mutex> lock{mutex_};
+    for (auto& buffer : buffers_) {
+      if (!buffer) {
+        buffer = std::make_shared<common::CudaMallocResource>(max_page_bytes_);
+      }
+      if (buffer.use_count() == 1) {
+        return {buffer->DataAs<common::CompressedByteT>(), n_bytes, buffer};
+      }
+    }
+  }
+  // An interrupted iteration or retained page can keep both buffers in use. Extra
+  // allocations are ephemeral and never grow the pool.
+  return common::MakeFixedVecWithCudaMalloc<common::CompressedByteT>(n_bytes);
+}
+
 namespace {
 // Function to support system without HMM or ATS
-template <typename T>
 [[nodiscard]] bool ReadDeviceVec(Context const* ctx, common::AlignedResourceReadStream* fi,
-                                 common::RefResourceView<T>* vec) {
+                                 common::RefResourceView<common::CompressedByteT>* vec,
+                                 EllpackPagePool* pool) {
   xgboost_NVTX_FN_RANGE();
 
   std::uint64_t n{0};
@@ -33,14 +62,14 @@ template <typename T>
     return true;
   }
 
-  auto expected_bytes = sizeof(T) * n;
+  auto expected_bytes = sizeof(common::CompressedByteT) * n;
 
   auto [ptr, n_bytes] = fi->Consume(expected_bytes);
   if (n_bytes != expected_bytes) {
     return false;
   }
 
-  *vec = common::MakeFixedVecWithCudaMalloc<T>(n);
+  *vec = pool->Allocate(n);
   dh::safe_cuda(
       cudaMemcpyAsync(vec->data(), ptr, n_bytes, cudaMemcpyDefault, ctx->CUDACtx()->Stream()));
   return true;
@@ -55,6 +84,7 @@ template <typename T>
 [[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page,
                                               common::AlignedResourceReadStream* fi) {
   xgboost_NVTX_FN_RANGE();
+  CHECK(pool_);
   auto* impl = page->Impl();
 
   RET_IF_NOT(fi->Read(&impl->n_rows));
@@ -62,7 +92,7 @@ template <typename T>
   RET_IF_NOT(fi->Read(&impl->info.row_stride));
 
   if (this->param_.prefetch_copy || !has_hmm_ats_) {
-    RET_IF_NOT(ReadDeviceVec(ctx_, fi, &impl->gidx_buffer));
+    RET_IF_NOT(ReadDeviceVec(ctx_, fi, &impl->gidx_buffer, pool_));
   } else {
     RET_IF_NOT(common::ReadVec(fi, &impl->gidx_buffer));
   }
@@ -99,6 +129,7 @@ template <typename T>
 
 [[nodiscard]] bool EllpackPageRawFormat::Read(EllpackPage* page, EllpackHostCacheStream* fi) const {
   xgboost_NVTX_FN_RANGE_C(252, 198, 3);
+  CHECK(pool_);
 
   auto* impl = page->Impl();
   CHECK(this->cuts_->cut_values_.DeviceCanRead());
@@ -106,7 +137,7 @@ template <typename T>
   auto stream = ctx_->CUDACtx()->Stream();
 
   auto dispatch = [&] {
-    fi->Read(ctx_, page, this->param_.prefetch_copy || !this->has_hmm_ats_);
+    fi->Read(ctx_, page, this->param_.prefetch_copy || !this->has_hmm_ats_, pool_);
     impl->SetCuts(this->cuts_);
   };
 
