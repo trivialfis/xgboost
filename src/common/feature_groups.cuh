@@ -110,8 +110,11 @@ struct FeatureGroups {
    * @param is_dense Whether the data matrix is dense.
    * @param shm_size Available size of shared memory per thread block (in bytes) used to
    *  compute feature groups.
+   * @param layout   Feature segments of the groups in the Ellpack layout, each group is split
+   *                 further to fit the shared memory. Empty for the layout itself.
    */
-  FeatureGroups(common::HistogramCuts const& cuts, bool is_dense, size_t shm_size);
+  FeatureGroups(common::HistogramCuts const& cuts, bool is_dense, size_t shm_size,
+                common::Span<bst_feature_t const> layout = {});
 
   /**
    * @brief Creates a single feature group containing all features and bins.

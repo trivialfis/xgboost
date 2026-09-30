@@ -576,43 +576,57 @@ void TestBuildHistogram(bst_idx_t n_samples, bst_feature_t n_features, bst_bin_t
   HistInput input{n_samples, n_features, n_bins, n_targets, layout, root};
   auto expected = input.Expected();
 
-  // Four features in each small group, so nodes span many segments.
-  auto page = input.MakeEllpack(&ctx, small_groups ? sizeof(GradientPairInt64) * n_bins * 4 : 0);
-  ASSERT_EQ(page->IsDense(), layout == Layout::kDense);
-  ASSERT_EQ(page->IsDenseCompressed(), layout != Layout::kSparse);
-  auto const& fg = *page->feature_groups;
-  if (small_groups && page->IsDenseCompressed()) {
-    ASSERT_GT(fg.feature_segments.Size(), 3);
+  // Four features in each small group, so nodes span many segments. The groups are inside
+  // layout groups of eight features, or inside a single layout group.
+  auto feature_bytes = sizeof(GradientPairInt64) * n_bins;
+  std::vector<std::size_t> layout_bytes{0};
+  if (small_groups) {
+    layout_bytes = {feature_bytes * 8, 0};
   }
-  if (info) {
-    *info = BuildInfo{page->NumSymbols(), fg.feature_segments.Size() - 1};
-  }
+  for (auto bytes : layout_bytes) {
+    auto page = input.MakeEllpack(&ctx, bytes);
+    ASSERT_EQ(page->IsDense(), layout == Layout::kDense);
+    ASSERT_EQ(page->IsDenseCompressed(), layout != Layout::kSparse);
+    auto shmem_bytes =
+        n_targets == 1 ? DftStHistShmemBytes(ctx.Ordinal()) : DftMtHistShmemBytes(ctx.Ordinal());
+    if (small_groups) {
+      shmem_bytes = feature_bytes * 4;
+    }
+    FeatureGroups fg{page->Cuts(), page->IsDenseCompressed(), shmem_bytes,
+                     page->feature_groups->feature_segments.ConstHostSpan()};
+    if (small_groups && page->IsDenseCompressed()) {
+      ASSERT_GT(fg.feature_segments.Size(), 3);
+    }
+    if (info) {
+      *info = BuildInfo{page->NumSymbols(), fg.feature_segments.Size() - 1};
+    }
 
-  bst_node_t n_nodes = input.sizes.size();
-  DeviceHistogramBuilder builder;
-  builder.Reset(&ctx, n_nodes, page->Cuts().TotalBins() * n_targets, force_global);
-  std::vector<bst_node_t> nidx(n_nodes);
-  std::iota(nidx.begin(), nidx.end(), 0);
-  builder.AllocateHistograms(&ctx, nidx);
+    bst_node_t n_nodes = input.sizes.size();
+    DeviceHistogramBuilder builder;
+    builder.Reset(&ctx, n_nodes, page->Cuts().TotalBins() * n_targets, force_global);
+    std::vector<bst_node_t> nidx(n_nodes);
+    std::iota(nidx.begin(), nidx.end(), 0);
+    builder.AllocateHistograms(&ctx, nidx);
 
-  dh::device_vector<cuda_impl::RowIndexT> ridx{input.ridx};
-  std::vector<common::Span<cuda_impl::RowIndexT const>> ridxs;
-  std::vector<common::Span<GradientPairInt64>> hists;
-  std::size_t beg = 0;
-  for (bst_node_t i = 0; i < n_nodes; ++i) {
-    ridxs.push_back(dh::ToSpan(ridx).subspan(beg, input.sizes[i]));
-    hists.push_back(builder.GetNodeHistogram(i));
-    beg += input.sizes[i];
-  }
-  builder.BuildHistogram(&ctx, page->GetDeviceEllpack(&ctx, {}), fg,
-                         input.gpair.View(ctx.Device()), ridxs, hists);
+    dh::device_vector<cuda_impl::RowIndexT> ridx{input.ridx};
+    std::vector<common::Span<cuda_impl::RowIndexT const>> ridxs;
+    std::vector<common::Span<GradientPairInt64>> hists;
+    std::size_t beg = 0;
+    for (bst_node_t i = 0; i < n_nodes; ++i) {
+      ridxs.push_back(dh::ToSpan(ridx).subspan(beg, input.sizes[i]));
+      hists.push_back(builder.GetNodeHistogram(i));
+      beg += input.sizes[i];
+    }
+    builder.BuildHistogram(&ctx, page->GetDeviceEllpack(&ctx, {}), fg,
+                           input.gpair.View(ctx.Device()), ridxs, hists);
 
-  for (bst_node_t i = 0; i < n_nodes; ++i) {
-    std::vector<GradientPairInt64> got(hists[i].size());
-    dh::CopyDeviceSpanToVector(&got, hists[i]);
-    ASSERT_EQ(got.size(), expected[i].size());
-    for (std::size_t j = 0; j < got.size(); ++j) {
-      ASSERT_EQ(got[j], expected[i][j]) << "node:" << i << " bin:" << j;
+    for (bst_node_t i = 0; i < n_nodes; ++i) {
+      std::vector<GradientPairInt64> got(hists[i].size());
+      dh::CopyDeviceSpanToVector(&got, hists[i]);
+      ASSERT_EQ(got.size(), expected[i].size());
+      for (std::size_t j = 0; j < got.size(); ++j) {
+        ASSERT_EQ(got[j], expected[i][j]) << "node:" << i << " bin:" << j;
+      }
     }
   }
 }

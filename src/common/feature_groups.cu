@@ -12,7 +12,8 @@
 #include "hist_util.h"  // for HistogramCuts
 
 namespace xgboost::common {
-FeatureGroups::FeatureGroups(common::HistogramCuts const& cuts, bool is_dense, size_t shm_size)
+FeatureGroups::FeatureGroups(common::HistogramCuts const& cuts, bool is_dense, size_t shm_size,
+                             common::Span<bst_feature_t const> layout)
     : max_group_bins{0} {
   // Only use a single feature group for sparse matrices.
   bool single_group = !is_dense;
@@ -30,11 +31,17 @@ FeatureGroups::FeatureGroups(common::HistogramCuts const& cuts, bool is_dense, s
   // Maximum number of bins that can be placed into shared memory (single target).
   std::size_t max_shmem_bins = shm_size / sizeof(GradientPairInt64);
 
+  // The next boundary of the layout groups.
+  auto layout_it = layout.empty() ? layout.cend() : layout.cbegin() + 1;
   for (size_t i = 2; i < cut_ptrs.size(); ++i) {
     int last_start = bin_segments_h.back();
+    bool at_boundary = layout_it != layout.cend() && *layout_it == i - 1;
+    if (at_boundary) {
+      ++layout_it;
+    }
     // Push a new group whenever the size of required bin storage is greater than the
-    // shared memory size.
-    if (cut_ptrs[i] - last_start > max_shmem_bins) {
+    // shared memory size, or a layout group ends.
+    if (at_boundary || cut_ptrs[i] - last_start > max_shmem_bins) {
       feature_segments_h.push_back(i - 1);
       bin_segments_h.push_back(cut_ptrs[i - 1]);
       max_group_bins = std::max(max_group_bins, bin_segments_h.back() - last_start);

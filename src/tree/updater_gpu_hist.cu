@@ -88,6 +88,7 @@ struct GPUHistMakerDevice {
   std::vector<bst_idx_t> const batch_ptr_;
   HistMakerTrainParam const* hist_param_;
   std::shared_ptr<common::HistogramCuts const> const cuts_;
+  std::unique_ptr<FeatureGroups> feature_groups_;
 
   struct PartitionNodes {
     std::vector<bst_node_t> nidx;
@@ -141,13 +142,17 @@ struct GPUHistMakerDevice {
   GPUHistMakerDevice(Context const* ctx, TrainParam _param, HistMakerTrainParam const* hist_param,
                      std::shared_ptr<common::ColumnSampler> column_sampler, MetaInfo const& info,
                      std::vector<bst_idx_t> batch_ptr,
-                     std::shared_ptr<common::HistogramCuts const> cuts)
+                     std::shared_ptr<common::HistogramCuts const> cuts, bool dense_compressed,
+                     FeatureGroups const& layout)
       : evaluator_{_param, static_cast<bst_feature_t>(info.num_col_), ctx->Device()},
         ctx_{ctx},
         column_sampler_{std::move(column_sampler)},
         batch_ptr_{std::move(batch_ptr)},
         hist_param_{hist_param},
         cuts_{std::move(cuts)},
+        feature_groups_{std::make_unique<FeatureGroups>(
+            *cuts_, dense_compressed, DftStHistShmemBytes(this->ctx_->Ordinal()),
+            layout.feature_segments.ConstHostSpan())},
         param{std::move(_param)},
         interaction_constraints(param, static_cast<bst_feature_t>(info.num_col_)),
         sampler{std::make_unique<cuda_impl::Sampler>(info.num_row_, param.subsample,
@@ -300,8 +305,7 @@ struct GPUHistMakerDevice {
 
     auto acc = page.Impl()->GetDeviceEllpack(this->ctx_, {});
     auto gpair = this->d_gpair.View(this->ctx_->Device());
-    this->histogram_.BuildHistogram(ctx_, acc, *page.Impl()->feature_groups, gpair, h_ridxs,
-                                    h_hists);
+    this->histogram_.BuildHistogram(ctx_, acc, *feature_groups_, gpair, h_ridxs, h_hists);
     monitor.Stop(__func__);
   }
 
@@ -633,9 +637,12 @@ struct GPUHistMakerDevice {
   }
 };
 
-std::shared_ptr<common::HistogramCuts const> InitBatchCuts(Context const* ctx, DMatrix* p_fmat,
-                                                           BatchParam const& batch) {
+// The cuts, whether the Ellpack is dense-compressed, and the feature groups of the Ellpack
+// layout. All batches must agree.
+std::tuple<std::shared_ptr<common::HistogramCuts const>, bool, std::shared_ptr<FeatureGroups const>>
+InitBatchCuts(Context const* ctx, DMatrix* p_fmat, BatchParam const& batch) {
   std::shared_ptr<common::HistogramCuts const> cuts;
+  std::shared_ptr<FeatureGroups const> layout;
 
   std::int32_t dense_compressed = -1;
   for (auto const& page : p_fmat->GetBatches<EllpackPage>(ctx, batch)) {
@@ -643,11 +650,14 @@ std::shared_ptr<common::HistogramCuts const> InitBatchCuts(Context const* ctx, D
     CHECK(cuts->cut_values_.DeviceCanRead());
     if (dense_compressed != -1) {
       CHECK_EQ(page.Impl()->IsDenseCompressed(), static_cast<bool>(dense_compressed));
+      CHECK(layout->feature_segments.ConstHostVector() ==
+            page.Impl()->feature_groups->feature_segments.ConstHostVector());
     }
     dense_compressed = page.Impl()->IsDenseCompressed();
+    layout = page.Impl()->feature_groups;
   }
   CHECK(cuts);
-  return cuts;
+  return {cuts, static_cast<bool>(dense_compressed), layout};
 }
 
 class GPUHistMaker : public TreeUpdater {
@@ -710,13 +720,15 @@ class GPUHistMaker : public TreeUpdater {
     p_fmat->Info().feature_types.SetDevice(ctx_->Device());
 
     auto batch = HistBatch(*param);
-    auto cuts = InitBatchCuts(ctx_, p_fmat, batch);
+    auto [cuts, dense_compressed, layout] = InitBatchCuts(ctx_, p_fmat, batch);
     auto batch_ptr = p_fmat->BatchPtr();
 
     this->p_scimpl_ = std::make_unique<GPUHistMakerDevice>(
-        ctx_, *param, &hist_maker_param_, column_sampler_, p_fmat->Info(), batch_ptr, cuts);
+        ctx_, *param, &hist_maker_param_, column_sampler_, p_fmat->Info(), batch_ptr, cuts,
+        dense_compressed, *layout);
     this->p_mtimpl_ = std::make_unique<cuda_impl::MultiTargetHistMaker>(
-        this->ctx_, *param, &hist_maker_param_, this->column_sampler_, batch_ptr, cuts);
+        this->ctx_, *param, &hist_maker_param_, this->column_sampler_, batch_ptr, cuts,
+        dense_compressed, *layout);
 
     p_last_fmat_ = p_fmat;
     initialised_ = true;
@@ -814,12 +826,13 @@ class GPUGlobalApproxMaker : public TreeUpdater {
     info.feature_types.SetDevice(ctx_->Device());
 
     auto batch = ApproxBatch(*param, hess, *task_);
-    auto cuts = InitBatchCuts(ctx_, p_fmat, batch);
+    auto [cuts, dense_compressed, layout] = InitBatchCuts(ctx_, p_fmat, batch);
     auto batch_ptr = p_fmat->BatchPtr();
     batch.regen = false;  // Regen only at the beginning of the iteration.
 
-    this->maker_ = std::make_unique<GPUHistMakerDevice>(
-        ctx_, *param, &hist_maker_param_, column_sampler_, p_fmat->Info(), batch_ptr, cuts);
+    this->maker_ = std::make_unique<GPUHistMakerDevice>(ctx_, *param, &hist_maker_param_,
+                                                        column_sampler_, p_fmat->Info(), batch_ptr,
+                                                        cuts, dense_compressed, *layout);
 
     std::size_t t_idx{0};
     for (xgboost::RegTree* tree : trees) {

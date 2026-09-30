@@ -565,8 +565,8 @@ void EllpackPageImpl::SetCuts(std::shared_ptr<common::HistogramCuts const> cuts)
 void EllpackPageImpl::InitCompressedData(Context const* ctx) {
   monitor_.Start(__func__);
   if (!this->feature_groups) {
-    // A page can be reused by both single- and multi-target histogram builders.
-    auto shmem = std::min(common::DftStHistShmemBytes(ctx->Ordinal()),
+    // The largest budget, histogram builders with smaller budgets split the groups further.
+    auto shmem = std::max(common::DftStHistShmemBytes(ctx->Ordinal()),
                           common::DftMtHistShmemBytes(ctx->Ordinal()));
     this->feature_groups =
         std::make_shared<common::FeatureGroups>(*cuts_, this->IsDenseCompressed(), shmem);

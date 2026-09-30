@@ -18,14 +18,37 @@
 #include "xgboost/base.h"
 
 namespace xgboost::tree {
-XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
-                                             xgboost::GradientPairInt64 const& gpair) {
-  auto dst_ptr = reinterpret_cast<int64_t*>(dest);
-  auto g = gpair.GetQuantisedGrad();
-  auto h = gpair.GetQuantisedHess();
+/**
+ * @brief The index of the first 32-bit word of a bin in the shared histogram.
+ *
+ * A bin has four words: the low and high words of the gradient, then of the hessian. Word
+ * `w` of the bin is at `SmemWordIdx(bin) ^ w`. The words are permuted by `bin / 8`, otherwise
+ * the same word of different bins is 16 bytes apart, and an atomic of a warp only reaches 8
+ * of the 32 banks. The words stay inside the 16 bytes of the bin.
+ */
+XGBOOST_DEV_INLINE std::uint32_t SmemWordIdx(std::uint32_t bin) {
+  return (bin << 2) ^ ((bin >> 3) & 3);
+}
 
-  AtomicAdd64As32(dst_ptr, g);
-  AtomicAdd64As32(dst_ptr + 1, h);
+XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* smem_hist,
+                                             std::uint32_t bin,
+                                             xgboost::GradientPairInt64 const& gpair) {
+  auto words = reinterpret_cast<std::uint32_t*>(smem_hist);
+  auto idx = SmemWordIdx(bin);
+  AtomicAdd64As32(words + idx, words + (idx ^ 1), gpair.GetQuantisedGrad());
+  AtomicAdd64As32(words + (idx ^ 2), words + (idx ^ 3), gpair.GetQuantisedHess());
+}
+
+XGBOOST_DEV_INLINE xgboost::GradientPairInt64 LoadGpairShared(
+    xgboost::GradientPairInt64 const* smem_hist, std::uint32_t bin) {
+  auto words = reinterpret_cast<std::uint32_t const*>(smem_hist);
+  auto idx = SmemWordIdx(bin);
+  auto load = [&](std::uint32_t lo, std::uint32_t hi) {
+    auto v = static_cast<std::uint64_t>(words[idx ^ lo]) |
+             (static_cast<std::uint64_t>(words[idx ^ hi]) << 32);
+    return static_cast<std::int64_t>(v);
+  };
+  return {load(0, 1), load(2, 3)};
 }
 
 // Global 64 bit integer atomics at the time of writing do not benefit from being separated into two
@@ -142,6 +165,18 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
                                   bst_idx_t begin, bst_idx_t end) {
   bst_feature_t const feature_stride = Policy::kCompressed ? group.num_features : matrix.row_stride;
   auto const* cut_ptr = matrix.feature_segments + group.start_feature;
+  // The group is a range of columns in a row-major slab of the Ellpack, see
+  // `EllpackAccessorImpl::IterIdx`.
+  bst_idx_t slab_stride = matrix.row_stride, slab_offset = 0;
+  if constexpr (Policy::kCompressed) {
+    if (matrix.feature_group_index) {
+      auto slab = matrix.feature_group_index[group.start_feature];
+      slab_stride = slab.num_features;
+      slab_offset = slab.start_feature * matrix.n_rows + group.start_feature - slab.start_feature;
+    } else {
+      slab_offset = group.start_feature;
+    }
+  }
 
   using Idx = RowPartitioner::RowIndexT;
 
@@ -149,7 +184,7 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
 
   auto atomic_add = [&](auto bin_idx, auto const& adjusted) {
     if constexpr (Policy::kSharedMem) {
-      AtomicAddGpairShared(smem_hist + bin_idx, adjusted);
+      AtomicAddGpairShared(smem_hist, bin_idx, adjusted);
     } else {
       // gmem_hist is a subspan for the current target.
       AtomicAddGpairGlobal(gmem_hist + bin_idx, adjusted);
@@ -166,10 +201,7 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     Idx fidx_in_set = idx - ridx_in_set * feature_stride;
 
     Idx ridx = d_ridx[ridx_in_set];
-    bst_idx_t entry = (ridx - matrix.base_rowid) * feature_stride + fidx_in_set;
-    if constexpr (Policy::kCompressed) {
-      entry += group.start_feature * matrix.n_rows;
-    }
+    bst_idx_t entry = (ridx - matrix.base_rowid) * slab_stride + fidx_in_set + slab_offset;
     bst_bin_t compressed_bin = matrix.gidx_iter[entry];
     if (Policy::kDense || compressed_bin != static_cast<bst_bin_t>(matrix.NullValue())) {
       auto g = LoadGpair(gpair + ridx);
@@ -323,7 +355,8 @@ __global__ __launch_bounds__(
       auto gmem_hist = target_hist(seg);
       // Write shared memory back to global memory
       for (auto bin_idx : dh::BlockStrideRange(0, group.num_bins)) {
-        AtomicAddGpairGlobal(gmem_hist + group.start_bin + bin_idx, smem_hist[bin_idx]);
+        AtomicAddGpairGlobal(gmem_hist + group.start_bin + bin_idx,
+                             LoadGpairShared(smem_hist, bin_idx));
       }
     }
     pos += seg.end - seg.begin;
