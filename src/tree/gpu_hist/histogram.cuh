@@ -24,11 +24,9 @@ namespace xgboost::tree {
 /**
  * @brief An atomicAdd designed for gradient pair with better performance.  For general
  *        int64_t atomicAdd, one can simply cast it to unsigned long long. Exposed for testing.
+ *        Separate low/high pointers allow a swizzled shared-memory layout.
  */
-XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
-  uint32_t* y_low = reinterpret_cast<uint32_t*>(dst);
-  uint32_t* y_high = y_low + 1;
-
+XGBOOST_DEV_INLINE void AtomicAdd64As32(uint32_t* y_low, uint32_t* y_high, int64_t src) {
   auto cast_src = reinterpret_cast<uint64_t*>(&src);
 
   uint32_t const x_low = static_cast<uint32_t>(src);
@@ -38,6 +36,11 @@ XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
   uint32_t const carry = old > (std::numeric_limits<uint32_t>::max() - x_low) ? 1 : 0;
   uint32_t const sig = x_high + carry;
   atomicAdd(y_high, sig);
+}
+
+XGBOOST_DEV_INLINE void AtomicAdd64As32(int64_t* dst, int64_t src) {
+  auto low = reinterpret_cast<uint32_t*>(dst);
+  AtomicAdd64As32(low, low + 1, src);
 }
 
 namespace cuda_impl {

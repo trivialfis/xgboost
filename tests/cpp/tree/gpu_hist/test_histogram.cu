@@ -518,8 +518,10 @@ struct HistInput {
       }
     }
 
-    std::uniform_int_distribution<std::int64_t> grad_dist{-(1 << 20), 1 << 20};
-    std::uniform_int_distribution<std::int64_t> hess_dist{0, 1 << 20};
+    // Exercise both words of each accumulator, including carries and negative gradients.
+    std::uniform_int_distribution<std::int64_t> grad_dist{-(std::int64_t{1} << 40),
+                                                          std::int64_t{1} << 40};
+    std::uniform_int_distribution<std::int64_t> hess_dist{0, std::int64_t{1} << 40};
     for (auto& v : this->gpair.Data()->HostVector()) {
       v = GradientPairInt64{grad_dist(rng), hess_dist(rng)};
     }
@@ -684,6 +686,19 @@ INSTANTIATE_TEST_SUITE_P(
                        ::testing::Values<bst_target_t>(1, 3), ::testing::Bool(), ::testing::Bool(),
                        ::testing::Bool()),
     HistogramBuildName);
+
+TEST(Histogram, BuildSharedWordSwizzle) {
+  // Cross each eight-bin swizzle boundary and leave partial groups of eight bins.
+  // Small feature groups also exercise permutations relative to nonzero group offsets.
+  for (bst_bin_t n_bins : {7, 9, 17, 25, 33}) {
+    for (auto layout : {Layout::kDense, Layout::kDenseMissing, Layout::kSparse}) {
+      ASSERT_NO_FATAL_FAILURE(TestBuildHistogram(1 << 12, 9, n_bins, /*n_targets=*/3, layout,
+                                                 /*root=*/false, /*force_global=*/false,
+                                                 /*small_groups=*/true))
+          << "bins:" << n_bins << " layout:" << layout;
+    }
+  }
+}
 
 // Sub-segments spanning multiple tiles.
 TEST(Histogram, BuildLarge) {

@@ -27,16 +27,36 @@ XGBOOST_DEV_INLINE bst_idx_t IterIdx(EllpackAccessorImpl<IterT> const& matrix,
                                      RowPartitioner::RowIndexT ridx, bst_feature_t fidx) {
   return (ridx - matrix.base_rowid) * matrix.row_stride + fidx;
 }
-}  // anonymous namespace
+// Swizzle the four words within each 16-byte bin. Without this permutation, each atomic
+// instruction can only access eight of the 32 shared-memory banks. Bins separated by
+// eight use different permutations, allowing each logical word to access all 32 banks.
+// XOR avoids the additions needed for a cyclic rotation of the word positions.
+XGBOOST_DEV_INLINE std::uint32_t SharedHistogramWordOffset(bst_bin_t bin, std::uint32_t word) {
+  return (word ^ (static_cast<std::uint32_t>(bin) >> 3)) & 3;
+}
+}  // namespace
 
-XGBOOST_DEV_INLINE void AtomicAddGpairShared(xgboost::GradientPairInt64* dest,
-                                             xgboost::GradientPairInt64 const& gpair) {
-  auto dst_ptr = reinterpret_cast<int64_t*>(dest);
+XGBOOST_DEV_INLINE void AtomicAddGpairShared(GradientPairInt64* hist, bst_bin_t bin,
+                                             GradientPairInt64 const& gpair) {
+  auto words = reinterpret_cast<std::uint32_t*>(hist + bin);
   auto g = gpair.GetQuantisedGrad();
   auto h = gpair.GetQuantisedHess();
 
-  AtomicAdd64As32(dst_ptr, g);
-  AtomicAdd64As32(dst_ptr + 1, h);
+  AtomicAdd64As32(words + SharedHistogramWordOffset(bin, 0),
+                  words + SharedHistogramWordOffset(bin, 1), g);
+  AtomicAdd64As32(words + SharedHistogramWordOffset(bin, 2),
+                  words + SharedHistogramWordOffset(bin, 3), h);
+}
+
+XGBOOST_DEV_INLINE GradientPairInt64 LoadGpairShared(GradientPairInt64 const* hist, bst_bin_t bin) {
+  auto words = reinterpret_cast<std::uint32_t const*>(hist + bin);
+  GradientPairInt64 gpair;
+  auto out = reinterpret_cast<std::uint32_t*>(&gpair);
+#pragma unroll
+  for (std::uint32_t word = 0; word < 4; ++word) {
+    out[word] = words[SharedHistogramWordOffset(bin, word)];
+  }
+  return gpair;
 }
 
 // Global 64 bit integer atomics at the time of writing do not benefit from being separated into two
@@ -154,7 +174,7 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
 
   auto atomic_add = [&](auto bin_idx, auto const& adjusted) {
     if constexpr (Policy::kSharedMem) {
-      AtomicAddGpairShared(smem_hist + bin_idx, adjusted);
+      AtomicAddGpairShared(smem_hist, bin_idx, adjusted);
     } else {
       // gmem_hist is a subspan for the current target.
       AtomicAddGpairGlobal(gmem_hist + bin_idx, adjusted);
@@ -250,6 +270,7 @@ __global__ __launch_bounds__(
   __builtin_assume(__isGlobal(gmem_hist));
 
   if constexpr (Policy::kSharedMem) {
+    // Zeroing is independent of the word permutation within each bin.
     dh::BlockFill(smem_hist, group.num_bins, GradientPairInt64{});
     __syncthreads();
   }
@@ -259,7 +280,8 @@ __global__ __launch_bounds__(
     __syncthreads();
     // Flush this block's histogram.
     for (auto bin_idx : dh::BlockStrideRange(0, group.num_bins)) {
-      AtomicAddGpairGlobal(gmem_hist + group.start_bin + bin_idx, smem_hist[bin_idx]);
+      AtomicAddGpairGlobal(gmem_hist + group.start_bin + bin_idx,
+                           LoadGpairShared(smem_hist, bin_idx));
     }
   }
 }
