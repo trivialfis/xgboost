@@ -58,11 +58,11 @@ struct HistTuning {
 };
 
 namespace {
-// https://docs.nvidia.com/cuda/cuda-c-programming-guide/#feature-set-compiler-targets
-// Technical Specifications                  7.5  | 8.0  | 8.6  8.7 | 8.9 | 9.0 10.0 | 11.0 12.0
-// Maximum number of resident blocks per SM  16   | 32   | 16       | 24  | 32       | 24
-// Maximum number of resident warps per SM   32   | 64   | 48             | 64       | 48
-// Maximum number of resident threads per SM 1024 | 2048 | 1536           | 2048     | 1536
+// https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html#features-and-technical-specifications
+// Compute capability       7.5  | 8.0  | 8.6 8.7 | 8.9  | 9.0 10.0 10.3 | 10.7 | 11.0 12.0 12.1
+// Max resident blocks/SM   16   | 32   | 16      | 24   | 32            | 16   | 24
+// Max resident warps/SM    32   | 64   | 48      | 48   | 64            | 32   | 48
+// Max resident threads/SM  1024 | 2048 | 1536    | 1536 | 2048          | 1024 | 1536
 
 using HistSm75 = HistTuning<1024, 1>;
 
@@ -72,11 +72,15 @@ using HistSm86 = HistTuning<768, 2>;
 
 using HistSm90 = HistTuning<1024, 2>;
 
+using HistSm107 = HistTuning<1024, 1>;
+
 using HistSm110 = HistTuning<768, 2>;
 
 // Resolve launch bounds in the device compilation pass, not through template arguments.
 #if __CUDA_ARCH__ >= 1100
 using HistLaunchBounds = HistSm110;
+#elif __CUDA_ARCH__ >= 1070
+using HistLaunchBounds = HistSm107;
 #elif __CUDA_ARCH__ >= 900
 using HistLaunchBounds = HistSm90;
 #elif __CUDA_ARCH__ >= 860
@@ -101,6 +105,8 @@ decltype(auto) DispatchCudaSm(std::int32_t device, Fn&& fn) {
   dh::safe_cuda(cub::SmVersion(version, device));
   if (version >= 1100) {
     return fn(HistSm110{});
+  } else if (version >= 1070) {
+    return fn(HistSm107{});
   } else if (version >= 900) {
     return fn(HistSm90{});
   } else if (version >= 860) {
@@ -111,7 +117,7 @@ decltype(auto) DispatchCudaSm(std::int32_t device, Fn&& fn) {
   return fn(HistSm75{});
 }
 
-// Only sm_90 and sm_100 reach the cap, and a larger budget (113KB) is slower on H200.
+// A larger budget (113 KiB) is slower on H200.
 constexpr std::size_t kMaxShmemBytes = 96 /*kb*/ * 1024;
 // The shared memory of a block is allocated in units of this size.
 constexpr std::int32_t kShmemAllocGranularity = 128;
