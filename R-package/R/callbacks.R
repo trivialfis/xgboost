@@ -657,11 +657,8 @@ xgb.cb.early.stop <- function(
     },
     f_before_iter = function(env, model, data, evals, iteration) NULL,
     f_after_iter = function(env, model, data, evals, iteration, iter_feval) {
-      sds <- NULL
       if (NCOL(iter_feval) > 1) {
-        tmp <- .summarize.feval(iter_feval, TRUE)
-        iter_feval <- tmp$feval
-        sds <- tmp$stdev
+        iter_feval <- .summarize.feval(iter_feval, FALSE)$feval
       }
 
       if (!env$checked_evnames) {
@@ -731,7 +728,10 @@ xgb.cb.early.stop <- function(
         }
       } else if (iteration - env$best_iteration >= env$stopping_rounds) {
         if (env$verbose) {
-          best_msg <- .format_eval_string(iteration, iter_feval, sds)
+          best_msg <- .format_eval_string(
+            env$best_iteration,
+            setNames(env$best_score, names(iter_feval)[env$metric_idx])
+          )
           cat("Stopping. Best iteration:\n", best_msg, "\n\n", sep = '')
         }
         env$stopped_by_max_rounds <- TRUE

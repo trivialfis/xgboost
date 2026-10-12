@@ -254,13 +254,23 @@ test_that("xgb.cb.save.model works as expected", {
   for (f in files) if (file.exists(f)) file.remove(f)
 })
 
+expect_early_stop_output <- function(logs, early_stop, metric) {
+  i <- which(logs == "Stopping. Best iteration:")
+  expect_length(i, 1L)
+  expect_equal(
+    logs[i + 1L],
+    sprintf("[%d]\t%s:%f", early_stop$best_iteration, metric, early_stop$best_score)
+  )
+}
+
 test_that("early stopping xgb.train works", {
   params <- c(params, list(learning_rate = 0.3))
   set.seed(11)
-  expect_output(
+  logs <- capture.output(
     bst <- xgb.train(params, dtrain, nrounds = 20, evals = evals,
                      early_stopping_rounds = 3, maximize = FALSE)
-  , "Stopping. Best iteration")
+  )
+  expect_early_stop_output(logs, attr(bst, "early_stop"), "test-error")
   expect_false(is.null(xgb.attr(bst, "best_iteration")))
   expect_lt(xgb.attr(bst, "best_iteration"), 19)
 
@@ -287,7 +297,7 @@ test_that("early stopping xgb.train works", {
 
 test_that("early stopping using a specific metric works", {
   set.seed(11)
-  expect_output(
+  logs <- capture.output(
     bst <- xgb.train(
       c(
         within(params, rm("eval_metric")),
@@ -304,7 +314,8 @@ test_that("early stopping using a specific metric works", {
         xgb.cb.early.stop(stopping_rounds = 3, maximize = FALSE, metric_name = 'test_logloss')
       )
     )
-  , "Stopping. Best iteration")
+  )
+  expect_early_stop_output(logs, attr(bst, "early_stop"), "test-logloss")
   expect_false(is.null(xgb.attr(bst, "best_iteration")))
   expect_lt(xgb.attr(bst, "best_iteration"), 19)
 
@@ -344,7 +355,7 @@ test_that("early stopping works with titanic", {
 
 test_that("early stopping xgb.cv works", {
   set.seed(11)
-  expect_output(
+  logs <- capture.output(
     {
       cv <- xgb.cv(
         c(params, list(learning_rate = 0.3)),
@@ -354,9 +365,9 @@ test_that("early stopping xgb.cv works", {
         early_stopping_rounds = 3,
         maximize = FALSE
       )
-    },
-    "Stopping. Best iteration"
+    }
   )
+  expect_early_stop_output(logs, cv$early_stop, "test-error")
   expect_false(is.null(cv$early_stop$best_iteration))
   expect_lt(cv$early_stop$best_iteration, 19)
   # the best error is min error:
