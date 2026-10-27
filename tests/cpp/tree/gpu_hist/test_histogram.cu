@@ -651,6 +651,25 @@ TEST_P(HistogramBuildTest, Build) {
   TestBuildHistogram(1 << 13, 37, 16, n_targets, layout, root, force_global, small_groups);
 }
 
+TEST(Histogram, BuildFixedFeature) {
+  // Dividing and non-dividing feature widths, empty nodes, and partial tiles.
+  // Four features divide both the 768- and 1024-thread launch configurations.
+  for (auto n_features : {1, 4, 5, 12}) {
+    auto n_samples =
+        n_features == 4 || n_features == 12
+            ? std::max<bst_idx_t>(1 << 17, static_cast<bst_idx_t>(curt::GetMpCnt(0)) << 12) + 1
+            : 4097;
+    for (auto layout : {Layout::kDense, Layout::kDenseMissing}) {
+      for (bool root : {false, true}) {
+        ASSERT_NO_FATAL_FAILURE(TestBuildHistogram(n_samples, n_features, 256, /*n_targets=*/1,
+                                                   layout, root, /*force_global=*/false,
+                                                   /*small_groups=*/false))
+            << "features:" << n_features << " layout:" << layout << " root:" << root;
+      }
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     Histogram, HistogramBuildTest,
     ::testing::Combine(::testing::Values(Layout::kDense, Layout::kDenseMissing, Layout::kSparse),

@@ -184,6 +184,31 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     }
   };
 
+  if constexpr (Policy::kSharedMem && Policy::kSingleTarget && Policy::kCompressed &&
+                cuda::std::is_same_v<typename Accessor::IterType,
+                                     common::CompressedIterator<std::uint32_t>>) {
+    // Whole-row tiles keep each thread on the same feature. Load its bin offset
+    // once and advance the row index without division in the accumulation loop.
+    if (Policy::kBlockThreads % feature_stride == 0) {
+      bst_idx_t idx = begin + threadIdx.x;
+      if (idx >= end) {
+        return;
+      }
+      Idx row = idx / feature_stride;
+      bst_feature_t const fidx = idx - row * feature_stride + group.start_feature;
+      Idx const row_step = Policy::kBlockThreads / feature_stride;
+      bst_bin_t const bin_offset = matrix.feature_segments[fidx] - group.start_bin;
+      for (; idx < end; idx += Policy::kBlockThreads, row += row_step) {
+        Idx ridx = d_ridx[row];
+        bst_bin_t bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
+        if (Policy::kDense || bin != static_cast<bst_bin_t>(matrix.NullValue())) {
+          atomic_add(bin + bin_offset, LoadGpair(gpair + ridx));
+        }
+      }
+      return;
+    }
+  }
+
   for (bst_idx_t idx = begin + threadIdx.x; idx < end; idx += Policy::kBlockThreads) {
     // unrolled version unravel to save registers:
     // auto [ridx, fidx] = unravel_index(idx, (n_rows, feature_stride));
