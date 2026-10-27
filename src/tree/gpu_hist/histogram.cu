@@ -184,7 +184,45 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     }
   };
 
-  for (bst_idx_t idx = begin + threadIdx.x; idx < end; idx += Policy::kBlockThreads) {
+  auto accumulate = [&](bst_bin_t compressed_bin, Idx ridx, bst_feature_t fidx) {
+    if (Policy::kDense || compressed_bin != static_cast<bst_bin_t>(matrix.NullValue())) {
+      auto g = LoadGpair(gpair + ridx);
+      if constexpr (Policy::kCompressed) {
+        compressed_bin += matrix.feature_segments[fidx];
+      }
+      if constexpr (Policy::kSharedMem) {
+        compressed_bin -= group.start_bin;
+      }
+      atomic_add(compressed_bin, g);
+    }
+  };
+
+  bst_idx_t idx = begin + threadIdx.x;
+  // Multi-target kernels have less register headroom for the second entry.
+  if constexpr (Policy::kSharedMem && Policy::kSingleTarget &&
+                cuda::std::is_same_v<typename Accessor::IterType,
+                                     common::CompressedIterator<std::uint32_t>>) {
+    for (; idx < end && end - idx > Policy::kBlockThreads; idx += 2 * Policy::kBlockThreads) {
+      Idx row_a = idx / feature_stride;
+      Idx row_b = (idx + Policy::kBlockThreads) / feature_stride;
+      bst_feature_t fidx_a = idx - row_a * feature_stride + group.start_feature;
+      bst_feature_t fidx_b =
+          idx + Policy::kBlockThreads - row_b * feature_stride + group.start_feature;
+      Idx ridx_a = d_ridx[row_a];
+      Idx ridx_b = d_ridx[row_b];
+      // Each warp reads consecutive entries in both batches. Issue both packed reads
+      // before decoding either symbol, then consume them with the existing atomics.
+      auto packed_a = matrix.gidx_iter.Load(IterIdx(matrix, ridx_a, fidx_a));
+      auto packed_b = matrix.gidx_iter.Load(IterIdx(matrix, ridx_b, fidx_b));
+      auto bin_a = matrix.gidx_iter.Decode(packed_a);
+      auto bin_b = matrix.gidx_iter.Decode(packed_b);
+      accumulate(bin_a, ridx_a, fidx_a);
+      accumulate(bin_b, ridx_b, fidx_b);
+    }
+  }
+
+  // Also handles an incomplete final pair without reading beyond the segment.
+  for (; idx < end; idx += Policy::kBlockThreads) {
     // unrolled version unravel to save registers:
     // auto [ridx, fidx] = unravel_index(idx, (n_rows, feature_stride));
     //
@@ -197,16 +235,7 @@ __device__ void HistKernelSegment(Accessor const& matrix, FeatureGroup const& gr
     auto fidx = fidx_in_set + group.start_feature;
 
     bst_bin_t compressed_bin = matrix.gidx_iter[IterIdx(matrix, ridx, fidx)];
-    if (Policy::kDense || compressed_bin != static_cast<bst_bin_t>(matrix.NullValue())) {
-      auto g = LoadGpair(gpair + ridx);
-      if constexpr (Policy::kCompressed) {
-        compressed_bin += matrix.feature_segments[fidx];
-      }
-      if constexpr (Policy::kSharedMem) {
-        compressed_bin -= group.start_bin;
-      }
-      atomic_add(compressed_bin, g);
-    }
+    accumulate(compressed_bin, ridx, fidx);
   }
 }
 

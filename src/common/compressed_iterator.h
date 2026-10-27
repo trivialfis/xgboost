@@ -221,7 +221,14 @@ class CompressedIterator {
     return this->symbol_bits_;
   }
 
-  XGBOOST_DEVICE reference operator[](std::size_t idx) const {
+  // Separate loading from decoding so callers can overlap independent reads.
+  struct LoadedSymbol {
+    std::uint64_t bits;
+    std::int32_t tail_padding_bits;
+    std::int32_t bit_shift;
+  };
+
+  XGBOOST_DEVICE LoadedSymbol Load(std::size_t idx) const {
     constexpr std::int32_t kBitsPerByte = 8;
     // Read 5 bytes - the maximum we will need assuming symbols fit in a 32bit int.
     constexpr std::int32_t kBytes = 5;
@@ -251,16 +258,23 @@ class CompressedIterator {
     std::uint64_t tmp = detail::Load64u(ptr);
     // tail_padding = 8 - 5 - head_padding
     std::int32_t tail_padding_bits = (sizeof(tmp) - kBytes - head_padding) * kBitsPerByte;
+    std::int32_t bit_shift = (kBitsPerByte - ((idx + 1) * symbol_bits_)) % kBitsPerByte;
+    return {tmp, tail_padding_bits, bit_shift};
+  }
+
+  XGBOOST_DEVICE reference Decode(LoadedSymbol symbol) const {
     // Unsigned logical shift. Knock out the unneeded bits loaded by the vector load. We
     // assume little endian here.
-    tmp = ByteSwap(tmp << tail_padding_bits);
-
-    // Knock out the unneeded bits from the right
-    std::int32_t bit_shift = (kBitsPerByte - ((idx + 1) * symbol_bits_)) % kBitsPerByte;
-    tmp >>= bit_shift;
+    auto tmp = ByteSwap(symbol.bits << symbol.tail_padding_bits);
+    // Knock out the unneeded bits from the right.
+    tmp >>= symbol.bit_shift;
     // Take exactly symbol_bits_ number of bits by masking off unneeded bits.
     std::uint64_t mask = (static_cast<std::uint64_t>(1) << symbol_bits_) - 1;
     return static_cast<T>(tmp & mask);
+  }
+
+  XGBOOST_DEVICE reference operator[](std::size_t idx) const {
+    return this->Decode(this->Load(idx));
   }
 };
 
