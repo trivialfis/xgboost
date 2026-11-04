@@ -2,6 +2,8 @@
  * Copyright 2020-2024, XGBoost contributors
  */
 #include <gtest/gtest.h>
+
+#include <utility>  // for pair
 #include <thrust/host_vector.h>
 
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
@@ -10,6 +12,13 @@
 
 namespace xgboost::tree {
 namespace {
+auto ReadSplitSums(GPUHistEvaluator& evaluator, bst_node_t nidx, DefaultDirection dir) {
+  GradientPairInt64 parent = thrust::device_pointer_cast(evaluator.GetNodeSum(nidx, 1).data())[0];
+  GradientPairInt64 child = thrust::device_pointer_cast(evaluator.GetSplitSum(nidx, 1).data())[0];
+  auto sibling = parent - child;
+  return dir == kRightDir ? std::pair{child, sibling} : std::pair{sibling, child};
+}
+
 auto ZeroParam() {
   auto args = Args{{"min_child_weight", "0"}, {"lambda", "0"}};
   TrainParam tparam;
@@ -60,11 +69,12 @@ TEST_F(TestCategoricalSplitWithMissing, GPUHistEvaluator) {
 
   evaluator.Reset(&ctx, cuts_, dh::ToSpan(feature_types), feature_set.size(), param_);
   DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
+  auto [left_sum, right_sum] = ReadSplitSums(evaluator, input.nidx, result.dir);
 
   ASSERT_EQ(result.thresh, 1);
   this->CheckResult(result.loss_chg, result.findex, result.fvalue, result.is_cat,
-                    result.dir == kLeftDir, quantiser.ToFloatingPoint(result.left_sum),
-                    quantiser.ToFloatingPoint(result.right_sum));
+                    result.dir == kLeftDir, quantiser.ToFloatingPoint(left_sum),
+                    quantiser.ToFloatingPoint(right_sum));
 }
 
 TEST(GpuHist, PartitionBasic) {
@@ -111,7 +121,6 @@ TEST(GpuHist, PartitionBasic) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
 
   {
@@ -125,7 +134,6 @@ TEST(GpuHist, PartitionBasic) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("10000000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
   {
     // All -1.0, gain from splitting should be 0.0
@@ -136,7 +144,6 @@ TEST(GpuHist, PartitionBasic) {
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_FLOAT_EQ(result.loss_chg, 0.0f);
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
   // With 3.0/3.0 missing values
   // Forward, first 2 categories are selected, while the last one go to left along with missing
@@ -150,7 +157,6 @@ TEST(GpuHist, PartitionBasic) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
     EXPECT_EQ(result.dir, kLeftDir);
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
   {
     // -1.0s go right
@@ -163,7 +169,6 @@ TEST(GpuHist, PartitionBasic) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("10100000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
   {
     // -1.0s go right
@@ -175,7 +180,6 @@ TEST(GpuHist, PartitionBasic) {
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(cats, std::bitset<32>("01000000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
 }
 
@@ -220,7 +224,6 @@ TEST(GpuHist, PartitionTwoFeatures) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(result.findex, 1);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
 
   {
@@ -233,7 +236,6 @@ TEST(GpuHist, PartitionTwoFeatures) {
     auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
     EXPECT_EQ(result.findex, 1);
     EXPECT_EQ(cats, std::bitset<32>("10000000000000000000000000000000"));
-    EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
   }
 }
 
@@ -330,7 +332,6 @@ void TestEvaluateSingleSplit(bool is_categorical) {
   } else {
     EXPECT_EQ(result.fvalue, 11.0);
   }
-  EXPECT_EQ(result.left_sum + result.right_sum, parent_sum);
 }
 
 TEST(GpuHist, EvaluateSingleSplit) { TestEvaluateSingleSplit(false); }
@@ -355,12 +356,13 @@ TEST(GpuHist, EvaluateSingleSplitMissing) {
 
   GPUHistEvaluator evaluator(tparam, feature_set.size(), FstCU());
   DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
+  auto [left_sum, right_sum] = ReadSplitSums(evaluator, input.nidx, result.dir);
 
   EXPECT_EQ(result.findex, 0);
   EXPECT_EQ(result.fvalue, 1.0);
   EXPECT_EQ(result.dir, kRightDir);
-  EXPECT_EQ(result.left_sum, quantiser.ToFixedPoint(GradientPairPrecise(-0.5, 0.5)));
-  EXPECT_EQ(result.right_sum, quantiser.ToFixedPoint(GradientPairPrecise(1.5, 1.0)));
+  EXPECT_EQ(left_sum, quantiser.ToFixedPoint(GradientPairPrecise(-0.5, 0.5)));
+  EXPECT_EQ(right_sum, quantiser.ToFixedPoint(GradientPairPrecise(1.5, 1.0)));
 }
 
 TEST(GpuHist, MonotoneEqualWeights) {
@@ -422,11 +424,12 @@ TEST(GpuHist, EvaluateSingleSplitFeatureSampling) {
 
   GPUHistEvaluator evaluator(tparam, 2, FstCU());
   DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
+  auto [left_sum, right_sum] = ReadSplitSums(evaluator, input.nidx, result.dir);
 
   EXPECT_EQ(result.findex, 1);
   EXPECT_EQ(result.fvalue, 11.0);
-  EXPECT_EQ(result.left_sum, quantiser.ToFixedPoint(GradientPairPrecise(-0.5, 0.5)));
-  EXPECT_EQ(result.right_sum, quantiser.ToFixedPoint(GradientPairPrecise(0.5, 0.5)));
+  EXPECT_EQ(left_sum, quantiser.ToFixedPoint(GradientPairPrecise(-0.5, 0.5)));
+  EXPECT_EQ(right_sum, quantiser.ToFixedPoint(GradientPairPrecise(0.5, 0.5)));
 }
 
 // Features 0 and 1 have identical gain, the algorithm must select 0
@@ -478,18 +481,18 @@ TEST(GpuHist, EvaluateSingleSplitDense) {
     EvaluateSplitSharedInputs shared_inputs{
         param, quantiser, {}, dh::ToSpan(feature_segments), dh::ToSpan(feature_values), is_dense};
     GPUHistEvaluator evaluator(tparam, 2, FstCU());
-    return evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
+    auto entry = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs);
+    return std::pair{entry.split, ReadSplitSums(evaluator, entry.nidx, entry.split.dir)};
   };
-  auto sparse = evaluate(false);
-  auto dense = evaluate(true);
+  auto [sparse, sparse_sums] = evaluate(false);
+  auto [dense, dense_sums] = evaluate(true);
 
   EXPECT_EQ(dense.dir, kRightDir);
   EXPECT_EQ(dense.dir, sparse.dir);
   EXPECT_EQ(dense.findex, sparse.findex);
   EXPECT_EQ(dense.fvalue, sparse.fvalue);
   EXPECT_EQ(dense.loss_chg, sparse.loss_chg);
-  EXPECT_EQ(dense.left_sum, sparse.left_sum);
-  EXPECT_EQ(dense.right_sum, sparse.right_sum);
+  EXPECT_EQ(dense_sums, sparse_sums);
 }
 
 TEST(GpuHist, EvaluateSplits) {
@@ -521,11 +524,11 @@ TEST(GpuHist, EvaluateSplits) {
   evaluator.EvaluateSplits(&ctx, {1, 2}, input_left.feature_set.size(), dh::ToSpan(inputs),
                            shared_inputs, dh::ToSpan(out_splits));
 
-  DeviceSplitCandidate result_left = GPUExpandEntry{out_splits[0]}.split;
+  DeviceSplitCandidate result_left = static_cast<GPUExpandEntry>(out_splits[0]).split;
   EXPECT_EQ(result_left.findex, 1);
   EXPECT_EQ(result_left.fvalue, 11.0);
 
-  DeviceSplitCandidate result_right = GPUExpandEntry{out_splits[1]}.split;
+  DeviceSplitCandidate result_right = static_cast<GPUExpandEntry>(out_splits[1]).split;
   EXPECT_EQ(result_right.findex, 0);
   EXPECT_EQ(result_right.fvalue, 1.0);
 }

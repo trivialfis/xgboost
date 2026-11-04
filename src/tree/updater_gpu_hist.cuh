@@ -240,7 +240,7 @@ class MultiTargetHistMaker {
                      cuts_->TotalBins() * n_split_targets, force_global);
   }
 
-  [[nodiscard]] MultiExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
+  [[nodiscard]] GPUExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
     xgboost_NVTX_FN_RANGE();
 
     auto d_gpair = split_gpair_.View(ctx_->Device());
@@ -278,22 +278,20 @@ class MultiTargetHistMaker {
     auto entry = this->evaluator_.EvaluateSingleSplit(ctx_, input, shared_inputs);
     auto weights = this->evaluator_.GetNodeWeights(n_targets);
     // Root's sum_hess is the sum of left and right child hessians
-    float root_sum_hess = static_cast<float>(entry.left_sum + entry.right_sum);
+    float root_sum_hess = static_cast<float>(entry.left_hess + entry.right_hess);
     auto base_weight = weights.Base(RegTree::kRoot);
     p_tree->SetRoot(linalg::MakeVec(this->ctx_->Device(), base_weight), root_sum_hess);
 
     return entry;
   }
 
-  void ApplySplit(std::vector<MultiExpandEntry> const& h_candidates, RegTree* p_tree) {
+  void ApplySplit(std::vector<GPUExpandEntry> const& h_candidates, RegTree* p_tree) {
     xgboost_NVTX_FN_RANGE();
 
     CHECK(!h_candidates.empty());
     auto n_targets = this->split_gpair_.Shape(1);
-    dh::device_vector<MultiExpandEntry> candidates{h_candidates};
 
-    // Candidate spans can become stale while entries wait in the loss-guide queue, so
-    // look up the persistent weight storage by node ID.
+    // Look up persistent weight storage by node ID for queued candidates.
     auto weights = this->evaluator_.GetNodeWeights(n_targets);
 
     ExpandBatch batch;
@@ -314,9 +312,9 @@ class MultiTargetHistMaker {
       }
       batch.push_back({{candidate.nidx, static_cast<bst_feature_t>(candidate.split.findex),
                         candidate.split.fvalue, candidate.split.dir == kLeftDir, cat_bits},
-                       {base_weight, candidate.left_sum + candidate.right_sum},
-                       {left_weight, candidate.left_sum},
-                       {right_weight, candidate.right_sum},
+                       {base_weight, candidate.left_hess + candidate.right_hess},
+                       {left_weight, candidate.left_hess},
+                       {right_weight, candidate.right_hess},
                        candidate.split.loss_chg});
     }
 
@@ -329,8 +327,7 @@ class MultiTargetHistMaker {
     }
 
     this->evaluator_.ApplyTreeSplit(this->ctx_, p_tree,
-                                    common::Span<MultiExpandEntry const>{h_candidates},
-                                    dh::ToSpan(candidates), n_targets);
+                                    common::Span<GPUExpandEntry const>{h_candidates}, n_targets);
   }
   /**
    * @brief Calculate output weights using value gradients and finalize prediction leaves.
@@ -410,7 +407,7 @@ class MultiTargetHistMaker {
   };
 
   PartitionNodes CreatePartitionNodes(RegTree const* p_tree,
-                                      std::vector<MultiExpandEntry> const& candidates) {
+                                      std::vector<GPUExpandEntry> const& candidates) {
     PartitionNodes nodes(candidates.size());
     auto split_types = p_tree->GetSplitTypes(DeviceOrd::CPU());
     for (std::size_t i = 0, n = candidates.size(); i < n; i++) {
@@ -453,7 +450,7 @@ class MultiTargetHistMaker {
     }
   };
 
-  void ReduceHist(DMatrix* p_fmat, std::vector<MultiExpandEntry> const& candidates,
+  void ReduceHist(DMatrix* p_fmat, std::vector<GPUExpandEntry> const& candidates,
                   std::vector<bst_node_t> const& build_nidx,
                   std::vector<bst_node_t> const& subtraction_nidx) {
     if (candidates.empty()) {
@@ -483,9 +480,8 @@ class MultiTargetHistMaker {
     }
   }
 
-  void PartitionAndBuildHist(DMatrix* p_fmat, std::vector<MultiExpandEntry> const& expand_set,
-                             std::vector<MultiExpandEntry> const& candidates,
-                             RegTree const* p_tree) {
+  void PartitionAndBuildHist(DMatrix* p_fmat, std::vector<GPUExpandEntry> const& expand_set,
+                             std::vector<GPUExpandEntry> const& candidates, RegTree const* p_tree) {
     if (expand_set.empty()) {
       return;
     }
@@ -501,8 +497,8 @@ class MultiTargetHistMaker {
 
     std::vector<bst_node_t> build_nidx(candidates.size());
     std::vector<bst_node_t> subtraction_nidx(candidates.size());
-    AssignNodes(*p_tree, candidates, build_nidx, subtraction_nidx, [](MultiExpandEntry const& e) {
-      bool fewer_right = e.right_sum < e.left_sum;
+    AssignNodes(*p_tree, candidates, build_nidx, subtraction_nidx, [](GPUExpandEntry const& e) {
+      bool fewer_right = e.right_hess < e.left_hess;
       return fewer_right;
     });
 
@@ -538,15 +534,15 @@ class MultiTargetHistMaker {
     this->ReduceHist(p_fmat, candidates, build_nidx, subtraction_nidx);
   }
 
-  void EvaluateSplits(std::vector<MultiExpandEntry> const& candidates, RegTree const& tree,
-                      common::Span<MultiExpandEntry> pinned_candidates_out) {
+  void EvaluateSplits(std::vector<GPUExpandEntry> const& candidates, RegTree const& tree,
+                      common::Span<GPUExpandEntry> pinned_candidates_out) {
     if (candidates.empty()) {
       return;
     }
     xgboost_NVTX_FN_RANGE();
 
     dh::DeviceUVector<MultiEvaluateSplitInputs> inputs(2 * candidates.size());
-    dh::DeviceUVector<MultiExpandEntry> outputs(2 * candidates.size());
+    dh::DeviceUVector<GPUExpandEntry> outputs(2 * candidates.size());
 
     std::vector<MultiEvaluateSplitInputs> h_node_inputs(inputs.size());
 
@@ -646,7 +642,7 @@ class MultiTargetHistMaker {
   void GrowTree(linalg::Matrix<GradientPair>* split_gpair, DMatrix* p_fmat, ObjInfo const*,
                 RegTree* p_tree, HostDeviceVector<bst_node_t>* p_out_position) {
     xgboost_NVTX_FN_RANGE();
-    Driver<MultiExpandEntry> driver{
+    Driver<GPUExpandEntry> driver{
         ScaleMinSplitLoss(param_, split_gpair->Shape(1), p_tree->NumTargets()), kMaxNodeBatchSize};
 
     this->Reset(split_gpair, p_fmat);
@@ -658,12 +654,12 @@ class MultiTargetHistMaker {
       this->ApplySplit(expand_set, p_tree);
       // Get the candidates we are allowed to expand further
       // e.g. We do not bother further processing nodes whose children are beyond max depth
-      std::vector<MultiExpandEntry> valid_candidates;
+      std::vector<GPUExpandEntry> valid_candidates;
       std::copy_if(expand_set.begin(), expand_set.end(), std::back_inserter(valid_candidates),
                    [&](auto const& e) { return driver.IsChildValid(e); });
 
       // Allocate children nodes.
-      auto new_candidates = pinned_.GetSpan(valid_candidates.size() * 2, MultiExpandEntry{});
+      auto new_candidates = pinned_.GetSpan(valid_candidates.size() * 2, GPUExpandEntry{});
 
       this->PartitionAndBuildHist(p_fmat, expand_set, valid_candidates, p_tree);
 

@@ -1,9 +1,9 @@
 /**
  * Copyright 2020-2026, XGBoost Contributors
  */
+#include <thrust/fill.h>                         // for fill
 #include <thrust/iterator/transform_iterator.h>  // for make_transform_iterator
 #include <thrust/logical.h>                      // for any_of
-#include <thrust/reduce.h>                       // for reduce
 #include <thrust/sort.h>                         // for stable_sort_by_key
 
 #include <algorithm>                               // for max_element
@@ -22,7 +22,6 @@
 #include "../../common/cuda_context.cuh"
 #include "../../common/hist_util.h"   // for HistogramCuts
 #include "../../common/nvtx_utils.h"  // for xgboost_NVTX_FN_RANGE
-#include "../tree_view.h"             // for MultiTargetTreeView
 #include "evaluate_splits.cuh"        // for GPUHistEvaluator
 #include "quantiser.cuh"              // for GradientQuantiser
 #include "xgboost/base.h"             // for GradientPairInt64
@@ -30,6 +29,11 @@
 
 namespace xgboost::tree::cuda_impl {
 namespace {
+struct ChildNodes {
+  bst_node_t parent, left, right;
+  DefaultDirection dir;
+};
+
 /**
  * @brief Calculate the gradient index for the reverse pass
  *
@@ -248,7 +252,7 @@ struct EvaluateSplitAgent {
   __device__ void Numerical(MultiEvaluateSplitInputs const &node,
                             MultiEvaluateSplitSharedInputs const &shared,
                             common::Span<GradientPairInt64 const> node_scan,
-                            MultiSplitCandidate *best_split) {
+                            HistSplitCandidate *best_split) {
     // Calculate split gain for each bin
     auto n_split_targets = shared.Targets();
     auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
@@ -303,7 +307,7 @@ struct EvaluateSplitAgent {
                          MultiEvaluateSplitSharedInputs const &shared,
                          common::Span<GradientPairInt64 const> others,
                          common::Span<GradientPairInt64 const> match,
-                         MultiSplitCandidate *best_split) {
+                         HistSplitCandidate *best_split) {
     auto n_split_targets = shared.Targets();
     auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
 
@@ -344,7 +348,7 @@ struct EvaluateSplitAgent {
   __device__ void Partition(MultiEvaluateSplitInputs const &node,
                             MultiEvaluateSplitSharedInputs const &shared,
                             common::Span<GradientPairInt64 const> node_scan,
-                            MultiSplitCandidate *best_split) {
+                            HistSplitCandidate *best_split) {
     auto n_split_targets = shared.Targets();
     auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
 
@@ -393,7 +397,7 @@ template <std::int32_t kBlockThreads, typename BinScans>
 __global__ __launch_bounds__(kBlockThreads) void EvaluateSplitsKernel(
     common::Span<MultiEvaluateSplitInputs const> nodes, MultiEvaluateSplitSharedInputs shared,
     BinScans bin_scans, TreeEvaluator::SplitEvaluator<EvalParam> evaluator,
-    common::Span<MultiSplitCandidate> out_candidates) {
+    common::Span<HistSplitCandidate> out_candidates) {
   static_assert(kBlockThreads % dh::WarpThreads() == 0);
 
   constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
@@ -409,11 +413,11 @@ __global__ __launch_bounds__(kBlockThreads) void EvaluateSplitsKernel(
   using AgentT = EvaluateSplitAgent;
   __shared__ typename AgentT::MaxReduceT::TempStorage temp_storage[kWarpsPerBlk];
   // Aligned && shared storage for best_split
-  __shared__ cub::Uninitialized<MultiSplitCandidate> split_storage[kWarpsPerBlk];
+  __shared__ cub::Uninitialized<HistSplitCandidate> split_storage[kWarpsPerBlk];
   auto &best_split = split_storage[warp_id_in_blk].Alias();
   auto lane_id = cuda::ptx::get_sreg_laneid();
   if (lane_id == 0) {
-    best_split = MultiSplitCandidate{};
+    best_split = HistSplitCandidate{};
   }
   __syncwarp();
 
@@ -490,11 +494,11 @@ void GPUHistEvaluator::Reset(Context const *ctx, common::Span<std::uint32_t cons
                      });
 }
 
-[[nodiscard]] MultiExpandEntry GPUHistEvaluator::EvaluateSingleSplit(
+[[nodiscard]] GPUExpandEntry GPUHistEvaluator::EvaluateSingleSplit(
     Context const *ctx, MultiEvaluateSplitInputs const &input,
     MultiEvaluateSplitSharedInputs const &shared_inputs) {
   dh::device_vector<MultiEvaluateSplitInputs> inputs{input};
-  dh::device_vector<MultiExpandEntry> outputs(1);
+  dh::device_vector<GPUExpandEntry> outputs(1);
 
   auto d_outputs = dh::ToSpan(outputs);
   this->EvaluateSplits(ctx, dh::ToSpan(inputs), shared_inputs, input.nidx, d_outputs);
@@ -575,16 +579,17 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
                                       common::Span<MultiEvaluateSplitInputs const> d_inputs,
                                       MultiEvaluateSplitSharedInputs const &shared_inputs,
                                       bst_node_t max_nidx,
-                                      common::Span<MultiExpandEntry> out_splits) {
+                                      common::Span<GPUExpandEntry> out_splits) {
   auto n_split_targets = shared_inputs.Targets();
   auto evaluator = this->GetEvaluator();
   CHECK_GT(n_split_targets, 0);
   CHECK_EQ(n_split_targets, evaluator.n_targets);
   CHECK_EQ(n_split_targets, shared_inputs.roundings.size());
-  CHECK_GE(shared_inputs.n_total_bins_per_tar, 1);
   auto n_features = shared_inputs.max_active_feature;
-  CHECK_GE(n_features, 1);
-  CHECK_LT(n_features, shared_inputs.feature_segments.size());
+  if (n_features > 0) {
+    CHECK_GE(shared_inputs.n_total_bins_per_tar, 1);
+    CHECK_LT(n_features, shared_inputs.feature_segments.size());
+  }
 
   std::uint32_t n_nodes = d_inputs.size();
   CHECK_EQ(n_nodes, out_splits.size());
@@ -592,6 +597,7 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
   if (n_nodes == 0) {
     return;
   }
+  copy_stream_.View().Sync();
 
   // Allocate weight and split sum storage on demand for the maximum node ID being evaluated.
   this->AllocNodeWeight(max_nidx, n_split_targets);
@@ -620,13 +626,13 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
 
   // The values are node-local bin indices. Sort by (node, feature, score)
   dh::CachingDeviceUVector<std::size_t> sorted_idx;
-  if (this->need_sort_histogram_) {
+  if (this->need_sort_histogram_ && n_features > 0) {
     SortHistogram(ctx, shared_inputs, d_inputs, evaluator, &sorted_idx);
   }
   auto d_sorted_idx = common::Span<std::size_t const>{dh::ToSpan(sorted_idx)};
 
   // Launch histogram scan kernel, each warp handles one target of one feature of one node.
-  {
+  if (n_features > 0) {
     std::uint32_t constexpr kBlockThreads = 128;
     constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
     auto n_warps = n_nodes * n_split_targets * n_features;
@@ -637,8 +643,8 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
   }
 
   // Cache short-lived scratch to avoid synchronizing cudaFree calls between evaluation stages.
-  dh::CachingDeviceUVector<MultiSplitCandidate> d_splits(n_nodes * n_features);
-  {
+  dh::CachingDeviceUVector<HistSplitCandidate> d_splits(n_nodes * n_features);
+  if (n_features > 0) {
     // One warp per block distributes features across more SMs for small node batches.
     std::uint32_t constexpr kBlockThreads = dh::WarpThreads();
     constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
@@ -659,8 +665,8 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
   // Reduce each node's feature candidates, preferring the smaller feature index on ties.
   auto offsets =
       dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) { return i * n_features; });
-  dh::CachingDeviceUVector<MultiSplitCandidate> best_splits(out_splits.size());
-  auto best = [] XGBOOST_DEVICE(MultiSplitCandidate const &lhs, MultiSplitCandidate const &rhs) {
+  dh::CachingDeviceUVector<HistSplitCandidate> best_splits(out_splits.size());
+  auto best = [] XGBOOST_DEVICE(HistSplitCandidate const &lhs, HistSplitCandidate const &rhs) {
     if (lhs.loss_chg > rhs.loss_chg) {
       return lhs;
     }
@@ -669,19 +675,24 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
     }
     return lhs.findex <= rhs.findex ? lhs : rhs;
   };
-  std::size_t temp_bytes = 0;
-  dh::safe_cuda(cub::DeviceSegmentedReduce::Reduce(
-      nullptr, temp_bytes, s_d_splits.data(), best_splits.data(), n_nodes, offsets, offsets + 1,
-      best, MultiSplitCandidate{}, ctx->CUDACtx()->Stream()));
-  dh::TemporaryArray<std::uint8_t> temp(temp_bytes);
-  dh::safe_cuda(cub::DeviceSegmentedReduce::Reduce(
-      temp.data().get(), temp_bytes, s_d_splits.data(), best_splits.data(), n_nodes, offsets,
-      offsets + 1, best, MultiSplitCandidate{}, ctx->CUDACtx()->Stream()));
+  if (n_features == 0) {
+    thrust::fill(ctx->CUDACtx()->CTP(), best_splits.begin(), best_splits.end(),
+                 HistSplitCandidate{});
+  } else {
+    std::size_t temp_bytes = 0;
+    dh::safe_cuda(cub::DeviceSegmentedReduce::Reduce(
+        nullptr, temp_bytes, s_d_splits.data(), best_splits.data(), n_nodes, offsets, offsets + 1,
+        best, HistSplitCandidate{}, ctx->CUDACtx()->Stream()));
+    dh::TemporaryArray<std::uint8_t> temp(temp_bytes);
+    dh::safe_cuda(cub::DeviceSegmentedReduce::Reduce(
+        temp.data().get(), temp_bytes, s_d_splits.data(), best_splits.data(), n_nodes, offsets,
+        offsets + 1, best, HistSplitCandidate{}, ctx->CUDACtx()->Stream()));
+  }
   auto d_best_splits = dh::ToSpan(best_splits);
 
   dh::LaunchN(n_nodes, ctx->CUDACtx()->Stream(), [=] __device__(std::size_t nidx_in_set) {
     auto input = d_inputs[nidx_in_set];
-    MultiSplitCandidate best_split = d_best_splits[nidx_in_set];
+    HistSplitCandidate best_split = d_best_splits[nidx_in_set];
     common::Span<common::CatBitField::value_type> node_cats;
     if (!d_split_cats.empty()) {
       node_cats = d_split_cats.subspan(input.nidx * node_cat_storage_size, node_cat_storage_size);
@@ -707,8 +718,7 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
 
     if (best_split.child_sum.empty()) {
       // Invalid split
-      out_splits[nidx_in_set] = {nidx, input.depth, best_split};
-      out_splits[nidx_in_set].UpdateHessian(parent_hess, 0.0);
+      out_splits[nidx_in_set] = {nidx, input.depth, best_split, parent_hess, 0.0};
       return;
     }
 
@@ -716,6 +726,8 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
       common::CatBitField cats{node_cats};
       if (!isnan(best_split.fvalue)) {  // OHE
         cats.Set(common::AsCat(best_split.fvalue));
+        best_split.thresh = common::AsCat(best_split.fvalue);
+        best_split.fvalue = std::numeric_limits<float>::quiet_NaN();
       } else {  // Partition
         auto fidx = best_split.findex;
         auto f_begin = shared_inputs.feature_segments[fidx];
@@ -773,80 +785,80 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
     }
 
     // Set up the output entry after persisting its weights and split sum by node ID.
-    out_splits[nidx_in_set] = {nidx, input.depth, best_split};
+    out_splits[nidx_in_set] = {nidx, input.depth, best_split, left_hess, right_hess};
     out_splits[nidx_in_set].split.loss_chg -= parent_gain;
-    out_splits[nidx_in_set].UpdateHessian(left_hess, right_hess);
   });
 }
 
-void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const *p_tree,
-                                      common::Span<MultiExpandEntry const> h_candidates,
-                                      common::Span<MultiExpandEntry const> d_candidates,
+void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const *tree,
+                                      common::Span<GPUExpandEntry const> candidates,
                                       bst_target_t n_split_targets) {
   xgboost_NVTX_FN_RANGE();
-  CHECK_EQ(h_candidates.size(), d_candidates.size());
-  CHECK(!h_candidates.empty());
+  CHECK(!candidates.empty());
   CHECK_EQ(n_split_targets, this->GetEvaluator().n_targets);
 
+  std::vector<ChildNodes> children;
+  children.reserve(candidates.size());
+  bst_node_t max_node{0};
   auto weights = this->GetNodeWeights(n_split_targets);
-  for (auto const &candidate : h_candidates) {
-    auto left = p_tree->LeftChild(candidate.nidx);
-    auto right = p_tree->RightChild(candidate.nidx);
-    common::Span<float const> left_weight = weights.Left(candidate.nidx);
-    common::Span<float const> right_weight = weights.Right(candidate.nidx);
+  for (auto const &candidate : candidates) {
+    auto left = tree->LeftChild(candidate.nidx);
+    auto right = tree->RightChild(candidate.nidx);
+    max_node = std::max({max_node, left, right});
+    children.push_back({candidate.nidx, left, right, candidate.split.dir});
     this->tree_evaluator_->AddSplit(candidate.nidx, left, right, candidate.split.findex,
-                                    linalg::MakeVec(ctx->Device(), left_weight),
-                                    linalg::MakeVec(ctx->Device(), right_weight));
+                                    linalg::MakeVec(ctx->Device(), weights.Left(candidate.nidx)),
+                                    linalg::MakeVec(ctx->Device(), weights.Right(candidate.nidx)));
   }
 
   // Assign the node sums here, for the next evaluate split call.
-  auto mt_tree = MultiTargetTreeView{ctx->Device(), false, p_tree};
-  auto max_in_it = dh::MakeIndexTransformIter([=] __device__(std::size_t i) -> bst_node_t {
-    return std::max(mt_tree.LeftChild(d_candidates[i].nidx),
-                    mt_tree.RightChild(d_candidates[i].nidx));
-  });
-  auto max_node = thrust::reduce(
-      ctx->CUDACtx()->CTP(), max_in_it, max_in_it + d_candidates.size(), 0,
-      [=] XGBOOST_DEVICE(bst_node_t l, bst_node_t r) { return cuda::std::max(l, r); });
   this->AllocNodeSum(max_node, n_split_targets);
-
   auto node_sums = this->node_sums_.View();
-  // Use the internal split sums buffer instead of candidate.split.child_sum . It may be
-  // stale in loss-guide grow policy (entries can remain in priority queue across
-  // evaluation rounds).
+  // Persistent sums remain valid while candidates wait in the loss-guide queue.
   auto split_sums = this->split_sums_.View();
-
-  dh::LaunchN(n_split_targets * d_candidates.size(), ctx->CUDACtx()->Stream(),
-              [=] XGBOOST_DEVICE(std::size_t i) {
-                auto get_node_sum = [&](bst_node_t nidx) {
-                  return GetNodeSumImpl(node_sums, nidx, n_split_targets);
-                };
-                auto nidx_in_set = i / n_split_targets;
+  dh::caching_device_vector<ChildNodes> d_children(children);
+  auto nodes = dh::ToSpan(d_children);
+  dh::LaunchN(n_split_targets * nodes.size(), ctx->CUDACtx()->Stream(),
+              [=] __device__(std::size_t i) {
+                auto const &node = nodes[i / n_split_targets];
                 auto t = i % n_split_targets;
-
-                auto const &candidate = d_candidates[nidx_in_set];
-                auto const &best_split = candidate.split;
-
-                auto parent_sum = get_node_sum(candidate.nidx);
-                // Look up split sum from persistent buffer by node id.
-                // Use split_targets for indexing since that's what was used during storage.
-                auto split_sum = GetNodeSumImpl(split_sums, candidate.nidx, n_split_targets);
-                auto left_sum = get_node_sum(mt_tree.LeftChild(candidate.nidx));
-                auto right_sum = get_node_sum(mt_tree.RightChild(candidate.nidx));
-
-                auto split_sum_t = split_sum[t];
-                auto sibling_sum = parent_sum[t] - split_sum_t;
-                if (best_split.dir == kRightDir) {
-                  // forward pass, node_sum is the left sum
-                  left_sum[t] = split_sum_t;
-                  right_sum[t] = sibling_sum;
+                auto parent = GetNodeSumImpl(node_sums, node.parent, n_split_targets);
+                auto split = GetNodeSumImpl(split_sums, node.parent, n_split_targets);
+                auto left = GetNodeSumImpl(node_sums, node.left, n_split_targets);
+                auto right = GetNodeSumImpl(node_sums, node.right, n_split_targets);
+                auto sibling = parent[t] - split[t];
+                if (node.dir == kRightDir) {
+                  left[t] = split[t];
+                  right[t] = sibling;
                 } else {
-                  // backward pass, node_sum is the right sum
-                  right_sum[t] = split_sum_t;
-                  left_sum[t] = sibling_sum;
+                  right[t] = split[t];
+                  left[t] = sibling;
                 }
               });
 }
+
+std::vector<float> GPUHistEvaluator::GetHostNodeWeights(
+    Context const *ctx, common::Span<GPUExpandEntry const> candidates) const {
+  auto stride = NodeWeightBuffer::kWeightsPerNode * this->GetEvaluator().n_targets;
+  std::vector<bst_node_t> nidx;
+  nidx.reserve(candidates.size());
+  for (auto const &candidate : candidates) {
+    nidx.push_back(candidate.nidx);
+  }
+  dh::caching_device_vector<bst_node_t> d_nidx(nidx);
+  auto nodes = dh::ToSpan(d_nidx);
+  dh::TemporaryArray<float> storage(candidates.size() * stride);
+  auto out = dh::ToSpan(storage);
+  auto weights = dh::ToSpan(node_weights_);
+  dh::LaunchN(out.size(), ctx->CUDACtx()->Stream(), [=] __device__(std::size_t i) {
+    out[i] = weights[nodes[i / stride] * stride + i % stride];
+  });
+  std::vector<float> result(out.size());
+  dh::CopyDeviceSpanToVector(&result, out);
+  ctx->CUDACtx()->Stream().Sync();
+  return result;
+}
+
 void GPUHistEvaluator::Reset(Context const *ctx, common::HistogramCuts const &cuts,
                              common::Span<FeatureType const> feature_types,
                              bst_feature_t n_features, TrainParam const &param) {
@@ -857,7 +869,7 @@ void GPUHistEvaluator::Reset(Context const *ctx, common::HistogramCuts const &cu
   }
 }
 
-void GPUHistEvaluator::CopyToHost(Context const *ctx, std::vector<bst_node_t> const &nidx) {
+void GPUHistEvaluator::CopyNodeCatsToHost(Context const *ctx, std::vector<bst_node_t> const &nidx) {
   if (this->node_cat_storage_size_ == 0 || nidx.empty()) {
     return;
   }
@@ -886,19 +898,9 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx, std::vector<bst_node_t
   if (inputs.empty()) {
     return;
   }
-  copy_stream_.View().Sync();
-  if (max_active_features == 0) {
-    auto evaluator = this->GetEvaluator();
-    dh::LaunchN(inputs.size(), ctx->CUDACtx()->Stream(), [=] __device__(std::size_t i) {
-      auto const &input = inputs[i];
-      DeviceSplitCandidate split;
-      split.left_sum = input.parent_sum;
-      auto base = evaluator.CalcWeight(input.nidx, shared.param,
-                                       shared.rounding.ToFloatingPoint(input.parent_sum));
-      out[i] = {input.nidx, input.depth, split, base, 0.0f, 0.0f};
-    });
-    return;
-  }
+  auto max_nidx = *std::max_element(nidx.cbegin(), nidx.cend());
+  this->AllocNodeSum(max_nidx, 1);
+  auto node_sums = this->node_sums_.View();
 
   dh::TemporaryArray<MultiEvaluateSplitInputs> node_storage(inputs.size());
   auto nodes = dh::ToSpan(node_storage);
@@ -910,9 +912,10 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx, std::vector<bst_node_t
       roundings[0] = shared.rounding;
     }
     auto const &input = inputs[i];
+    node_sums[input.nidx] = input.parent_sum;
     nodes[i] = {input.nidx,
                 input.depth,
-                {&input.parent_sum, 1},
+                {&node_sums[input.nidx], 1},
                 input.feature_set,
                 input.gradient_histogram.subspan(0, shared.feature_values.size())};
   });
@@ -927,43 +930,8 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx, std::vector<bst_node_t
   vector_shared.param = shared.param;
   vector_shared.is_dense = shared.is_dense;
 
-  dh::TemporaryArray<MultiExpandEntry> entry_storage(inputs.size());
-  auto entries = dh::ToSpan(entry_storage);
-  this->EvaluateSplits(ctx, nodes, vector_shared, *std::max_element(nidx.cbegin(), nidx.cend()),
-                       entries);
-
-  auto weights = this->GetNodeWeights(1);
-  auto sums = this->split_sums_.View();
-  dh::LaunchN(inputs.size(), ctx->CUDACtx()->Stream(), [=] __device__(std::size_t i) {
-    auto const &entry = entries[i];
-    auto const &candidate = entry.split;
-    DeviceSplitCandidate split;
-    split.loss_chg = candidate.loss_chg;
-    split.dir = candidate.dir;
-    split.findex = candidate.findex;
-    split.is_cat = candidate.is_cat;
-    split.fvalue = candidate.fvalue;
-    split.thresh = candidate.thresh;
-    // Scalar expansion entries use thresh for OHE as well as partition splits.
-    if (split.is_cat && !isnan(split.fvalue)) {
-      split.thresh = common::AsCat(split.fvalue);
-      split.fvalue = std::numeric_limits<float>::quiet_NaN();
-    }
-    float left_weight = 0.0f, right_weight = 0.0f;
-    if (candidate.child_sum.empty()) {
-      split.left_sum = inputs[i].parent_sum;
-    } else {
-      auto child = sums[entry.nidx];
-      auto sibling = inputs[i].parent_sum - child;
-      split.left_sum = split.dir == kRightDir ? child : sibling;
-      split.right_sum = split.dir == kRightDir ? sibling : child;
-      left_weight = weights.Left(entry.nidx)[0];
-      right_weight = weights.Right(entry.nidx)[0];
-    }
-    out[i] = {entry.nidx,  entry.depth, split, weights.Base(entry.nidx)[0],
-              left_weight, right_weight};
-  });
-  this->CopyToHost(ctx, nidx);
+  this->EvaluateSplits(ctx, nodes, vector_shared, max_nidx, out);
+  this->CopyNodeCatsToHost(ctx, nidx);
 }
 
 GPUExpandEntry GPUHistEvaluator::EvaluateSingleSplit(Context const *ctx, EvaluateSplitInputs input,
@@ -975,12 +943,4 @@ GPUExpandEntry GPUHistEvaluator::EvaluateSingleSplit(Context const *ctx, Evaluat
   return entries[0];
 }
 
-void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, GPUExpandEntry const &candidate,
-                                      RegTree *tree) {
-  auto weights = this->GetNodeWeights(1);
-  this->tree_evaluator_->AddSplit(candidate.nidx, tree->LeftChild(candidate.nidx),
-                                  tree->RightChild(candidate.nidx), candidate.split.findex,
-                                  linalg::MakeVec(ctx->Device(), weights.Left(candidate.nidx)),
-                                  linalg::MakeVec(ctx->Device(), weights.Right(candidate.nidx)));
-}
 }  // namespace xgboost::tree::cuda_impl

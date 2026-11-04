@@ -3,6 +3,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <utility>  // for pair
+
 #include <cmath>  // for isnan
 
 #include "../../../../src/tree/driver.h"
@@ -135,17 +137,10 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, Root) {
     AssertNodeWeightsEq(&evaluator, candidate.nidx, exp_base_weight, exp_left_weight,
                         exp_right_weight);
 
-    std::stringstream ss;
-    ss << candidate;
-    auto str = ss.str();
     if (one_pass != OnePass::kBackward) {
-      ASSERT_NE(str.find("left_sum"), std::string::npos);
-      ASSERT_EQ(str.find("right_sum"), std::string::npos);
-      AssertDeviceVecEq(candidate.split.child_sum, exp_left_sum);
+      AssertDeviceVecEq(evaluator.GetSplitSum(candidate.nidx, shared.Targets()), exp_left_sum);
     } else {
-      ASSERT_EQ(str.find("left_sum"), std::string::npos);
-      ASSERT_NE(str.find("right_sum"), std::string::npos);
-      AssertDeviceVecEq(candidate.split.child_sum, exp_right_sum);
+      AssertDeviceVecEq(evaluator.GetSplitSum(candidate.nidx, shared.Targets()), exp_right_sum);
     }
   }
 
@@ -176,7 +171,8 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalOneHot) {
   ASSERT_NEAR(candidate.split.loss_chg, 3.04239, 1e-5);
   // With no missing values the directions tie; CPU policy prefers missing-left.
   ASSERT_EQ(candidate.split.dir, kLeftDir);
-  ASSERT_EQ(static_cast<bst_cat_t>(candidate.split.fvalue), 3);
+  ASSERT_TRUE(std::isnan(candidate.split.fvalue));
+  ASSERT_EQ(candidate.split.thresh, 3);
   auto d_cats = evaluator.GetNodeCats(candidate.nidx);
   std::vector<std::uint32_t> h_cats(d_cats.size());
   dh::CopyDeviceSpanToVector(&h_cats, d_cats);
@@ -185,7 +181,7 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalOneHot) {
 
   // child_sum is the matching category, which goes right without missing values.
   std::vector<GradientPairInt64> exp_child_sum{{20, 16}, {39, 41}};
-  AssertDeviceVecEq(candidate.split.child_sum, exp_child_sum);
+  AssertDeviceVecEq(evaluator.GetSplitSum(candidate.nidx, shared.Targets()), exp_child_sum);
 
   // Left child = other categories {36,24},{57,87}; right child = category 3 {20,16},{39,41}.
   std::vector<float> exp_base_weight{-1.4, -0.75};
@@ -237,12 +233,12 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalPartition) {
   // Categories {2, 3} form the right child. `child_sum` stores the non-missing child,
   // which is the right child when missing values default left.
   std::vector<GradientPairInt64> exp_child_sum{{-2, 2}, {-2, 2}};
-  AssertDeviceVecEq(candidate.split.child_sum, exp_child_sum);
+  AssertDeviceVecEq(evaluator.GetSplitSum(candidate.nidx, shared.Targets()), exp_child_sum);
 
   AssertNodeWeightsEq(&evaluator, candidate.nidx, std::vector<float>{2.25f, 1.75f},
                       std::vector<float>{3.5f, 2.5f}, std::vector<float>{1.0f, 1.0f});
-  ASSERT_EQ(candidate.left_sum, 4.0);
-  ASSERT_EQ(candidate.right_sum, 4.0);
+  ASSERT_EQ(candidate.left_hess, 4.0);
+  ASSERT_EQ(candidate.right_hess, 4.0);
 
   // max_cat_threshold=1 does not enumerate a partition. The resulting root-only tree
   // must still retain its base weight and Hessian.
@@ -255,12 +251,12 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalPartition) {
                            shared.Targets());
   auto no_split = no_split_evaluator.EvaluateSingleSplit(&ctx, input, shared);
 
-  ASSERT_TRUE(no_split.split.child_sum.empty());
+  ASSERT_EQ(no_split.split.findex, -1);
   ASSERT_FALSE(IsValidExpandEntry(no_split, no_split_param, 100));
   auto no_split_weights = no_split_evaluator.GetNodeWeights(shared.Targets());
   AssertDeviceVecEq(no_split_weights.Base(no_split.nidx), std::vector<float>{2.25f, 1.75f});
-  ASSERT_EQ(no_split.left_sum, 8.0);
-  ASSERT_EQ(no_split.right_sum, 0.0);
+  ASSERT_EQ(no_split.left_hess, 8.0);
+  ASSERT_EQ(no_split.right_hess, 0.0);
 }
 
 TEST_F(GpuMultiHistEvaluatorBasicTest, SingleTargetPartition) {
@@ -282,7 +278,8 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, SingleTargetPartition) {
     auto candidate = evaluator.EvaluateSingleSplit(&ctx, input, shared);
     EXPECT_FLOAT_EQ(candidate.split.loss_chg, param.reg_alpha == 0 ? 9.0f : 2.25f);
     EXPECT_EQ(candidate.split.dir, kLeftDir);
-    AssertDeviceVecEq(candidate.split.child_sum, std::vector<GradientPairInt64>{{3, 2}});
+    AssertDeviceVecEq(evaluator.GetSplitSum(candidate.nidx, shared.Targets()),
+                      std::vector<GradientPairInt64>{{3, 2}});
     auto cats = evaluator.GetNodeCats(0);
     std::vector<CatWordT> storage(cats.size());
     dh::CopyDeviceSpanToVector(&storage, cats);
@@ -290,6 +287,68 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, SingleTargetPartition) {
     for (bst_cat_t c = 0; c < 4; ++c) {
       EXPECT_EQ(bits.Check(c), c == 0 || c == 2);
     }
+  }
+}
+
+TEST_F(GpuMultiHistEvaluatorBasicTest, QueuedEntry) {
+  for (auto [n_leaf_targets, n_split_targets] :
+       {std::pair{1, 1}, std::pair{2, 1}, std::pair{2, 2}}) {
+    this->SetUp();
+    auto param = this->MakeParam({{"grow_policy", "lossguide"}});
+    auto shared = shared_inputs;
+    shared.roundings = shared.roundings.subspan(0, n_split_targets);
+    input.parent_sum = input.parent_sum.subspan(0, n_split_targets);
+    input.histogram = input.histogram.subspan(0, n_bins_per_feat_tar * n_split_targets);
+    GPUHistEvaluator evaluator;
+    evaluator.Reset(&ctx, shared.feature_segments, shared.feature_types, param, n_split_targets);
+    evaluator.AllocNodeSum(0, n_split_targets);
+    dh::safe_cuda(cudaMemcpyAsync(evaluator.GetNodeSum(0, n_split_targets).data(),
+                                  input.parent_sum.data(), input.parent_sum.size_bytes(),
+                                  cudaMemcpyDeviceToDevice));
+    Driver<GPUExpandEntry> queue{param};
+    auto entry = evaluator.EvaluateSingleSplit(&ctx, input, shared);
+    queue.Push(entry);
+    auto expected_weights = evaluator.GetHostNodeWeights(&ctx, {&entry, 1});
+
+    // Reuse the scan buffer and grow persistent buffers while the root is queued.
+    histogram[0] = GradientPairInt64{100, 4};
+    auto later = input;
+    later.nidx = 64;
+    static_cast<void>(evaluator.EvaluateSingleSplit(&ctx, later, shared));
+    auto candidates = queue.Pop();
+    ASSERT_EQ(candidates.size(), 1);
+    AssertVecEq(evaluator.GetHostNodeWeights(&ctx, candidates), expected_weights);
+
+    RegTree tree{static_cast<bst_target_t>(n_leaf_targets), 1};
+    auto const& split = candidates.front().split;
+    SplitInfo info{0, static_cast<bst_feature_t>(split.findex), split.fvalue,
+                   split.dir == kLeftDir};
+    auto hess = entry.left_hess + entry.right_hess;
+    if (!tree.IsMultiTarget()) {
+      tree.SetRoot(expected_weights[0], hess);
+      tree.Expand({info,
+                   {expected_weights[0], hess},
+                   {expected_weights[1], entry.left_hess},
+                   {expected_weights[2], entry.right_hess},
+                   split.loss_chg});
+    } else {
+      auto weights = evaluator.GetNodeWeights(n_split_targets);
+      tree.SetRoot(linalg::MakeVec(ctx.Device(), weights.Base(0)), hess);
+      tree.Expand(&ctx, {{info,
+                          {weights.Base(0), hess},
+                          {weights.Left(0), entry.left_hess},
+                          {weights.Right(0), entry.right_hess},
+                          split.loss_chg}});
+    }
+    evaluator.ApplyTreeSplit(&ctx, &tree, candidates, n_split_targets);
+    std::vector<GradientPairInt64> left = n_split_targets == 1
+                                              ? std::vector<GradientPairInt64>{{8, 4}}
+                                              : std::vector<GradientPairInt64>{{36, 24}, {57, 87}};
+    std::vector<GradientPairInt64> right = n_split_targets == 1
+                                               ? std::vector<GradientPairInt64>{{48, 36}}
+                                               : std::vector<GradientPairInt64>{{20, 16}, {39, 41}};
+    AssertDeviceVecEq(evaluator.GetNodeSum(tree.LeftChild(0), n_split_targets), left);
+    AssertDeviceVecEq(evaluator.GetNodeSum(tree.RightChild(0), n_split_targets), right);
   }
 }
 }  // namespace xgboost::tree::cuda_impl

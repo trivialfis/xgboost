@@ -13,7 +13,7 @@
 #include "../../common/device_helpers.cuh"       // for WarpThreads
 #include "../../common/device_vector.cuh"        // for DeviceUVector
 #include "../split_evaluator.h"                  // for TreeEvaluator
-#include "expand_entry.cuh"                      // for GPUExpandEntry, MultiExpandEntry
+#include "expand_entry.cuh"                      // for GPUExpandEntry
 #include "quantiser.cuh"                         // for GradientQuantiser
 
 namespace xgboost::common {
@@ -169,7 +169,6 @@ class GPUHistEvaluator {
   using CatAllocator = common::cuda_impl::PinnedAllocator<CatWordT>;
   std::vector<CatWordT, CatAllocator> h_split_cats_;
   curt::Stream copy_stream_;
-  void CopyToHost(Context const *ctx, std::vector<bst_node_t> const &nidx);
 
   // Persistent buffer for node weights, indexed by node id.
   dh::DeviceUVector<float> node_weights_;
@@ -209,7 +208,7 @@ class GPUHistEvaluator {
     copy_stream_.View().Sync();
   }
 
-  // Adapters for scalar expansion entries. All split enumeration uses the common pipeline.
+  // Adapters for scalar inputs. All split enumeration uses the common pipeline.
   void Reset(Context const *ctx, common::HistogramCuts const &cuts,
              common::Span<FeatureType const> feature_types, bst_feature_t n_features,
              TrainParam const &param);
@@ -219,7 +218,11 @@ class GPUHistEvaluator {
                       EvaluateSplitSharedInputs shared, common::Span<GPUExpandEntry> out);
   GPUExpandEntry EvaluateSingleSplit(Context const *ctx, EvaluateSplitInputs input,
                                      EvaluateSplitSharedInputs shared);
-  void ApplyTreeSplit(Context const *ctx, GPUExpandEntry const &candidate, RegTree *tree);
+
+  void CopyNodeCatsToHost(Context const *ctx, std::vector<bst_node_t> const &nidx);
+  // Weights packed as [candidate][base/left/right][split target] for host tree expansion.
+  [[nodiscard]] std::vector<float> GetHostNodeWeights(
+      Context const *ctx, common::Span<GPUExpandEntry const> candidates) const;
 
   [[nodiscard]] common::Span<CatWordT const> GetHostNodeCats(bst_node_t nidx) const {
     copy_stream_.View().Sync();
@@ -240,7 +243,7 @@ class GPUHistEvaluator {
   /**
    * @brief Run evaluation for the root node.
    */
-  [[nodiscard]] MultiExpandEntry EvaluateSingleSplit(
+  [[nodiscard]] GPUExpandEntry EvaluateSingleSplit(
       Context const *ctx, MultiEvaluateSplitInputs const &input,
       MultiEvaluateSplitSharedInputs const &shared_inputs);
   /**
@@ -251,7 +254,7 @@ class GPUHistEvaluator {
    */
   void EvaluateSplits(Context const *ctx, common::Span<MultiEvaluateSplitInputs const> d_inputs,
                       MultiEvaluateSplitSharedInputs const &shared_inputs, bst_node_t max_nidx,
-                      common::Span<MultiExpandEntry> out_splits);
+                      common::Span<GPUExpandEntry> out_splits);
 
   /**
    * @brief Allocate storage for node sums up to the given node ID.
@@ -262,6 +265,11 @@ class GPUHistEvaluator {
   [[nodiscard]] common::Span<GradientPairInt64> GetNodeSum(bst_node_t nidx,
                                                            bst_target_t n_split_targets) {
     return this->node_sums_.GetNode(nidx, n_split_targets);
+  }
+  // Non-missing child gradient at the selected split, indexed by the parent node ID.
+  [[nodiscard]] common::Span<GradientPairInt64 const> GetSplitSum(
+      bst_node_t nidx, bst_target_t n_split_targets) const {
+    return this->split_sums_.GetNode(nidx, n_split_targets);
   }
 
   /**
@@ -286,8 +294,7 @@ class GPUHistEvaluator {
 
   // Update the tree evaluator state and track child gradient sums.
   void ApplyTreeSplit(Context const *ctx, RegTree const *p_tree,
-                      common::Span<MultiExpandEntry const> h_candidates,
-                      common::Span<MultiExpandEntry const> d_candidates,
+                      common::Span<GPUExpandEntry const> h_candidates,
                       bst_target_t n_split_targets);
 };
 using MultiHistEvaluator = GPUHistEvaluator;

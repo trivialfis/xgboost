@@ -235,15 +235,9 @@ struct GPUHistMakerDevice {
       return;
     }
     this->monitor.Start(__func__);
-    dh::TemporaryArray<EvaluateSplitInputs> d_node_inputs(2 * candidates.size());
-    dh::TemporaryArray<DeviceSplitCandidate> splits_out(2 * candidates.size());
+    dh::TemporaryArray<MultiEvaluateSplitInputs> d_node_inputs(2 * candidates.size());
     std::vector<bst_node_t> nidx(2 * candidates.size());
-    auto h_node_inputs = pinned2.GetSpan<EvaluateSplitInputs>(2 * candidates.size());
-    EvaluateSplitSharedInputs shared_inputs{
-        EvalParam{param}, (*quantiser)[0], p_fmat->Info().feature_types.ConstDeviceSpan(),
-        cuts_->cut_ptrs_.ConstDeviceSpan(), cuts_->cut_values_.ConstDeviceSpan(),
-        // is_dense represents the local data
-        p_fmat->IsDense() && !collective::IsDistributed()};
+    auto h_node_inputs = pinned2.GetSpan<MultiEvaluateSplitInputs>(2 * candidates.size());
     dh::TemporaryArray<GPUExpandEntry> entries(2 * candidates.size());
     // Store the feature set ptrs so they don't go out of scope before the kernel is called
     std::vector<std::shared_ptr<HostDeviceVector<bst_feature_t>>> feature_sets;
@@ -262,10 +256,11 @@ struct GPUHistMakerDevice {
       feature_sets.emplace_back(right_sampled_features);
       common::Span<bst_feature_t const> right_feature_set =
           interaction_constraints.Query(right_sampled_features->ConstDeviceSpan(), right_nidx);
-      h_node_inputs[i * 2] = {left_nidx, candidate.depth + 1, candidate.split.left_sum,
+      h_node_inputs[i * 2] = {left_nidx, candidate.depth + 1, evaluator_.GetNodeSum(left_nidx, 1),
                               left_feature_set, histogram_.GetNodeHistogram(left_nidx)};
-      h_node_inputs[i * 2 + 1] = {right_nidx, candidate.depth + 1, candidate.split.right_sum,
-                                  right_feature_set, histogram_.GetNodeHistogram(right_nidx)};
+      h_node_inputs[i * 2 + 1] = {right_nidx, candidate.depth + 1,
+                                  evaluator_.GetNodeSum(right_nidx, 1), right_feature_set,
+                                  histogram_.GetNodeHistogram(right_nidx)};
     }
     bst_feature_t max_active_features = 0;
     for (auto input : h_node_inputs) {
@@ -273,11 +268,27 @@ struct GPUHistMakerDevice {
           std::max(max_active_features, static_cast<bst_feature_t>(input.feature_set.size()));
     }
     dh::safe_cuda(cudaMemcpyAsync(d_node_inputs.data().get(), h_node_inputs.data(),
-                                  h_node_inputs.size() * sizeof(EvaluateSplitInputs),
+                                  h_node_inputs.size() * sizeof(MultiEvaluateSplitInputs),
                                   cudaMemcpyDefault));
 
-    this->evaluator_.EvaluateSplits(ctx_, nidx, max_active_features, dh::ToSpan(d_node_inputs),
-                                    shared_inputs, dh::ToSpan(entries));
+    std::size_t cat_storage_size =
+        cuts_->HasCategorical()
+            ? common::CatBitField::ComputeStorageSize(common::AsCat(cuts_->MaxCategory()) + 1)
+            : 0;
+    MultiEvaluateSplitSharedInputs shared_inputs{quantiser->DeviceSpan(),
+                                                 cuts_->cut_ptrs_.ConstDeviceSpan(),
+                                                 cuts_->cut_values_.ConstDevicePointer(),
+                                                 p_fmat->Info().feature_types.ConstDeviceSpan(),
+                                                 cat_storage_size,
+                                                 cuts_->TotalBins(),
+                                                 max_active_features,
+                                                 EvalParam{param}};
+    // is_dense represents the local data
+    shared_inputs.is_dense = p_fmat->IsDense() && !collective::IsDistributed();
+    auto max_nidx = *std::max_element(nidx.cbegin(), nidx.cend());
+    this->evaluator_.EvaluateSplits(ctx_, dh::ToSpan(d_node_inputs), shared_inputs, max_nidx,
+                                    dh::ToSpan(entries));
+    this->evaluator_.CopyNodeCatsToHost(ctx_, nidx);
     dh::safe_cuda(cudaMemcpyAsync(pinned_candidates_out.data(), entries.data().get(),
                                   sizeof(GPUExpandEntry) * entries.size(), cudaMemcpyDeviceToHost));
     this->monitor.Stop(__func__);
@@ -401,13 +412,7 @@ struct GPUHistMakerDevice {
     std::vector<bst_node_t> build_nidx(candidates.size());
     std::vector<bst_node_t> subtraction_nidx(candidates.size());
     cuda_impl::AssignNodes(*p_tree, candidates, build_nidx, subtraction_nidx,
-                           [&](GPUExpandEntry const& e) {
-                             auto const& q = (*this->quantiser)[0];
-                             auto left_sum = q.ToFloatingPoint(e.split.left_sum);
-                             auto right_sum = q.ToFloatingPoint(e.split.right_sum);
-                             bool fewer_right = right_sum.GetHess() < left_sum.GetHess();
-                             return fewer_right;
-                           });
+                           [&](GPUExpandEntry const& e) { return e.right_hess < e.left_hess; });
     auto prefetch_copy = !build_nidx.empty() && this->NeedCopy(p_fmat, candidates);
 
     this->histogram_.AllocateHistograms(ctx_, build_nidx, subtraction_nidx);
@@ -515,7 +520,8 @@ struct GPUHistMakerDevice {
     }
   }
 
-  void ApplySplit(const GPUExpandEntry& candidate, RegTree* p_tree) {
+  void ApplySplit(GPUExpandEntry const& candidate, common::Span<float const> weights,
+                  RegTree* p_tree) {
     RegTree& tree = *p_tree;
 
     // Sanity check - have we created a leaf with no training instances?
@@ -524,14 +530,13 @@ struct GPUHistMakerDevice {
           << "No training instances in this leaf!";
     }
 
-    auto base_weight = candidate.base_weight;
-    auto left_weight = candidate.left_weight;
-    auto right_weight = candidate.right_weight;
-    auto const& q = (*quantiser)[0];
-    auto parent_hess =
-        q.ToFloatingPoint(candidate.split.left_sum + candidate.split.right_sum).GetHess();
-    auto left_hess = q.ToFloatingPoint(candidate.split.left_sum).GetHess();
-    auto right_hess = q.ToFloatingPoint(candidate.split.right_sum).GetHess();
+    CHECK_EQ(weights.size(), 3);
+    auto base_weight = weights[0];
+    auto left_weight = weights[1];
+    auto right_weight = weights[2];
+    auto parent_hess = candidate.left_hess + candidate.right_hess;
+    auto left_hess = candidate.left_hess;
+    auto right_hess = candidate.right_hess;
 
     auto is_cat = candidate.split.is_cat;
     common::Span<CatWordT const> cat_bits;
@@ -553,7 +558,6 @@ struct GPUHistMakerDevice {
                  {left_weight, left_hess},
                  {right_weight, right_hess},
                  candidate.split.loss_chg});
-    evaluator_.ApplyTreeSplit(ctx_, candidate, p_tree);
 
     const auto& parent = tree[candidate.nidx];
     interaction_constraints.Split(ctx_, candidate.nidx, parent.SplitIndex(), parent.LeftChild(),
@@ -604,18 +608,18 @@ struct GPUHistMakerDevice {
     // The set of leaves that can be expanded asynchronously
     auto expand_set = driver.Pop();
     while (!expand_set.empty()) {
-      for (auto& candidate : expand_set) {
-        this->ApplySplit(candidate, p_tree);
+      auto weights = evaluator_.GetHostNodeWeights(ctx_, expand_set);
+      for (std::size_t i = 0; i < expand_set.size(); ++i) {
+        this->ApplySplit(expand_set[i], common::Span<float const>{weights}.subspan(i * 3, 3),
+                         p_tree);
       }
+      evaluator_.ApplyTreeSplit(ctx_, p_tree, expand_set, 1);
       // Get the candidates we are allowed to expand further
       // e.g. We do not bother further processing nodes whose children are beyond max depth
       std::vector<GPUExpandEntry> valid_candidates;
-      std::copy_if(expand_set.begin(), expand_set.end(), std::back_inserter(valid_candidates),
-                   [&](auto const& e) {
-                     auto const& q = (*quantiser)[0];
-                     return driver.IsChildValid(e, q.ToFloatingPoint(e.split.left_sum).GetHess(),
-                                                q.ToFloatingPoint(e.split.right_sum).GetHess());
-                   });
+      std::copy_if(
+          expand_set.begin(), expand_set.end(), std::back_inserter(valid_candidates),
+          [&](auto const& e) { return driver.IsChildValid(e, e.left_hess, e.right_hess); });
 
       // Allocaate children nodes.
       auto new_candidates = pinned.GetSpan(valid_candidates.size() * 2, GPUExpandEntry{});
