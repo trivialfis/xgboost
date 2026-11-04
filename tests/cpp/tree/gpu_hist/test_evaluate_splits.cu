@@ -12,6 +12,11 @@
 
 namespace xgboost::tree {
 namespace {
+auto ReadNodeCats(GPUHistEvaluator const& evaluator, bst_node_t nidx) {
+  return std::bitset<32>(
+      static_cast<CatWordT>(thrust::device_pointer_cast(evaluator.GetNodeCats(nidx).data())[0]));
+}
+
 auto ReadSplitSums(GPUHistEvaluator& evaluator, bst_node_t nidx, DefaultDirection dir) {
   GradientPairInt64 parent = thrust::device_pointer_cast(evaluator.GetNodeSum(nidx, 1).data())[0];
   GradientPairInt64 child = thrust::device_pointer_cast(evaluator.GetSplitSum(nidx, 1).data())[0];
@@ -118,7 +123,7 @@ TEST(GpuHist, PartitionBasic) {
     EvaluateSplitInputs input{0, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
   }
@@ -131,7 +136,7 @@ TEST(GpuHist, PartitionBasic) {
     EvaluateSplitInputs input{1, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("10000000000000000000000000000000"));
   }
@@ -154,7 +159,7 @@ TEST(GpuHist, PartitionBasic) {
     EvaluateSplitInputs input{3, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
     EXPECT_EQ(result.dir, kLeftDir);
   }
@@ -166,7 +171,7 @@ TEST(GpuHist, PartitionBasic) {
     EvaluateSplitInputs input{4, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(result.dir, kLeftDir);
     EXPECT_EQ(cats, std::bitset<32>("10100000000000000000000000000000"));
   }
@@ -178,7 +183,7 @@ TEST(GpuHist, PartitionBasic) {
     EvaluateSplitInputs input{5, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(cats, std::bitset<32>("01000000000000000000000000000000"));
   }
 }
@@ -221,7 +226,7 @@ TEST(GpuHist, PartitionTwoFeatures) {
     EvaluateSplitInputs input{0, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(result.findex, 1);
     EXPECT_EQ(cats, std::bitset<32>("11000000000000000000000000000000"));
   }
@@ -233,7 +238,7 @@ TEST(GpuHist, PartitionTwoFeatures) {
     EvaluateSplitInputs input{1, 0, parent_sum, dh::ToSpan(feature_set),
                               dh::ToSpan(feature_histogram)};
     DeviceSplitCandidate result = evaluator.EvaluateSingleSplit(&ctx, input, shared_inputs).split;
-    auto cats = std::bitset<32>(evaluator.GetHostNodeCats(input.nidx)[0]);
+    auto cats = ReadNodeCats(evaluator, input.nidx);
     EXPECT_EQ(result.findex, 1);
     EXPECT_EQ(cats, std::bitset<32>("10000000000000000000000000000000"));
   }
@@ -283,10 +288,8 @@ TEST(GpuHist, PartitionTwoNodes) {
     thrust::device_vector<GPUExpandEntry> results(2);
     evaluator.EvaluateSplits(&ctx, {0, 1}, 1, dh::ToSpan(inputs), shared_inputs,
                              dh::ToSpan(results));
-    EXPECT_EQ(std::bitset<32>(evaluator.GetHostNodeCats(0)[0]),
-              std::bitset<32>("10000000000000000000000000000000"));
-    EXPECT_EQ(std::bitset<32>(evaluator.GetHostNodeCats(1)[0]),
-              std::bitset<32>("11000000000000000000000000000000"));
+    EXPECT_EQ(ReadNodeCats(evaluator, 0), std::bitset<32>("10000000000000000000000000000000"));
+    EXPECT_EQ(ReadNodeCats(evaluator, 1), std::bitset<32>("11000000000000000000000000000000"));
   }
 }
 

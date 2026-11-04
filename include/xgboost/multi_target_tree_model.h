@@ -48,7 +48,7 @@ struct ExpandData {
   float loss_chg;
 };
 
-/** @brief Batch of vector expansions, with weight/category spans on the context's device. */
+/** @brief Batch of expansions, with weight/category spans on the context's device. */
 using ExpandBatch = std::vector<ExpandData<common::Span<float const>>>;
 }  // namespace tree
 struct TreeParam;

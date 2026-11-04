@@ -470,7 +470,6 @@ void GPUHistEvaluator::Reset(Context const *ctx, common::Span<std::uint32_t cons
                              bst_target_t n_split_targets) {
   CHECK_GT(feature_segments.size(), 0);
   CHECK_GT(n_split_targets, 0);
-  copy_stream_.View().Sync();
   this->node_cat_storage_size_ = 0;
   this->split_cats_.clear();
   auto n_features = static_cast<bst_feature_t>(feature_segments.size() - 1);
@@ -597,7 +596,6 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx,
   if (n_nodes == 0) {
     return;
   }
-  copy_stream_.View().Sync();
 
   // Allocate weight and split sum storage on demand for the maximum node ID being evaluated.
   this->AllocNodeWeight(max_nidx, n_split_targets);
@@ -837,28 +835,6 @@ void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const *tree,
               });
 }
 
-std::vector<float> GPUHistEvaluator::GetHostNodeWeights(
-    Context const *ctx, common::Span<GPUExpandEntry const> candidates) const {
-  auto stride = NodeWeightBuffer::kWeightsPerNode * this->GetEvaluator().n_targets;
-  std::vector<bst_node_t> nidx;
-  nidx.reserve(candidates.size());
-  for (auto const &candidate : candidates) {
-    nidx.push_back(candidate.nidx);
-  }
-  dh::caching_device_vector<bst_node_t> d_nidx(nidx);
-  auto nodes = dh::ToSpan(d_nidx);
-  dh::TemporaryArray<float> storage(candidates.size() * stride);
-  auto out = dh::ToSpan(storage);
-  auto weights = dh::ToSpan(node_weights_);
-  dh::LaunchN(out.size(), ctx->CUDACtx()->Stream(), [=] __device__(std::size_t i) {
-    out[i] = weights[nodes[i / stride] * stride + i % stride];
-  });
-  std::vector<float> result(out.size());
-  dh::CopyDeviceSpanToVector(&result, out);
-  ctx->CUDACtx()->Stream().Sync();
-  return result;
-}
-
 void GPUHistEvaluator::Reset(Context const *ctx, common::HistogramCuts const &cuts,
                              common::Span<FeatureType const> feature_types,
                              bst_feature_t n_features, TrainParam const &param) {
@@ -866,25 +842,6 @@ void GPUHistEvaluator::Reset(Context const *ctx, common::HistogramCuts const &cu
   this->Reset(ctx, cuts.cut_ptrs_.ConstDeviceSpan(), feature_types, param, 1);
   if (cuts.HasCategorical()) {
     this->node_cat_storage_size_ = common::CatBitField::ComputeStorageSize(cuts.MaxCategory() + 1);
-  }
-}
-
-void GPUHistEvaluator::CopyNodeCatsToHost(Context const *ctx, std::vector<bst_node_t> const &nidx) {
-  if (this->node_cat_storage_size_ == 0 || nidx.empty()) {
-    return;
-  }
-  auto max_nidx = *std::max_element(nidx.cbegin(), nidx.cend());
-  auto required = (max_nidx + 1) * node_cat_storage_size_;
-  if (h_split_cats_.size() < required) {
-    h_split_cats_.resize(required);
-  }
-  curt::Event event;
-  event.Record(ctx->CUDACtx()->Stream());
-  copy_stream_.View().Wait(event);
-  for (auto node : nidx) {
-    auto cats = this->GetNodeCats(node);
-    dh::safe_cuda(cudaMemcpyAsync(h_split_cats_.data() + node * node_cat_storage_size_, cats.data(),
-                                  cats.size_bytes(), cudaMemcpyDeviceToHost, copy_stream_.View()));
   }
 }
 
@@ -931,7 +888,6 @@ void GPUHistEvaluator::EvaluateSplits(Context const *ctx, std::vector<bst_node_t
   vector_shared.is_dense = shared.is_dense;
 
   this->EvaluateSplits(ctx, nodes, vector_shared, max_nidx, out);
-  this->CopyNodeCatsToHost(ctx, nidx);
 }
 
 GPUExpandEntry GPUHistEvaluator::EvaluateSingleSplit(Context const *ctx, EvaluateSplitInputs input,

@@ -8,8 +8,6 @@
 #include <vector>  // for vector
 
 #include "../../common/categorical.h"            // for CatWordT, IsCat
-#include "../../common/cuda_pinned_allocator.h"  // for PinnedAllocator
-#include "../../common/cuda_stream.h"            // for Stream
 #include "../../common/device_helpers.cuh"       // for WarpThreads
 #include "../../common/device_vector.cuh"        // for DeviceUVector
 #include "../split_evaluator.h"                  // for TreeEvaluator
@@ -165,11 +163,6 @@ class GPUHistEvaluator {
 
  private:
   std::unique_ptr<TreeEvaluator> tree_evaluator_{nullptr};
-  // Scalar tree expansion needs host category bits as well as device bits for partitioning.
-  using CatAllocator = common::cuda_impl::PinnedAllocator<CatWordT>;
-  std::vector<CatWordT, CatAllocator> h_split_cats_;
-  curt::Stream copy_stream_;
-
   // Persistent buffer for node weights, indexed by node id.
   dh::DeviceUVector<float> node_weights_;
   // Buffer for histogram scans.
@@ -203,10 +196,6 @@ class GPUHistEvaluator {
   GPUHistEvaluator() = default;
   GPUHistEvaluator(TrainParam const &param, bst_feature_t n_features, DeviceOrd device)
       : tree_evaluator_{std::make_unique<TreeEvaluator>(param, n_features, device, 1u)} {}
-  ~GPUHistEvaluator() {
-    // Finish category transfers before releasing either host or device storage.
-    copy_stream_.View().Sync();
-  }
 
   // Adapters for scalar inputs. All split enumeration uses the common pipeline.
   void Reset(Context const *ctx, common::HistogramCuts const &cuts,
@@ -219,18 +208,7 @@ class GPUHistEvaluator {
   GPUExpandEntry EvaluateSingleSplit(Context const *ctx, EvaluateSplitInputs input,
                                      EvaluateSplitSharedInputs shared);
 
-  void CopyNodeCatsToHost(Context const *ctx, std::vector<bst_node_t> const &nidx);
-  // Weights packed as [candidate][base/left/right][split target] for host tree expansion.
-  [[nodiscard]] std::vector<float> GetHostNodeWeights(
-      Context const *ctx, common::Span<GPUExpandEntry const> candidates) const;
-
-  [[nodiscard]] common::Span<CatWordT const> GetHostNodeCats(bst_node_t nidx) const {
-    copy_stream_.View().Sync();
-    return common::Span<CatWordT const>{h_split_cats_}.subspan(nidx * node_cat_storage_size_,
-                                                               node_cat_storage_size_);
-  }
   [[nodiscard]] common::KCatBitField GetDeviceNodeCats(bst_node_t nidx) const {
-    copy_stream_.View().Sync();
     return common::KCatBitField{this->GetNodeCats(nidx)};
   }
 

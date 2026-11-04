@@ -287,7 +287,7 @@ class RegTree : public Model {
    * The optional right-child marker is used by the exact updater during construction.
    */
   void Expand(tree::ExpandData<float> const& node, bst_node_t leaf_right_child = kInvalidNodeId);
-  /** @brief Expand multiple vector leaves using unscaled weights. */
+  /** @brief Expand multiple leaves using unscaled weights on the context's device. */
   void Expand(Context const* ctx, tree::ExpandBatch const& batch);
   /** @brief Initialize prediction leaves from base weights, applying the learning rate. */
   void FinalizeLeaves(float learning_rate);
@@ -509,6 +509,8 @@ class RegTree : public Model {
   HostDeviceVector<CategoricalSplitMatrix::Segment> split_categories_segments_;
   // ptr to multi-target tree with vector leaf.
   std::unique_ptr<MultiTargetTree> p_mt_tree_;
+  void ExpandNode(tree::SplitInfo const& split, bst_node_t leaf_right_child);
+
   // allocate a new node,
   // !!!!!! NOTE: may cause BUG here, nodes.resize
   bst_node_t AllocNode() {
@@ -523,7 +525,6 @@ class RegTree : public Model {
     CHECK_LT(param_.num_nodes, std::numeric_limits<int>::max())
         << "number of nodes in the tree exceed 2^31";
     nodes_.HostVector().resize(param_.num_nodes);
-    stats_.HostVector().resize(param_.num_nodes);
     split_types_.HostVector().resize(param_.num_nodes, FeatureType::kNumerical);
     split_categories_segments_.HostVector().resize(param_.num_nodes);
     return nd;

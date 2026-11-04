@@ -31,6 +31,13 @@ namespace tree {
 void CopyCategoryStorage(Context const* ctx, std::size_t offset, ExpandBatch const& batch,
                          HostDeviceVector<CatWordT>* out);
 
+#if defined(XGBOOST_USE_CUDA)
+namespace cuda_impl {
+void SetNodeStats(Context const* ctx, ExpandBatch const& batch,
+                  common::Span<RegTree::Node const> nodes, common::Span<RTreeNodeStat> stats);
+}  // namespace cuda_impl
+#endif
+
 DMLC_REGISTER_PARAMETER(TrainParam);
 }  // namespace tree
 
@@ -881,10 +888,7 @@ void RegTree::SetRoot(float weight, float sum_hess) {
   this->Stat(kRoot) = {0.0f, sum_hess, weight};
 }
 
-void RegTree::Expand(tree::ExpandData<float> const& entry, bst_node_t leaf_right_child) {
-  CHECK(!IsMultiTarget());
-  auto const& split = entry.split;
-  auto is_cat = !split.categories.empty();
+void RegTree::ExpandNode(tree::SplitInfo const& split, bst_node_t leaf_right_child) {
   CHECK((*this)[split.nidx].IsLeaf());
   auto left = this->AllocNode();
   auto right = this->AllocNode();
@@ -894,9 +898,20 @@ void RegTree::Expand(tree::ExpandData<float> const& entry, bst_node_t leaf_right
   node.SetRightChild(right);
   nodes[left].SetParent(split.nidx, true);
   nodes[right].SetParent(split.nidx, false);
-  node.SetSplit(split.fidx, is_cat ? DftBadValue() : split.cond, split.default_left);
+  node.SetSplit(split.fidx, split.categories.empty() ? split.cond : DftBadValue(),
+                split.default_left);
   nodes[left].SetLeaf(0.0f, leaf_right_child);
   nodes[right].SetLeaf(0.0f, leaf_right_child);
+}
+
+void RegTree::Expand(tree::ExpandData<float> const& entry, bst_node_t leaf_right_child) {
+  CHECK(!IsMultiTarget());
+  auto const& split = entry.split;
+  auto is_cat = !split.categories.empty();
+  this->ExpandNode(split, leaf_right_child);
+  stats_.Resize(this->NumNodes());
+  auto left = this->LeftChild(split.nidx);
+  auto right = this->RightChild(split.nidx);
 
   this->Stat(split.nidx) = {entry.loss_chg, static_cast<float>(entry.parent.sum_hess),
                             entry.parent.weight};
@@ -915,14 +930,47 @@ void RegTree::Expand(tree::ExpandData<float> const& entry, bst_node_t leaf_right
 }
 
 void RegTree::Expand(Context const* ctx, tree::ExpandBatch const& batch) {
-  CHECK(IsMultiTarget());
-
   xgboost_NVTX_FN_RANGE();
+  if (batch.empty()) {
+    return;
+  }
 
   auto const categories_begin = split_categories_.Size();
-  this->p_mt_tree_->Expand(ctx, batch);
+  if (this->IsMultiTarget()) {
+    this->p_mt_tree_->Expand(ctx, batch);
+    this->param_.num_nodes = this->p_mt_tree_->Size();
+  } else {
+    for (auto const& entry : batch) {
+      CHECK_EQ(entry.parent.weight.size(), 1);
+      CHECK_EQ(entry.left.weight.size(), 1);
+      CHECK_EQ(entry.right.weight.size(), 1);
+      this->ExpandNode(entry.split, kInvalidNodeId);
+    }
+    stats_.SetDevice(ctx->Device());
+    if (ctx->IsCUDA()) {
+#if defined(XGBOOST_USE_CUDA)
+      // Keep statistics on device across expansions, including when growing the storage.
+      (void)stats_.DeviceSpan();
+      stats_.Resize(this->NumNodes());
+      tree::cuda_impl::SetNodeStats(ctx, batch, nodes_.ConstHostSpan(), stats_.DeviceSpan());
+#else
+      common::AssertGPUSupport();
+#endif
+    } else {
+      stats_.Resize(this->NumNodes());
+      for (auto const& entry : batch) {
+        auto nidx = entry.split.nidx;
+        this->Stat(nidx) = {entry.loss_chg, static_cast<float>(entry.parent.sum_hess),
+                            entry.parent.weight[0]};
+        this->Stat(this->LeftChild(nidx)) = {0.0f, static_cast<float>(entry.left.sum_hess),
+                                             entry.left.weight[0]};
+        this->Stat(this->RightChild(nidx)) = {0.0f, static_cast<float>(entry.right.sum_hess),
+                                              entry.right.weight[0]};
+      }
+    }
+  }
 
-  auto const n_nodes = this->p_mt_tree_->Size();
+  auto const n_nodes = this->NumNodes();
   auto& h_split_types = split_types_.HostVector();
   h_split_types.resize(n_nodes, FeatureType::kNumerical);
   auto& h_segments = split_categories_segments_.HostVector();
@@ -944,8 +992,6 @@ void RegTree::Expand(Context const* ctx, tree::ExpandBatch const& batch) {
       category_offset += cats.size();
     }
   }
-
-  this->param_.num_nodes = n_nodes;
 }
 
 void RegTree::FinalizeLeaves(float learning_rate) {

@@ -308,7 +308,13 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, QueuedEntry) {
     Driver<GPUExpandEntry> queue{param};
     auto entry = evaluator.EvaluateSingleSplit(&ctx, input, shared);
     queue.Push(entry);
-    auto expected_weights = evaluator.GetHostNodeWeights(&ctx, {&entry, 1});
+    auto read_weights = [&, n_targets = n_split_targets] {
+      auto weights = evaluator.GetNodeWeights(n_targets).Base(0);
+      std::vector<float> host(3 * n_targets);
+      dh::CopyDeviceSpanToVector(&host, common::Span<float const>{weights.data(), host.size()});
+      return host;
+    };
+    auto expected_weights = read_weights();
 
     // Reuse the scan buffer and grow persistent buffers while the root is queued.
     histogram[0] = GradientPairInt64{100, 4};
@@ -317,29 +323,22 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, QueuedEntry) {
     static_cast<void>(evaluator.EvaluateSingleSplit(&ctx, later, shared));
     auto candidates = queue.Pop();
     ASSERT_EQ(candidates.size(), 1);
-    AssertVecEq(evaluator.GetHostNodeWeights(&ctx, candidates), expected_weights);
+    AssertVecEq(read_weights(), expected_weights);
 
     RegTree tree{static_cast<bst_target_t>(n_leaf_targets), 1};
     auto const& split = candidates.front().split;
     SplitInfo info{0, static_cast<bst_feature_t>(split.findex), split.fvalue,
                    split.dir == kLeftDir};
     auto hess = entry.left_hess + entry.right_hess;
-    if (!tree.IsMultiTarget()) {
-      tree.SetRoot(expected_weights[0], hess);
-      tree.Expand({info,
-                   {expected_weights[0], hess},
-                   {expected_weights[1], entry.left_hess},
-                   {expected_weights[2], entry.right_hess},
-                   split.loss_chg});
-    } else {
-      auto weights = evaluator.GetNodeWeights(n_split_targets);
+    auto weights = evaluator.GetNodeWeights(n_split_targets);
+    if (tree.IsMultiTarget()) {
       tree.SetRoot(linalg::MakeVec(ctx.Device(), weights.Base(0)), hess);
-      tree.Expand(&ctx, {{info,
-                          {weights.Base(0), hess},
-                          {weights.Left(0), entry.left_hess},
-                          {weights.Right(0), entry.right_hess},
-                          split.loss_chg}});
     }
+    tree.Expand(&ctx, {{info,
+                        {weights.Base(0), hess},
+                        {weights.Left(0), entry.left_hess},
+                        {weights.Right(0), entry.right_hess},
+                        split.loss_chg}});
     evaluator.ApplyTreeSplit(&ctx, &tree, candidates, n_split_targets);
     std::vector<GradientPairInt64> left = n_split_targets == 1
                                               ? std::vector<GradientPairInt64>{{8, 4}}
