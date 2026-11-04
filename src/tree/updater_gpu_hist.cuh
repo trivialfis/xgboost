@@ -17,10 +17,10 @@
 #include "../common/random.h"                  // for ColumnSampler
 #include "constraints.cuh"                     // for FeatureInteractionConstraintDevice
 #include "driver.h"                            // for Driver
+#include "gpu_hist/evaluate_splits.cuh"         // for MultiHistEvaluator
 #include "gpu_hist/feature_groups.cuh"         // for FeatureGroups
 #include "gpu_hist/histogram.cuh"              // for DeviceHistogramBuilder
 #include "gpu_hist/leaf_sum.cuh"               // for LeafGradSum
-#include "gpu_hist/multi_evaluate_splits.cuh"  // for MultiHistEvaluator
 #include "gpu_hist/row_partitioner.cuh"        // for RowPartitioner
 #include "gpu_hist/sampler.cuh"                // for GradientBasedSampler
 #include "hist/hist_param.h"                   // for HistMakerTrainParam

@@ -7,7 +7,6 @@
 
 #include "../../../../src/tree/driver.h"
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
-#include "../../../../src/tree/gpu_hist/multi_evaluate_splits.cuh"
 #include "../../helpers.h"
 #include "dummy_quantizer.cuh"  // for MakeDummyQuantizers
 
@@ -175,9 +174,8 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalOneHot) {
 
   ASSERT_TRUE(candidate.split.is_cat);
   ASSERT_NEAR(candidate.split.loss_chg, 3.04239, 1e-5);
-  // The matching category goes right with the missing values; the chosen child sum stored
-  // is the non-missing "other categories" (left child), so dir is kRightDir.
-  ASSERT_EQ(candidate.split.dir, kRightDir);
+  // With no missing values the directions tie; CPU policy prefers missing-left.
+  ASSERT_EQ(candidate.split.dir, kLeftDir);
   ASSERT_EQ(static_cast<bst_cat_t>(candidate.split.fvalue), 3);
   auto d_cats = evaluator.GetNodeCats(candidate.nidx);
   std::vector<std::uint32_t> h_cats(d_cats.size());
@@ -185,8 +183,8 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalOneHot) {
   common::KCatBitField cats{h_cats};
   ASSERT_TRUE(cats.Check(3));
 
-  // child_sum is the "other categories" = parent - hist[bin 3].
-  std::vector<GradientPairInt64> exp_child_sum{{36, 24}, {57, 87}};
+  // child_sum is the matching category, which goes right without missing values.
+  std::vector<GradientPairInt64> exp_child_sum{{20, 16}, {39, 41}};
   AssertDeviceVecEq(candidate.split.child_sum, exp_child_sum);
 
   // Left child = other categories {36,24},{57,87}; right child = category 3 {20,16},{39,41}.
@@ -263,5 +261,35 @@ TEST_F(GpuMultiHistEvaluatorBasicTest, CategoricalPartition) {
   AssertDeviceVecEq(no_split_weights.Base(no_split.nidx), std::vector<float>{2.25f, 1.75f});
   ASSERT_EQ(no_split.left_sum, 8.0);
   ASSERT_EQ(no_split.right_sum, 0.0);
+}
+
+TEST_F(GpuMultiHistEvaluatorBasicTest, SingleTargetPartition) {
+  // One projected gradient uses raw category weights even when the parent weight is zero.
+  parent_sum[0] = GradientPairInt64{0, 4};
+  histogram[0] = GradientPairInt64{1, 1};
+  histogram[1] = GradientPairInt64{-1, 1};
+  histogram[2] = GradientPairInt64{2, 1};
+  histogram[3] = GradientPairInt64{-2, 1};
+  input.parent_sum = input.parent_sum.subspan(0, 1);
+  input.histogram = input.histogram.subspan(0, 4);
+
+  for (auto alpha : {"0", "1.5"}) {
+    auto param = this->MakeParam({{"max_cat_to_onehot", "1"}, {"reg_alpha", alpha}});
+    auto shared = this->MakeCategoricalInputs(param);
+    shared.roundings = shared.roundings.subspan(0, 1);
+    MultiHistEvaluator evaluator;
+    evaluator.Reset(&ctx, shared.feature_segments, shared.feature_types, param, shared.Targets());
+    auto candidate = evaluator.EvaluateSingleSplit(&ctx, input, shared);
+    EXPECT_FLOAT_EQ(candidate.split.loss_chg, param.reg_alpha == 0 ? 9.0f : 2.25f);
+    EXPECT_EQ(candidate.split.dir, kLeftDir);
+    AssertDeviceVecEq(candidate.split.child_sum, std::vector<GradientPairInt64>{{3, 2}});
+    auto cats = evaluator.GetNodeCats(0);
+    std::vector<CatWordT> storage(cats.size());
+    dh::CopyDeviceSpanToVector(&storage, cats);
+    common::KCatBitField bits{storage};
+    for (bst_cat_t c = 0; c < 4; ++c) {
+      EXPECT_EQ(bits.Check(c), c == 0 || c == 2);
+    }
+  }
 }
 }  // namespace xgboost::tree::cuda_impl

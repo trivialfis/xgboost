@@ -363,6 +363,30 @@ TEST(GpuHist, EvaluateSingleSplitMissing) {
   EXPECT_EQ(result.right_sum, quantiser.ToFixedPoint(GradientPairPrecise(1.5, 1.0)));
 }
 
+TEST(GpuHist, MonotoneEqualWeights) {
+  auto ctx = MakeCUDACtx(0);
+  auto param = ZeroParam();
+  param.UpdateAllowUnknown(Args{{"monotone_constraints", "(1)"}});
+  auto quantiser = DummyRoundingFactor(&ctx);
+  auto histogram = ConvertToInteger(&ctx, {{-1.0, 1.0}, {1.0, 1.0}});
+  dh::device_vector<bst_feature_t> features(1, 0);
+  auto cuts = MakeCutsForTest({1.0, 2.0}, {0, 2}, ctx.Device());
+  EvaluateSplitInputs input{0, 0, quantiser.ToFixedPoint(GradientPairPrecise{0.0, 2.0}),
+                            dh::ToSpan(features), dh::ToSpan(histogram)};
+  EvaluateSplitSharedInputs shared{EvalParam{param},
+                                   quantiser,
+                                   {},
+                                   cuts.cut_ptrs_.ConstDeviceSpan(),
+                                   cuts.cut_values_.ConstDeviceSpan(),
+                                   true};
+  GPUHistEvaluator evaluator{param, 1, ctx.Device()};
+  auto candidate = evaluator.EvaluateSingleSplit(&ctx, input, shared);
+  // The unconstrained weights (1, -1) violate the constraint. Pooling gives (0, 0),
+  // which cannot improve on the parent and is rejected for a single split target.
+  EXPECT_EQ(candidate.split.findex, -1);
+  EXPECT_LT(candidate.split.loss_chg, 0.0f);
+}
+
 TEST(GpuHist, EvaluateSingleSplitEmpty) {
   auto ctx = MakeCUDACtx(0);
   TrainParam tparam = ZeroParam();
@@ -470,7 +494,7 @@ TEST(GpuHist, EvaluateSingleSplitDense) {
 
 TEST(GpuHist, EvaluateSplits) {
   auto ctx = MakeCUDACtx(0);
-  thrust::device_vector<DeviceSplitCandidate> out_splits(2);
+  thrust::device_vector<GPUExpandEntry> out_splits(2);
   auto quantiser = DummyRoundingFactor(&ctx);
   auto parent_sum = quantiser.ToFixedPoint(GradientPairPrecise{0.0, 1.0});
   TrainParam tparam = ZeroParam();
@@ -494,14 +518,14 @@ TEST(GpuHist, EvaluateSplits) {
   GPUHistEvaluator evaluator{tparam, 2, FstCU()};
   dh::device_vector<EvaluateSplitInputs> inputs =
       std::vector<EvaluateSplitInputs>{input_left, input_right};
-  evaluator.LaunchEvaluateSplits(&ctx, input_left.feature_set.size(), dh::ToSpan(inputs),
-                                 shared_inputs, evaluator.GetEvaluator(), dh::ToSpan(out_splits));
+  evaluator.EvaluateSplits(&ctx, {1, 2}, input_left.feature_set.size(), dh::ToSpan(inputs),
+                           shared_inputs, dh::ToSpan(out_splits));
 
-  DeviceSplitCandidate result_left = out_splits[0];
+  DeviceSplitCandidate result_left = GPUExpandEntry{out_splits[0]}.split;
   EXPECT_EQ(result_left.findex, 1);
   EXPECT_EQ(result_left.fvalue, 11.0);
 
-  DeviceSplitCandidate result_right = out_splits[1];
+  DeviceSplitCandidate result_right = GPUExpandEntry{out_splits[1]}.split;
   EXPECT_EQ(result_right.findex, 0);
   EXPECT_EQ(result_right.fvalue, 1.0);
 }
