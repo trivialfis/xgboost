@@ -23,14 +23,14 @@ void TestBatchedSplitBounds() {
 
   // Root bounds differ by target: left <= 10*t, right >= 10*t.
   tree_evaluator.AddSplits(1, 2, [] XGBOOST_DEVICE(std::size_t, bst_target_t t) {
-    return TreeEvaluator::SplitBounds{0, 1, 2, 0, 10.0f * t};
+    return TreeEvaluator::SplitBounds{0, 1, 2, 0, 10.0f * t - 4.0f, 10.0f * t + 4.0f};
   });
   // Split both children in one batch. Large child IDs force the bounds buffers to grow.
   tree_evaluator.AddSplits(2, 303, [] XGBOOST_DEVICE(std::size_t i, bst_target_t t) {
     if (i == 0) {
-      return TreeEvaluator::SplitBounds{1, 300, 301, 1, 10.0f * t - 2.0f};
+      return TreeEvaluator::SplitBounds{1, 300, 301, 1, 10.0f * t - 1.0f, 10.0f * t - 3.0f};
     }
-    return TreeEvaluator::SplitBounds{2, 302, 303, 0, 10.0f * t + 2.0f};
+    return TreeEvaluator::SplitBounds{2, 302, 303, 0, 10.0f * t + 1.0f, 10.0f * t + 3.0f};
   });
 
   auto bounds = tree_evaluator.GetEvaluator();

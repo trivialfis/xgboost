@@ -38,10 +38,14 @@ void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const &tree,
   if (candidates.size() == 1) {
     // Use kernel arguments for a singleton batch, avoiding both explicit uploads.
     auto const &candidate = candidates.front();
-    tree_evaluator_.AddSplit(candidate.nidx, tree.LeftChild(candidate.nidx),
-                             tree.RightChild(candidate.nidx),
-                             static_cast<bst_feature_t>(candidate.split.findex),
-                             candidate.left_weight, candidate.right_weight);
+    TreeEvaluator::SplitBounds split{candidate.nidx,
+                                     tree.LeftChild(candidate.nidx),
+                                     tree.RightChild(candidate.nidx),
+                                     static_cast<bst_feature_t>(candidate.split.findex),
+                                     candidate.left_weight,
+                                     candidate.right_weight};
+    tree_evaluator_.AddSplits(1, std::max(split.left_nidx, split.right_nidx),
+                              [=] XGBOOST_DEVICE(std::size_t, bst_target_t) { return split; });
     return;
   }
 
@@ -62,9 +66,10 @@ void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const &tree,
   tree_evaluator_.AddSplits(
       d_candidates.size(), max_nidx, [=] XGBOOST_DEVICE(std::size_t i, bst_target_t) {
         auto const &candidate = d_candidates[i];
-        return TreeEvaluator::SplitBounds{candidate.nidx, d_children[i].first, d_children[i].second,
-                                          static_cast<bst_feature_t>(candidate.split.findex),
-                                          (candidate.left_weight + candidate.right_weight) / 2.0f};
+        return TreeEvaluator::SplitBounds{
+            candidate.nidx,        d_children[i].first,
+            d_children[i].second,  static_cast<bst_feature_t>(candidate.split.findex),
+            candidate.left_weight, candidate.right_weight};
       });
 }
 

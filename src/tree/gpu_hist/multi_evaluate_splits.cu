@@ -776,10 +776,12 @@ void MultiHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const *p_tre
         auto const &candidate = d_candidates[i];
         auto left_weight = weights.Left(candidate.nidx)[t];
         auto right_weight = weights.Right(candidate.nidx)[t];
-        return TreeEvaluator::SplitBounds{candidate.nidx, mt_tree.LeftChild(candidate.nidx),
+        return TreeEvaluator::SplitBounds{candidate.nidx,
+                                          mt_tree.LeftChild(candidate.nidx),
                                           mt_tree.RightChild(candidate.nidx),
                                           static_cast<bst_feature_t>(candidate.split.findex),
-                                          left_weight + 0.5f * (right_weight - left_weight)};
+                                          left_weight,
+                                          right_weight};
       });
 
   // Assign the node sums here, for the next evaluate split call.

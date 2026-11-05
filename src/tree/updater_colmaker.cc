@@ -191,8 +191,14 @@ class ColMaker : public TreeUpdater {
           int cleft = (*p_tree)[nid].LeftChild();
           int cright = (*p_tree)[nid].RightChild();
 
-          tree_evaluator_.AddSplit(nid, cleft, cright, snode_[nid].best.SplitIndex(),
-                                   snode_[cleft].weight, snode_[cright].weight);
+          TreeEvaluator::SplitBounds split{nid,
+                                           cleft,
+                                           cright,
+                                           snode_[nid].best.SplitIndex(),
+                                           snode_[cleft].weight,
+                                           snode_[cright].weight};
+          tree_evaluator_.AddSplits(1, std::max(cleft, cright),
+                                    [=](std::size_t, bst_target_t) { return split; });
           interaction_constraints_.Split(nid, snode_[nid].best.SplitIndex(), cleft, cright);
         }
         qexpand_ = newnodes;

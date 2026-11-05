@@ -177,6 +177,23 @@ class TreeEvaluator {
       return {pooled, pooled};
     }
 
+    template <typename LeftGradientSumT, typename RightGradientSumT>
+    XGBOOST_DEVICE void AccumulateConstrainedSplitGain(ParamT const& param, bst_node_t nidx,
+                                                       bst_feature_t fidx, bst_target_t target,
+                                                       LeftGradientSumT const& left,
+                                                       RightGradientSumT const& right, bool scalar,
+                                                       double* gain) const {
+      auto [l_w, r_w] = this->CalcSplitWeights(param, nidx, fidx, target, left, right);
+      // Equal scalar leaf weights cannot improve on the parent. Reject before score
+      // subtraction can turn a zero gain into a positive gain through rounding.
+      if (scalar && l_w == r_w) {
+        *gain = -std::numeric_limits<double>::infinity();
+        return;
+      }
+      *gain += tree::CalcGainGivenWeight(param, left.GetGrad(), left.GetHess(), l_w);
+      *gain += tree::CalcGainGivenWeight(param, right.GetGrad(), right.GetHess(), r_w);
+    }
+
     template <typename GradientSumT, split_impl::EnableScaGrad<GradientSumT> = 0>
     XGBOOST_DEVICE float CalcSplitGain(ParamT const& param, bst_node_t nidx, bst_feature_t fidx,
                                        GradientSumT const& left, GradientSumT const& right) const {
@@ -187,21 +204,16 @@ class TreeEvaluator {
         return kNegInf;
       }
 
-      int constraint = has_constraint ? constraints[fidx] : 0;
+      if (has_constraint) {
+        double gain{0.0};
+        this->AccumulateConstrainedSplitGain(param, nidx, fidx, 0, left, right, true, &gain);
+        return gain;
+      }
       float wleft = this->CalcWeight(nidx, param, left);
       float wright = this->CalcWeight(nidx, param, right);
 
-      float gain = this->CalcGainGivenWeight(param, left, wleft) +
-                   this->CalcGainGivenWeight(param, right, wright);
-
-      if (constraint == 0) {
-        // no constraint
-        return gain;
-      } else if (constraint > 0) {
-        return wleft <= wright ? gain : kNegInf;
-      } else {
-        return wleft >= wright ? gain : kNegInf;
-      }
+      return this->CalcGainGivenWeight(param, left, wleft) +
+             this->CalcGainGivenWeight(param, right, wright);
     }
 
     template <typename LeftGradientSumT, typename RightGradientSumT,
@@ -233,16 +245,8 @@ class TreeEvaluator {
       }
 
       for (std::size_t t = 0; t < n_targets; ++t) {
-        auto const left_t = left(t);
-        auto const right_t = right(t);
-        auto [l_w, r_w] = this->CalcSplitWeights(param, nidx, fidx, t, left_t, right_t);
-        // Equal scalar leaf weights cannot improve on the parent. Reject before score
-        // subtraction can turn a zero gain into a positive gain through rounding.
-        if (n_targets == 1 && l_w == r_w) {
-          return -std::numeric_limits<double>::infinity();
-        }
-        gain += tree::CalcGainGivenWeight(param, left_t.GetGrad(), left_t.GetHess(), l_w);
-        gain += tree::CalcGainGivenWeight(param, right_t.GetGrad(), right_t.GetHess(), r_w);
+        this->AccumulateConstrainedSplitGain(param, nidx, fidx, t, left(t), right(t),
+                                             n_targets == 1, &gain);
       }
       return gain;
     }
@@ -370,13 +374,14 @@ class TreeEvaluator {
 
   [[nodiscard]] bool HasConstraint() const { return has_constraint_; }
 
-  /** @brief Child bounds update for one split and target. */
+  /** @brief Node IDs and unscaled child weights for one split and target. */
   struct SplitBounds {
     bst_node_t nidx;
     bst_node_t left_nidx;
     bst_node_t right_nidx;
     bst_feature_t fidx;
-    float midpoint;
+    float left_weight;
+    float right_weight;
   };
 
   /**
@@ -407,7 +412,7 @@ class TreeEvaluator {
           lower[right_idx] = lower[parent_idx];
           upper[right_idx] = upper[parent_idx];
 
-          auto mid = split.midpoint;
+          auto mid = split.left_weight + 0.5f * (split.right_weight - split.left_weight);
           SPAN_CHECK(!common::CheckNAN(mid));
           auto constraint = monotone[split.fidx];
           if (constraint < 0) {
@@ -420,31 +425,6 @@ class TreeEvaluator {
         },
         common::Range(0, n_splits * n_targets), 1, device_)
         .Eval(&lower_bounds_, &upper_bounds_, &monotone_);
-  }
-
-  template <bool CompiledWithCuda = WITH_CUDA()>
-  void AddSplit(bst_node_t nidx, bst_node_t left_nidx, bst_node_t right_nidx, bst_feature_t f,
-                float left_weight, float right_weight) {
-    this->AddSplits<CompiledWithCuda>(
-        1, std::max(left_nidx, right_nidx), [=] XGBOOST_DEVICE(std::size_t, bst_target_t) {
-          return SplitBounds{nidx, left_nidx, right_nidx, f, (left_weight + right_weight) / 2.0f};
-        });
-  }
-
-  template <bool CompiledWithCuda = WITH_CUDA()>
-  void AddSplit(bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid, bst_feature_t f,
-                linalg::VectorView<float const> left_weight,
-                linalg::VectorView<float const> right_weight) {
-    if (!has_constraint_) {
-      return;
-    }
-    CHECK_EQ(left_weight.Size(), n_targets_);
-    CHECK_EQ(right_weight.Size(), n_targets_);
-    this->AddSplits<CompiledWithCuda>(
-        1, std::max(leftid, rightid), [=] XGBOOST_DEVICE(std::size_t, bst_target_t t) {
-          return SplitBounds{nodeid, leftid, rightid, f,
-                             left_weight(t) + 0.5f * (right_weight(t) - left_weight(t))};
-        });
   }
 };
 }  // namespace xgboost::tree

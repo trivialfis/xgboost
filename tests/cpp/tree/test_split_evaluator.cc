@@ -69,6 +69,16 @@ TEST(TreeEvaluator, PooledWeightUsesTwoLeafRegularization) {
               evaluator.CalcGainGivenWeight(param, h_right(0), pooled);
   EXPECT_DOUBLE_EQ(gain, CalcGain(pooled_param, sum));
   EXPECT_DOUBLE_EQ(evaluator.CalcSplitGain(param, 0, 0, h_left, h_right), gain);
+
+  // For a single target, both APIs reject crossing or equal weights and accept ordered weights.
+  TreeEvaluator scalar_tree{param, 1, DeviceOrd::CPU(), 1};
+  auto scalar = scalar_tree.GetEvaluator();
+  for (auto right : {h_right(0), h_left(0), GradientPairPrecise{-3.0, 1.0}}) {
+    auto left = h_left(0);
+    EXPECT_EQ(scalar.CalcSplitGain(param, 0, 0, left, right),
+              static_cast<float>(scalar.CalcSplitGain(param, 0, 0, linalg::MakeVec(&left, 1),
+                                                      linalg::MakeVec(&right, 1))));
+  }
 }
 
 TEST(TreeEvaluator, PropagateVectorBounds) {
@@ -123,8 +133,9 @@ TEST(TreeEvaluator, PropagateVectorBounds) {
                                              root_stats.Slice(1, linalg::All())),
                      13.0);
 
-    tree_evaluator.AddSplit(0, 1, 2, 0, root_weight.Slice(0, linalg::All()),
-                            root_weight.Slice(1, linalg::All()));
+    tree_evaluator.AddSplits(1, 2, [=](std::size_t, bst_target_t t) {
+      return TreeEvaluator::SplitBounds{0, 1, 2, 0, h_root_weight(0, t), h_root_weight(1, t)};
+    });
     evaluator = tree_evaluator.GetEvaluator();
 
     // f1 has no constraint, but each split inherits the target-specific bounds from f0.

@@ -496,8 +496,13 @@ class HistEvaluator {
     CHECK_GT(right_child, candidate.nid);
 
     // Set up child constraints
-    tree_evaluator_.AddSplit(candidate.nid, left_child, right_child, candidate.split.SplitIndex(),
-                             left_weight, right_weight);
+    auto nidx = candidate.nid;
+    auto fidx = candidate.split.SplitIndex();
+    tree_evaluator_.AddSplits(
+        1, std::max(left_child, right_child), [=](std::size_t, bst_target_t t) {
+          return TreeEvaluator::SplitBounds{nidx, left_child,     right_child,
+                                            fidx, left_weight(t), right_weight(t)};
+        });
     evaluator = tree_evaluator_.GetEvaluator();
     interaction_constraints_.Split(candidate.nid, candidate.split.SplitIndex(), left_child,
                                    right_child);
