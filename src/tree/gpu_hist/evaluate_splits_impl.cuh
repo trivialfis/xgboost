@@ -254,6 +254,55 @@ struct QuantizedGradientDifference {
 static_assert(std::is_trivially_copyable_v<QuantizedGradientSum>);
 static_assert(std::is_trivially_copyable_v<QuantizedGradientDifference>);
 
+struct PrecomputedScan {
+  __device__ bst_bin_t operator()(bst_bin_t) const { return 0; }
+  __device__ void Save(MultiSplitCandidate *) const {}
+};
+
+// A warp scans one tile across all targets before evaluating it. Only the winning
+// sums survive tile reuse; no per-bin scan results are written to global memory.
+template <bst_target_t kTargets, DefaultDirection kDirection>
+struct FusedNumericalScan {
+  typename ScanHistogramAgent::WarpScanT::TempStorage *temp_storage;
+  GradientPairInt64 const *histogram;
+  bst_bin_t bins_per_target;
+  bst_bin_t begin;
+  bst_bin_t end;
+  common::Span<GradientPairInt64> tile;
+  common::Span<GradientPairInt64> winner;
+  GradientPairInt64 carry[kTargets]{};
+
+  __device__ bst_bin_t operator()(bst_bin_t tile_begin) {
+    auto lane = cuda::ptx::get_sreg_laneid();
+    auto bin_idx = tile_begin + lane;
+    auto hist_idx = kDirection == kRightDir ? bin_idx : RevBinIdx(begin, end, bin_idx);
+    for (bst_target_t t = 0; t < kTargets; ++t) {
+      auto bin = bin_idx < end ? histogram[t * bins_per_target + hist_idx] : GradientPairInt64{};
+      if (lane == 0) {
+        bin += carry[t];
+      }
+      ScanHistogramAgent::WarpScanT(*temp_storage)
+          .InclusiveScan(bin, bin, cuda::std::plus{}, carry[t]);
+      __syncwarp();
+      tile[lane * kTargets + t] = bin;
+    }
+    __syncwarp();
+    return tile_begin;
+  }
+
+  __device__ void Save(MultiSplitCandidate *best) const {
+    // The candidate points into tile only when this tile produced a new winner.
+    if (cuda::ptx::get_sreg_laneid() == 0 && !best->child_sum.empty() &&
+        best->child_sum.data() != winner.data()) {
+      for (bst_target_t t = 0; t < kTargets; ++t) {
+        winner[t] = best->child_sum[t];
+      }
+      best->child_sum = winner;
+    }
+    __syncwarp();
+  }
+};
+
 struct EvaluateSplitAgent {
   using ArgMaxT = cub::KeyValuePair<std::uint32_t, double>;
   using MaxReduceT = cub::WarpReduce<ArgMaxT>;
@@ -283,11 +332,11 @@ struct EvaluateSplitAgent {
     }
   }
 
-  template <DefaultDirection d_dir>
+  template <DefaultDirection d_dir, typename Scan = PrecomputedScan>
   __device__ void Numerical(MultiEvaluateSplitInputs const &node,
                             MultiEvaluateSplitSharedInputs const &shared,
                             common::Span<GradientPairInt64 const> node_scan,
-                            MultiSplitCandidate *best_split) {
+                            MultiSplitCandidate *best_split, Scan scan = {}) {
     // Calculate split gain for each bin
     auto n_targets = shared.Targets();
     auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
@@ -296,13 +345,15 @@ struct EvaluateSplitAgent {
     bst_bin_t gidx_end = shared.feature_segments[fidx + 1];
 
     for (auto scan_begin = gidx_begin; scan_begin < gidx_end; scan_begin += dh::WarpThreads()) {
+      auto scan_offset = scan(scan_begin);
       auto bin_idx = scan_begin + lane_id;
       bool thread_active = bin_idx < gidx_end;
 
       auto constexpr kNullGain = -std::numeric_limits<double>::infinity();
-      double gain = thread_active ? ComputeGain<d_dir>(node, shared, node_scan, bin_idx, n_targets,
-                                                       fidx, evaluator)
-                                  : kNullGain;
+      double gain = thread_active
+                        ? ComputeGain<d_dir>(node, shared, node_scan, bin_idx - scan_offset,
+                                             n_targets, fidx, evaluator)
+                        : kNullGain;
 
       auto best = MaxReduceT(*temp_storage).Reduce({threadIdx.x, gain}, cub::ArgMax{});
       auto best_thread = __shfl_sync(dh::WarpFullMask(), best.key, 0);
@@ -325,13 +376,14 @@ struct EvaluateSplitAgent {
         }
         // Scan result layout: [bins][targets] - all targets for this bin are contiguous
         // bin_idx is the global bin index
-        auto scan_bin_offset = bin_idx * n_targets;
+        auto scan_bin_offset = (bin_idx - scan_offset) * n_targets;
         auto scan_bin = node_scan.subspan(scan_bin_offset, n_targets);
         // Missing values go to right in the forward pass, go to left in the backward pass.
         best_split->Update(gain, d_dir, fvalue, fidx, scan_bin, false);
       }
 
       __syncwarp();
+      scan.Save(best_split);
     }
   }
 
@@ -420,6 +472,89 @@ struct EvaluateSplitAgent {
     }
   }
 };
+
+// The fused path is limited to small target counts to bound register pressure.
+template <typename Fn>
+void DispatchFusedTargets(bst_target_t n_targets, Fn &&fn) {
+  switch (n_targets) {
+    case 1:
+      fn(std::integral_constant<bst_target_t, 1>{});
+      break;
+    case 2:
+      fn(std::integral_constant<bst_target_t, 2>{});
+      break;
+    case 3:
+      fn(std::integral_constant<bst_target_t, 3>{});
+      break;
+    case 4:
+      fn(std::integral_constant<bst_target_t, 4>{});
+      break;
+    default:
+      LOG(FATAL) << "Unsupported fused target count: " << n_targets;
+  }
+}
+
+template <bst_target_t kTargets, typename Input, typename SharedInput, typename Output>
+__global__ __launch_bounds__(32) void FusedEvaluateSplitsKernel(
+    common::Span<Input const> nodes, SharedInput shared_input, bst_feature_t max_active_features,
+    TreeEvaluator::SplitEvaluator<EvalParam> evaluator,
+    common::Span<GradientPairInt64> candidate_sums, common::Span<Output> out_candidates) {
+  auto shared = GetSharedInput(shared_input, max_active_features);
+  // Preserve the compile-time target count through the shared scoring implementation.
+  shared.roundings = {shared.roundings.data(), kTargets};
+  auto candidate_idx = blockIdx.x;
+  auto node = GetInput(nodes[candidate_idx / max_active_features]);
+  auto fidx_in_set = candidate_idx % max_active_features;
+  auto lane = cuda::ptx::get_sreg_laneid();
+  if (fidx_in_set >= node.feature_set.size()) {
+    if (lane == 0) {
+      out_candidates[candidate_idx] = Output{};
+    }
+    return;
+  }
+  auto fidx = node.feature_set[fidx_in_set];
+  bst_bin_t begin = shared.feature_segments[fidx];
+  bst_bin_t end = shared.feature_segments[fidx + 1];
+
+  __shared__ typename ScanHistogramAgent::WarpScanT::TempStorage scan_storage;
+  __shared__ typename EvaluateSplitAgent::MaxReduceT::TempStorage reduce_storage;
+  __shared__ cub::Uninitialized<GradientPairInt64[32 * kTargets]> tile_storage;
+  __shared__ cub::Uninitialized<GradientPairInt64[kTargets]> winner_storage;
+  __shared__ cub::Uninitialized<MultiSplitCandidate> split_storage;
+  auto &best = split_storage.Alias();
+  common::Span<GradientPairInt64> tile{tile_storage.Alias(), 32 * kTargets};
+  common::Span<GradientPairInt64> winner{winner_storage.Alias(), kTargets};
+  if (lane == 0) {
+    best = MultiSplitCandidate{};
+  }
+  __syncwarp();
+  EvaluateSplitAgent agent{&reduce_storage, fidx, evaluator};
+  if (shared.one_pass != MultiEvaluateSplitSharedInputs::kBackward) {
+    FusedNumericalScan<kTargets, kRightDir> scan{
+        &scan_storage, node.histogram.data(), shared.n_total_bins_per_tar, begin, end, tile,
+        winner};
+    agent.Numerical<kRightDir>(node, shared, tile, &best, scan);
+  }
+  if (shared.NeedBackward()) {
+    FusedNumericalScan<kTargets, kLeftDir> scan{
+        &scan_storage, node.histogram.data(), shared.n_total_bins_per_tar, begin, end, tile,
+        winner};
+    agent.Numerical<kLeftDir>(node, shared, tile, &best, scan);
+  }
+  if (lane == 0) {
+    if constexpr (std::is_same_v<Output, MultiSplitCandidate>) {
+      // Vector candidates outlive this block and are reduced across features next.
+      if (!best.child_sum.empty()) {
+        auto dest = candidate_sums.subspan(candidate_idx * kTargets, kTargets);
+        for (bst_target_t t = 0; t < kTargets; ++t) {
+          dest[t] = best.child_sum[t];
+        }
+        best.child_sum = dest;
+      }
+    }
+    StoreCandidate(best, node, &out_candidates[candidate_idx]);
+  }
+}
 
 // Find the best split based on the scan result
 //
