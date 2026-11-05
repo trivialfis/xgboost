@@ -4,11 +4,66 @@
 #include <gtest/gtest.h>
 #include <thrust/host_vector.h>
 
+#include <limits>  // for numeric_limits
+
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
 #include "../../helpers.h"
 #include "../test_evaluate_splits.h"  // TestPartitionBasedSplit
+#include "../test_split_evaluator.h"  // for TestBatchedSplitBounds
 
 namespace xgboost::tree {
+TEST(GpuHist, AddSplits) { TestBatchedSplitBounds(MakeCUDACtx(0).Device()); }
+
+TEST(GpuHist, ApplyDeviceTreeSplits) {
+  auto ctx = MakeCUDACtx(0);
+  TrainParam param;
+  param.Init(Args{{"monotone_constraints", "(1, -1, 0)"}});
+  GPUHistEvaluator evaluator{param, 3, ctx.Device()};
+  RegTree tree{1, 3};
+
+  auto apply = [&](std::vector<GPUExpandEntry> candidates) {
+    dh::device_vector<GPUExpandEntry> d_candidates{candidates};
+    // Only node IDs are needed on the host. Weights and split features must come from
+    // device entries, including for a single candidate.
+    for (auto& candidate : candidates) {
+      candidate.left_weight = std::numeric_limits<float>::quiet_NaN();
+      candidate.right_weight = std::numeric_limits<float>::quiet_NaN();
+      candidate.split.findex = -1;
+    }
+    evaluator.ApplyTreeSplit(&ctx, &tree, common::Span<GPUExpandEntry const>{candidates},
+                             dh::ToSpan(d_candidates));
+    ctx.CUDACtx()->Stream().Sync();
+  };
+  auto entry = [](bst_node_t nidx, bst_feature_t fidx, float left, float right) {
+    GPUExpandEntry candidate{};
+    candidate.nidx = nidx;
+    candidate.split.findex = fidx;
+    candidate.left_weight = left;
+    candidate.right_weight = right;
+    return candidate;
+  };
+
+  tree.Expand({{0, 0, 0.5f, true}, {0.0f, 4.0}, {-4.0f, 2.0}, {4.0f, 2.0}, 1.0f});
+  apply({entry(0, 0, -4.0f, 4.0f)});
+
+  // Expand out of node order so the device update must look up the actual children.
+  tree.Expand({{2, 1, 0.5f, false}, {4.0f, 2.0}, {3.0f, 1.0}, {1.0f, 1.0}, 1.0f});
+  tree.Expand({{1, 2, 0.5f, true}, {-4.0f, 2.0}, {-3.0f, 1.0}, {-1.0f, 1.0}, 1.0f});
+  apply({entry(2, 1, 3.0f, 1.0f), entry(1, 2, -3.0f, -1.0f)});
+
+  auto bounds = evaluator.GetEvaluator();
+  std::vector<float> lower(4), upper(4);
+  dh::safe_cuda(cudaMemcpy(lower.data(), bounds.lower + 3, lower.size() * sizeof(float),
+                           cudaMemcpyDeviceToHost));
+  dh::safe_cuda(cudaMemcpy(upper.data(), bounds.upper + 3, upper.size() * sizeof(float),
+                           cudaMemcpyDeviceToHost));
+  constexpr float kLimit = std::numeric_limits<float>::max();
+  std::vector<float> expected_lower{2.0f, 0.0f, -kLimit, -kLimit};
+  std::vector<float> expected_upper{kLimit, 2.0f, 0.0f, 0.0f};
+  EXPECT_EQ(lower, expected_lower);
+  EXPECT_EQ(upper, expected_upper);
+}
+
 namespace {
 auto ZeroParam() {
   auto args = Args{{"min_child_weight", "0"}, {"lambda", "0"}};

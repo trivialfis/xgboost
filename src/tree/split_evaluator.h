@@ -368,39 +368,67 @@ class TreeEvaluator {
     }
   }
 
+  [[nodiscard]] bool HasConstraint() const { return has_constraint_; }
+
+  /** @brief Child bounds update for one split and target. */
+  struct SplitBounds {
+    bst_node_t nidx;
+    bst_node_t left_nidx;
+    bst_node_t right_nidx;
+    bst_feature_t fidx;
+    float midpoint;
+  };
+
+  /**
+   * @brief Propagate monotonic bounds for a batch of independent splits.
+   *
+   * The accessor returns SplitBounds for (split index, target index) on the evaluator's
+   * device. Parents must already have bounds, children must be distinct, and no child
+   * may also be a parent in this batch. max_nidx is the maximum child node ID.
+   */
+  template <bool CompiledWithCuda = WITH_CUDA(), typename GetSplit>
+  void AddSplits(std::size_t n_splits, bst_node_t max_nidx, GetSplit get_split) {
+    if (!has_constraint_ || n_splits == 0) {
+      return;
+    }
+    auto n_targets = n_targets_;
+    this->EnsureBounds(max_nidx, n_targets);
+    common::Transform<CompiledWithCuda>::Init(
+        [=] XGBOOST_DEVICE(std::size_t i, common::Span<float> lower, common::Span<float> upper,
+                           common::Span<int> monotone) {
+          auto t = i % n_targets;
+          auto split = get_split(i / n_targets, t);
+          auto parent_idx = static_cast<std::size_t>(split.nidx) * n_targets + t;
+          auto left_idx = static_cast<std::size_t>(split.left_nidx) * n_targets + t;
+          auto right_idx = static_cast<std::size_t>(split.right_nidx) * n_targets + t;
+
+          lower[left_idx] = lower[parent_idx];
+          upper[left_idx] = upper[parent_idx];
+          lower[right_idx] = lower[parent_idx];
+          upper[right_idx] = upper[parent_idx];
+
+          auto mid = split.midpoint;
+          SPAN_CHECK(!common::CheckNAN(mid));
+          auto constraint = monotone[split.fidx];
+          if (constraint < 0) {
+            lower[left_idx] = mid;
+            upper[right_idx] = mid;
+          } else if (constraint > 0) {
+            upper[left_idx] = mid;
+            lower[right_idx] = mid;
+          }
+        },
+        common::Range(0, n_splits * n_targets), 1, device_)
+        .Eval(&lower_bounds_, &upper_bounds_, &monotone_);
+  }
+
   template <bool CompiledWithCuda = WITH_CUDA()>
   void AddSplit(bst_node_t nidx, bst_node_t left_nidx, bst_node_t right_nidx, bst_feature_t f,
                 float left_weight, float right_weight) {
-    if (!has_constraint_) {
-      return;
-    }
-
-    auto max_nidx = std::max(left_nidx, right_nidx);
-    this->EnsureBounds(max_nidx, 1u);
-
-    common::Transform<>::Init(
-        [=] XGBOOST_DEVICE(size_t, common::Span<float> lower, common::Span<float> upper,
-                           common::Span<int> monotone) {
-          lower[left_nidx] = lower[nidx];
-          upper[left_nidx] = upper[nidx];
-
-          lower[right_nidx] = lower[nidx];
-          upper[right_nidx] = upper[nidx];
-          int32_t c = monotone[f];
-          float mid = (left_weight + right_weight) / 2.0f;
-
-          SPAN_CHECK(!common::CheckNAN(mid));
-
-          if (c < 0) {
-            lower[left_nidx] = mid;
-            upper[right_nidx] = mid;
-          } else if (c > 0) {
-            upper[left_nidx] = mid;
-            lower[right_nidx] = mid;
-          }
-        },
-        common::Range(0, 1), 1, device_)
-        .Eval(&lower_bounds_, &upper_bounds_, &monotone_);
+    this->AddSplits<CompiledWithCuda>(
+        1, std::max(left_nidx, right_nidx), [=] XGBOOST_DEVICE(std::size_t, bst_target_t) {
+          return SplitBounds{nidx, left_nidx, right_nidx, f, (left_weight + right_weight) / 2.0f};
+        });
   }
 
   template <bool CompiledWithCuda = WITH_CUDA()>
@@ -412,37 +440,11 @@ class TreeEvaluator {
     }
     CHECK_EQ(left_weight.Size(), n_targets_);
     CHECK_EQ(right_weight.Size(), n_targets_);
-    auto n_targets = n_targets_;
-
-    auto max_nidx = std::max(leftid, rightid);
-    this->EnsureBounds(max_nidx, n_targets);
-
-    common::Transform<>::Init(
-        [=] XGBOOST_DEVICE(size_t t, common::Span<float> lower, common::Span<float> upper,
-                           common::Span<int> monotone) {
-          std::size_t strides[2]{n_targets, 1u};
-          auto parent_idx = linalg::detail::Offset<0>(strides, 0, nodeid, t);
-          auto left_idx = linalg::detail::Offset<0>(strides, 0, leftid, t);
-          auto right_idx = linalg::detail::Offset<0>(strides, 0, rightid, t);
-
-          lower[left_idx] = lower[parent_idx];
-          upper[left_idx] = upper[parent_idx];
-          lower[right_idx] = lower[parent_idx];
-          upper[right_idx] = upper[parent_idx];
-
-          auto mid = left_weight(t) + 0.5f * (right_weight(t) - left_weight(t));
-          SPAN_CHECK(!common::CheckNAN(mid));
-          auto constraint = monotone[f];
-          if (constraint < 0) {
-            lower[left_idx] = mid;
-            upper[right_idx] = mid;
-          } else if (constraint > 0) {
-            upper[left_idx] = mid;
-            lower[right_idx] = mid;
-          }
-        },
-        common::Range(0, n_targets), 1, device_)
-        .Eval(&lower_bounds_, &upper_bounds_, &monotone_);
+    this->AddSplits<CompiledWithCuda>(
+        1, std::max(leftid, rightid), [=] XGBOOST_DEVICE(std::size_t, bst_target_t t) {
+          return SplitBounds{nodeid, leftid, rightid, f,
+                             left_weight(t) + 0.5f * (right_weight(t) - left_weight(t))};
+        });
   }
 };
 }  // namespace xgboost::tree

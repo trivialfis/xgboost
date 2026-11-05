@@ -560,8 +560,12 @@ struct GPUHistMakerDevice {
         });
     p_tree->Expand(common::Span<ExpandData<float> const>{batch});
 
+    if (param.HasMonotone()) {
+      dh::device_vector<GPUExpandEntry> d_candidates{candidates};
+      evaluator_.ApplyTreeSplit(ctx_, p_tree, common::Span<GPUExpandEntry const>{candidates},
+                                dh::ToSpan(d_candidates));
+    }
     for (auto const& candidate : candidates) {
-      evaluator_.ApplyTreeSplit(candidate, p_tree);
       auto const& parent = (*p_tree)[candidate.nidx];
       interaction_constraints.Split(ctx_, candidate.nidx, parent.SplitIndex(), parent.LeftChild(),
                                     parent.RightChild());

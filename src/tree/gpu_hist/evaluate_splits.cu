@@ -1,21 +1,47 @@
 /**
  * Copyright 2020-2026, XGBoost Contributors
  */
-#include <algorithm>                               // for :max
+#include <algorithm>                               // for max
 #include <cub/device/device_segmented_reduce.cuh>  // for DeviceSegmentedReduce
 #include <cuda/std/functional>                     // for plus
 #include <limits>                                  // for numeric_limits
+#include <vector>                                  // for vector
 
-#include "../../collective/allgather.h"
-#include "../../collective/communicator-inl.h"  // for GetWorldSize, GetRank
 #include "../../common/categorical.h"
 #include "../../common/cuda_compat.cuh"   // for CUDA compatibility
 #include "../../common/cuda_context.cuh"  // for CUDAContext
 #include "../../common/cuda_stream.h"     // for Event
+#include "../../common/nvtx_utils.h"      // for xgboost_NVTX_FN_RANGE
+#include "../tree_view.h"                 // for ScalarTreeView
 #include "evaluate_splits.cuh"
 #include "expand_entry.cuh"
 
 namespace xgboost::tree {
+void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const *p_tree,
+                                      common::Span<GPUExpandEntry const> h_candidates,
+                                      common::Span<GPUExpandEntry const> d_candidates) {
+  xgboost_NVTX_FN_RANGE();
+  CHECK_EQ(h_candidates.size(), d_candidates.size());
+  CHECK(!h_candidates.empty());
+  if (!tree_evaluator_.HasConstraint()) {
+    return;
+  }
+  auto sc_tree = ScalarTreeView{ctx->Device(), false, p_tree};
+  bst_node_t max_nidx{0};
+  for (auto const &candidate : h_candidates) {
+    max_nidx =
+        std::max({max_nidx, p_tree->LeftChild(candidate.nidx), p_tree->RightChild(candidate.nidx)});
+  }
+  tree_evaluator_.AddSplits(
+      d_candidates.size(), max_nidx, [=] XGBOOST_DEVICE(std::size_t i, bst_target_t) {
+        auto const &candidate = d_candidates[i];
+        return TreeEvaluator::SplitBounds{candidate.nidx, sc_tree.LeftChild(candidate.nidx),
+                                          sc_tree.RightChild(candidate.nidx),
+                                          static_cast<bst_feature_t>(candidate.split.findex),
+                                          (candidate.left_weight + candidate.right_weight) / 2.0f};
+      });
+}
+
 // With constraints
 XGBOOST_DEVICE float LossChangeMissing(const GradientPairInt64 &scan,
                                        const GradientPairInt64 &missing,

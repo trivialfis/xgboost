@@ -172,18 +172,10 @@ class GPUHistEvaluator {
       return common::KCatBitField{};
     }
   }
-  /**
-   * \brief Add a split to the internal tree evaluator.
-   */
-  void ApplyTreeSplit(GPUExpandEntry const &candidate, RegTree *p_tree) {
-    auto &tree = *p_tree;
-    // Set up child constraints
-    auto left_child = tree[candidate.nidx].LeftChild();
-    auto right_child = tree[candidate.nidx].RightChild();
-    tree_evaluator_.AddSplit(candidate.nidx, left_child, right_child,
-                             tree[candidate.nidx].SplitIndex(), candidate.left_weight,
-                             candidate.right_weight);
-  }
+  /** @brief Set up child constraints from device candidates; host entries supply node IDs. */
+  void ApplyTreeSplit(Context const *ctx, RegTree const *p_tree,
+                      common::Span<GPUExpandEntry const> h_candidates,
+                      common::Span<GPUExpandEntry const> d_candidates);
 
   auto GetEvaluator() { return tree_evaluator_.GetEvaluator<EvalParam>(); }
   /**
@@ -191,8 +183,7 @@ class GPUHistEvaluator {
    */
   common::Span<bst_feature_t const> SortHistogram(
       Context const *ctx, common::Span<const EvaluateSplitInputs> d_inputs,
-      EvaluateSplitSharedInputs shared_inputs,
-      TreeEvaluator::SplitEvaluator<EvalParam> evaluator);
+      EvaluateSplitSharedInputs shared_inputs, TreeEvaluator::SplitEvaluator<EvalParam> evaluator);
 
   // impl of evaluate splits, contains CUDA kernels so it's public
   void LaunchEvaluateSplits(Context const *ctx, bst_feature_t max_active_features,
