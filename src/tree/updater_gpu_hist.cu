@@ -560,7 +560,9 @@ struct GPUHistMakerDevice {
               {right_weight, right_hess},
               candidate.split.loss_chg};
         });
-    p_tree->Expand(common::Span<ExpandData<float> const>{batch});
+    for (auto const& entry : batch) {
+      p_tree->Expand(entry);
+    }
 
     evaluator_.ApplyTreeSplit(ctx_, *p_tree, h_candidates);
     for (auto const& candidate : candidates) {

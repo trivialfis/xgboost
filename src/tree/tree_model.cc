@@ -914,32 +914,6 @@ void RegTree::Expand(tree::ExpandData<float> const& entry, bst_node_t leaf_right
   }
 }
 
-void RegTree::Expand(common::Span<tree::ExpandData<float> const> batch) {
-  CHECK(!IsMultiTarget());
-  xgboost_NVTX_FN_RANGE();
-
-  auto n_children = batch.size() * 2;
-  auto n_reused = std::min(n_children, static_cast<std::size_t>(param_.num_deleted));
-  auto n_nodes = this->Size() + n_children - n_reused;
-  CHECK_LT(n_nodes, static_cast<std::size_t>(std::numeric_limits<bst_node_t>::max()))
-      << "number of nodes in the tree exceed 2^31";
-  nodes_.HostVector().resize(n_nodes);
-  stats_.HostVector().resize(n_nodes);
-  split_types_.HostVector().resize(n_nodes, FeatureType::kNumerical);
-  split_categories_segments_.HostVector().resize(n_nodes);
-
-  auto& categories = split_categories_.HostVector();
-  auto n_categories = categories.size();
-  for (auto const& entry : batch) {
-    n_categories += entry.split.categories.size();
-  }
-  categories.reserve(n_categories);
-
-  for (auto const& entry : batch) {
-    this->Expand(entry);
-  }
-}
-
 void RegTree::Expand(Context const* ctx, tree::ExpandBatch const& batch) {
   CHECK(IsMultiTarget());
 

@@ -99,44 +99,6 @@ TEST(Tree, ExpandCategoricalFeature) {
   ASSERT_TRUE(std::equal(loaded_root.begin(), loaded_root.end(), split_cats.begin()));
 }
 
-TEST(Tree, ExpandScalarBatch) {
-  std::vector<std::uint32_t> categories{1u, 2u};
-  tree::ExpandData<float> root{{0, 0, 0.5f, true}, {1.0f, 8.0}, {2.0f, 3.0}, {3.0f, 5.0}, 4.0f};
-  for (bool reuse_deleted : {false, true}) {
-    SCOPED_TRACE(reuse_deleted);
-    RegTree sequential{1, 2};
-    RegTree batched{1, 2};
-    for (auto* tree : {&sequential, &batched}) {
-      tree->Expand(root);
-      if (reuse_deleted) {
-        tree->Expand({{1, 1, 0.0f, false}, {2.0f, 3.0}, {1.0f, 1.0}, {2.0f, 2.0}, 1.0f});
-        tree->CollapseToLeaf(1, 0.0f);
-      }
-    }
-
-    // Expand out of node order, mixing numerical and categorical splits. With deleted
-    // nodes, this batch must both reuse existing children and allocate new ones.
-    std::vector<tree::ExpandData<float>> batch{
-        {{2, 0, 0.25f, false}, {3.0f, 5.0}, {4.0f, 2.0}, {5.0f, 3.0}, 6.0f},
-        {{1, 1, DftBadValue(), true, categories}, {2.0f, 3.0}, {6.0f, 1.0}, {7.0f, 2.0}, 8.0f}};
-    for (auto const& entry : batch) {
-      sequential.Expand(entry);
-    }
-    batched.Expand(common::Span<tree::ExpandData<float> const>{batch});
-    batched.Expand(common::Span<tree::ExpandData<float> const>{});
-    sequential.FinalizeLeaves(0.3f);
-    batched.FinalizeLeaves(0.3f);
-
-    ASSERT_EQ(batched.NumNodes(), 7);
-    ASSERT_EQ(batched.GetNumLeaves(), 4);
-    Json expected{Object{}};
-    Json actual{Object{}};
-    sequential.SaveModel(&expected);
-    batched.SaveModel(&actual);
-    ASSERT_EQ(actual, expected);
-  }
-}
-
 void GrowTree(RegTree* p_tree) {
   SimpleLCG lcg;
   size_t n_expands = 10;
