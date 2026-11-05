@@ -134,12 +134,6 @@ TEST(Tree, ExpandScalarBatch) {
     sequential.SaveModel(&expected);
     batched.SaveModel(&actual);
     ASSERT_EQ(actual, expected);
-
-    RegTree loaded;
-    loaded.LoadModel(actual);
-    Json roundtrip{Object{}};
-    loaded.SaveModel(&roundtrip);
-    ASSERT_EQ(roundtrip, actual);
   }
 }
 

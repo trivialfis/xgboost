@@ -5,7 +5,8 @@
 #define EVALUATE_SPLITS_CUH_
 #include <xgboost/span.h>
 
-#include <cuda/std/tuple>  // for tuple
+#include <cuda/std/tuple>    // for tuple
+#include <cuda/std/utility>  // for pair
 
 #include "../../common/categorical.h"
 #include "../../common/cuda_pinned_allocator.h"
@@ -17,6 +18,7 @@
 #include "quantiser.cuh"  // for GradientQuantiser
 
 namespace xgboost {
+class RegTree;
 namespace common {
 class HistogramCuts;
 }
@@ -74,6 +76,14 @@ class GPUHistEvaluator {
 
  private:
   TreeEvaluator tree_evaluator_;
+  using ChildNodes = cuda::std::pair<bst_node_t, bst_node_t>;  // left, right
+  // PrepareTreeSplit and ApplyTreeSplit use the same stream. The caller must synchronize
+  // before reusing these buffers, as the updater does at the end of each growth iteration.
+  dh::PinnedMemory h_split_candidates_;
+  dh::CachingDeviceUVector<GPUExpandEntry> d_split_candidates_;
+  dh::PinnedMemory h_split_children_;
+  dh::CachingDeviceUVector<ChildNodes> d_split_children_;
+
   // storage for categories for each node, used for sort based splits.
   dh::device_vector<CatST> split_cats_;
   // host storage for categories for each node, used for sort based splits.
@@ -172,13 +182,11 @@ class GPUHistEvaluator {
       return common::KCatBitField{};
     }
   }
-  struct ChildNodes {
-    bst_node_t left;
-    bst_node_t right;
-  };
-  /** @brief Set up child constraints from device candidates and their corresponding child IDs. */
-  void ApplyTreeSplit(common::Span<GPUExpandEntry const> d_candidates,
-                      common::Span<ChildNodes const> d_children, bst_node_t max_nidx);
+  /** @brief Stage a batch of host candidates before expanding the host tree. */
+  void PrepareTreeSplit(Context const *ctx, common::Span<GPUExpandEntry const> candidates);
+  /** @brief Update child constraints after expansion, using the same batch passed to preparation. */
+  void ApplyTreeSplit(Context const *ctx, RegTree const &tree,
+                      common::Span<GPUExpandEntry const> candidates);
 
   auto GetEvaluator() { return tree_evaluator_.GetEvaluator<EvalParam>(); }
   /**

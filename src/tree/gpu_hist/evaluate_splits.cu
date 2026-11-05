@@ -1,7 +1,7 @@
 /**
  * Copyright 2020-2026, XGBoost Contributors
  */
-#include <algorithm>                               // for max
+#include <algorithm>                               // for copy, max, transform
 #include <cub/device/device_segmented_reduce.cuh>  // for DeviceSegmentedReduce
 #include <cuda/std/functional>                     // for plus
 #include <limits>                                  // for numeric_limits
@@ -14,21 +14,55 @@
 #include "../../common/nvtx_utils.h"      // for xgboost_NVTX_FN_RANGE
 #include "evaluate_splits.cuh"
 #include "expand_entry.cuh"
+#include "xgboost/tree_model.h"  // for RegTree
 
 namespace xgboost::tree {
-void GPUHistEvaluator::ApplyTreeSplit(common::Span<GPUExpandEntry const> d_candidates,
-                                      common::Span<ChildNodes const> d_children,
-                                      bst_node_t max_nidx) {
+void GPUHistEvaluator::PrepareTreeSplit(Context const *ctx,
+                                        common::Span<GPUExpandEntry const> candidates) {
+  if (!tree_evaluator_.HasConstraint() || candidates.size() <= 1) {
+    return;
+  }
+  auto h_candidates = h_split_candidates_.GetSpan<GPUExpandEntry>(candidates.size());
+  std::copy(candidates.begin(), candidates.end(), h_candidates.begin());
+  // Queue the upload before host tree expansion. The bounds update uses the same stream.
+  dh::CopyTo(h_candidates, &d_split_candidates_, ctx->CUDACtx()->Stream());
+}
+
+void GPUHistEvaluator::ApplyTreeSplit(Context const *ctx, RegTree const &tree,
+                                      common::Span<GPUExpandEntry const> candidates) {
   xgboost_NVTX_FN_RANGE();
-  CHECK_EQ(d_children.size(), d_candidates.size());
-  CHECK(!d_candidates.empty());
+  CHECK(!candidates.empty());
   if (!tree_evaluator_.HasConstraint()) {
     return;
   }
+  if (candidates.size() == 1) {
+    // Use kernel arguments for a singleton batch, avoiding both explicit uploads.
+    auto const &candidate = candidates.front();
+    tree_evaluator_.AddSplit(candidate.nidx, tree.LeftChild(candidate.nidx),
+                             tree.RightChild(candidate.nidx),
+                             static_cast<bst_feature_t>(candidate.split.findex),
+                             candidate.left_weight, candidate.right_weight);
+    return;
+  }
+
+  CHECK_EQ(d_split_candidates_.size(), candidates.size());
+  auto h_children = h_split_children_.GetSpan<ChildNodes>(candidates.size());
+  bst_node_t max_nidx{0};
+  std::transform(candidates.begin(), candidates.end(), h_children.begin(),
+                 [&](auto const &candidate) {
+                   auto left = tree.LeftChild(candidate.nidx);
+                   auto right = tree.RightChild(candidate.nidx);
+                   max_nidx = std::max({max_nidx, left, right});
+                   return ChildNodes{left, right};
+                 });
+  // Upload only the selected children instead of materializing the whole device tree.
+  dh::CopyTo(h_children, &d_split_children_, ctx->CUDACtx()->Stream());
+  common::Span<GPUExpandEntry const> d_candidates = dh::ToSpan(d_split_candidates_);
+  common::Span<ChildNodes const> d_children = dh::ToSpan(d_split_children_);
   tree_evaluator_.AddSplits(
       d_candidates.size(), max_nidx, [=] XGBOOST_DEVICE(std::size_t i, bst_target_t) {
         auto const &candidate = d_candidates[i];
-        return TreeEvaluator::SplitBounds{candidate.nidx, d_children[i].left, d_children[i].right,
+        return TreeEvaluator::SplitBounds{candidate.nidx, d_children[i].first, d_children[i].second,
                                           static_cast<bst_feature_t>(candidate.split.findex),
                                           (candidate.left_weight + candidate.right_weight) / 2.0f};
       });

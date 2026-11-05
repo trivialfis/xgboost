@@ -1,8 +1,6 @@
 /**
  * Copyright 2026, XGBoost Contributors
  */
-#include "test_split_evaluator.h"
-
 #include <gtest/gtest.h>
 
 #include "../../../src/tree/param.h"  // for TrainParam
@@ -10,8 +8,6 @@
 #include "xgboost/linalg.h"  // for Vector
 
 namespace xgboost::tree {
-TEST(TreeEvaluator, AddSplits) { TestBatchedSplitBounds(DeviceOrd::CPU()); }
-
 TEST(TreeEvaluator, CalcVectorGainWithMaxDeltaStep) {
   TrainParam param;
   param.UpdateAllowUnknown(

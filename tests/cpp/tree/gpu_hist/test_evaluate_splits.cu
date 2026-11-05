@@ -4,16 +4,56 @@
 #include <gtest/gtest.h>
 #include <thrust/host_vector.h>
 
-#include <algorithm>  // for max
+#include <algorithm>  // for max_element
 #include <limits>     // for numeric_limits
 
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
 #include "../../helpers.h"
 #include "../test_evaluate_splits.h"  // TestPartitionBasedSplit
-#include "../test_split_evaluator.h"  // for TestBatchedSplitBounds
 
 namespace xgboost::tree {
-TEST(GpuHist, AddSplits) { TestBatchedSplitBounds(MakeCUDACtx(0).Device()); }
+namespace {
+void TestBatchedSplitBounds() {
+  auto ctx = MakeCUDACtx(0);
+  constexpr bst_target_t kTargets = 3;
+  constexpr float kLimit = std::numeric_limits<float>::max();
+  TrainParam param;
+  param.Init(Args{{"monotone_constraints", "(1, -1)"}});
+  TreeEvaluator tree_evaluator{param, 2, ctx.Device(), kTargets};
+
+  // Root bounds differ by target: left <= 10*t, right >= 10*t.
+  tree_evaluator.AddSplits(1, 2, [] XGBOOST_DEVICE(std::size_t, bst_target_t t) {
+    return TreeEvaluator::SplitBounds{0, 1, 2, 0, 10.0f * t};
+  });
+  // Split both children in one batch. Large child IDs force the bounds buffers to grow.
+  tree_evaluator.AddSplits(2, 303, [] XGBOOST_DEVICE(std::size_t i, bst_target_t t) {
+    if (i == 0) {
+      return TreeEvaluator::SplitBounds{1, 300, 301, 1, 10.0f * t - 2.0f};
+    }
+    return TreeEvaluator::SplitBounds{2, 302, 303, 0, 10.0f * t + 2.0f};
+  });
+
+  auto bounds = tree_evaluator.GetEvaluator();
+  std::vector<float> lower(4 * kTargets), upper(4 * kTargets);
+  dh::safe_cuda(cudaMemcpy(lower.data(), bounds.lower + 300 * kTargets,
+                           lower.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  dh::safe_cuda(cudaMemcpy(upper.data(), bounds.upper + 300 * kTargets,
+                           upper.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  for (bst_target_t t = 0; t < kTargets; ++t) {
+    float midpoint = 10.0f * t;
+    float expected[4][2]{{midpoint - 2.0f, midpoint},
+                         {-kLimit, midpoint - 2.0f},
+                         {midpoint, midpoint + 2.0f},
+                         {midpoint + 2.0f, kLimit}};
+    for (std::size_t i = 0; i < 4; ++i) {
+      EXPECT_EQ(lower[i * kTargets + t], expected[i][0]);
+      EXPECT_EQ(upper[i * kTargets + t], expected[i][1]);
+    }
+  }
+}
+}  // namespace
+
+TEST(GpuHist, AddSplits) { TestBatchedSplitBounds(); }
 
 TEST(GpuHist, ApplyDeviceTreeSplits) {
   auto ctx = MakeCUDACtx(0);
@@ -23,17 +63,9 @@ TEST(GpuHist, ApplyDeviceTreeSplits) {
   RegTree tree{1, 3};
 
   auto apply = [&](std::vector<GPUExpandEntry> candidates) {
-    dh::device_vector<GPUExpandEntry> d_candidates{candidates};
-    std::vector<GPUHistEvaluator::ChildNodes> children;
-    bst_node_t max_nidx{0};
-    for (auto const& candidate : candidates) {
-      auto left = tree.LeftChild(candidate.nidx);
-      auto right = tree.RightChild(candidate.nidx);
-      children.push_back({left, right});
-      max_nidx = std::max({max_nidx, left, right});
-    }
-    dh::device_vector<GPUHistEvaluator::ChildNodes> d_children{children};
-    evaluator.ApplyTreeSplit(dh::ToSpan(d_candidates), dh::ToSpan(d_children), max_nidx);
+    auto batch = common::Span<GPUExpandEntry const>{candidates};
+    evaluator.PrepareTreeSplit(&ctx, batch);
+    evaluator.ApplyTreeSplit(&ctx, tree, batch);
     ctx.CUDACtx()->Stream().Sync();
   };
   auto entry = [](bst_node_t nidx, bst_feature_t fidx, float left, float right) {
