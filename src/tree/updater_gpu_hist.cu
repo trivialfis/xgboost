@@ -92,6 +92,12 @@ struct GPUHistMakerDevice {
   std::shared_ptr<common::HistogramCuts const> const cuts_;
   std::unique_ptr<FeatureGroups> feature_groups_;
 
+  // Reused after the synchronization at the end of each growth iteration.
+  dh::PinnedMemory h_split_candidates_;
+  dh::CachingDeviceUVector<GPUExpandEntry> d_split_candidates_;
+  dh::PinnedMemory h_split_children_;
+  dh::CachingDeviceUVector<GPUHistEvaluator::ChildNodes> d_split_children_;
+
   struct PartitionNodes {
     std::vector<bst_node_t> nidx;
     std::vector<bst_node_t> left_nidx;
@@ -518,6 +524,13 @@ struct GPUHistMakerDevice {
   void ApplySplit(std::vector<GPUExpandEntry> const& candidates, RegTree* p_tree) {
     xgboost_NVTX_FN_RANGE();
     CHECK(!candidates.empty());
+    if (param.HasMonotone()) {
+      auto h_candidates = h_split_candidates_.GetSpan<GPUExpandEntry>(candidates.size());
+      std::copy(candidates.cbegin(), candidates.cend(), h_candidates.begin());
+      // Queue the upload before host tree expansion. The bounds update uses the same
+      // stream, so it observes the completed copy without a host synchronization.
+      dh::CopyTo(h_candidates, &d_split_candidates_, ctx_->CUDACtx()->Stream());
+    }
     std::vector<ExpandData<float>> batch(candidates.size());
     std::transform(
         candidates.cbegin(), candidates.cend(), batch.begin(), [this](auto const& candidate) {
@@ -561,9 +574,19 @@ struct GPUHistMakerDevice {
     p_tree->Expand(common::Span<ExpandData<float> const>{batch});
 
     if (param.HasMonotone()) {
-      dh::device_vector<GPUExpandEntry> d_candidates{candidates};
-      evaluator_.ApplyTreeSplit(ctx_, p_tree, common::Span<GPUExpandEntry const>{candidates},
-                                dh::ToSpan(d_candidates));
+      auto h_children = h_split_children_.GetSpan<GPUHistEvaluator::ChildNodes>(candidates.size());
+      bst_node_t max_nidx{0};
+      std::transform(candidates.cbegin(), candidates.cend(), h_children.begin(),
+                     [&](auto const& candidate) {
+                       auto left = p_tree->LeftChild(candidate.nidx);
+                       auto right = p_tree->RightChild(candidate.nidx);
+                       max_nidx = std::max({max_nidx, left, right});
+                       return GPUHistEvaluator::ChildNodes{left, right};
+                     });
+      // Upload only the selected children instead of materializing the whole device tree.
+      dh::CopyTo(h_children, &d_split_children_, ctx_->CUDACtx()->Stream());
+      evaluator_.ApplyTreeSplit(dh::ToSpan(d_split_candidates_), dh::ToSpan(d_split_children_),
+                                max_nidx);
     }
     for (auto const& candidate : candidates) {
       auto const& parent = (*p_tree)[candidate.nidx];

@@ -172,10 +172,13 @@ class GPUHistEvaluator {
       return common::KCatBitField{};
     }
   }
-  /** @brief Set up child constraints from device candidates; host entries supply node IDs. */
-  void ApplyTreeSplit(Context const *ctx, RegTree const *p_tree,
-                      common::Span<GPUExpandEntry const> h_candidates,
-                      common::Span<GPUExpandEntry const> d_candidates);
+  struct ChildNodes {
+    bst_node_t left;
+    bst_node_t right;
+  };
+  /** @brief Set up child constraints from device candidates and their corresponding child IDs. */
+  void ApplyTreeSplit(common::Span<GPUExpandEntry const> d_candidates,
+                      common::Span<ChildNodes const> d_children, bst_node_t max_nidx);
 
   auto GetEvaluator() { return tree_evaluator_.GetEvaluator<EvalParam>(); }
   /**

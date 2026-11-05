@@ -4,7 +4,8 @@
 #include <gtest/gtest.h>
 #include <thrust/host_vector.h>
 
-#include <limits>  // for numeric_limits
+#include <algorithm>  // for max
+#include <limits>     // for numeric_limits
 
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
 #include "../../helpers.h"
@@ -23,15 +24,16 @@ TEST(GpuHist, ApplyDeviceTreeSplits) {
 
   auto apply = [&](std::vector<GPUExpandEntry> candidates) {
     dh::device_vector<GPUExpandEntry> d_candidates{candidates};
-    // Only node IDs are needed on the host. Weights and split features must come from
-    // device entries, including for a single candidate.
-    for (auto& candidate : candidates) {
-      candidate.left_weight = std::numeric_limits<float>::quiet_NaN();
-      candidate.right_weight = std::numeric_limits<float>::quiet_NaN();
-      candidate.split.findex = -1;
+    std::vector<GPUHistEvaluator::ChildNodes> children;
+    bst_node_t max_nidx{0};
+    for (auto const& candidate : candidates) {
+      auto left = tree.LeftChild(candidate.nidx);
+      auto right = tree.RightChild(candidate.nidx);
+      children.push_back({left, right});
+      max_nidx = std::max({max_nidx, left, right});
     }
-    evaluator.ApplyTreeSplit(&ctx, &tree, common::Span<GPUExpandEntry const>{candidates},
-                             dh::ToSpan(d_candidates));
+    dh::device_vector<GPUHistEvaluator::ChildNodes> d_children{children};
+    evaluator.ApplyTreeSplit(dh::ToSpan(d_candidates), dh::ToSpan(d_children), max_nidx);
     ctx.CUDACtx()->Stream().Sync();
   };
   auto entry = [](bst_node_t nidx, bst_feature_t fidx, float left, float right) {
@@ -46,10 +48,10 @@ TEST(GpuHist, ApplyDeviceTreeSplits) {
   tree.Expand({{0, 0, 0.5f, true}, {0.0f, 4.0}, {-4.0f, 2.0}, {4.0f, 2.0}, 1.0f});
   apply({entry(0, 0, -4.0f, 4.0f)});
 
-  // Expand out of node order so the device update must look up the actual children.
+  // Expand out of node order, then update in the reverse order to exercise the child ID mapping.
   tree.Expand({{2, 1, 0.5f, false}, {4.0f, 2.0}, {3.0f, 1.0}, {1.0f, 1.0}, 1.0f});
   tree.Expand({{1, 2, 0.5f, true}, {-4.0f, 2.0}, {-3.0f, 1.0}, {-1.0f, 1.0}, 1.0f});
-  apply({entry(2, 1, 3.0f, 1.0f), entry(1, 2, -3.0f, -1.0f)});
+  apply({entry(1, 2, -3.0f, -1.0f), entry(2, 1, 3.0f, 1.0f)});
 
   auto bounds = evaluator.GetEvaluator();
   std::vector<float> lower(4), upper(4);
