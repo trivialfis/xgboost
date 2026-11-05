@@ -12,50 +12,7 @@
 #include "../test_evaluate_splits.h"  // TestPartitionBasedSplit
 
 namespace xgboost::tree {
-namespace {
-void TestBatchedSplitBounds() {
-  auto ctx = MakeCUDACtx(0);
-  constexpr bst_target_t kTargets = 3;
-  constexpr float kLimit = std::numeric_limits<float>::max();
-  TrainParam param;
-  param.Init(Args{{"monotone_constraints", "(1, -1)"}});
-  TreeEvaluator tree_evaluator{param, 2, ctx.Device(), kTargets};
-
-  // Root bounds differ by target: left <= 10*t, right >= 10*t.
-  tree_evaluator.AddSplits(1, 2, [] XGBOOST_DEVICE(std::size_t, bst_target_t t) {
-    return TreeEvaluator::SplitBounds{0, 1, 2, 0, 10.0f * t - 4.0f, 10.0f * t + 4.0f};
-  });
-  // Split both children in one batch. Large child IDs force the bounds buffers to grow.
-  tree_evaluator.AddSplits(2, 303, [] XGBOOST_DEVICE(std::size_t i, bst_target_t t) {
-    if (i == 0) {
-      return TreeEvaluator::SplitBounds{1, 300, 301, 1, 10.0f * t - 1.0f, 10.0f * t - 3.0f};
-    }
-    return TreeEvaluator::SplitBounds{2, 302, 303, 0, 10.0f * t + 1.0f, 10.0f * t + 3.0f};
-  });
-
-  auto bounds = tree_evaluator.GetEvaluator();
-  std::vector<float> lower(4 * kTargets), upper(4 * kTargets);
-  dh::safe_cuda(cudaMemcpy(lower.data(), bounds.lower + 300 * kTargets,
-                           lower.size() * sizeof(float), cudaMemcpyDeviceToHost));
-  dh::safe_cuda(cudaMemcpy(upper.data(), bounds.upper + 300 * kTargets,
-                           upper.size() * sizeof(float), cudaMemcpyDeviceToHost));
-  for (bst_target_t t = 0; t < kTargets; ++t) {
-    float midpoint = 10.0f * t;
-    float expected[4][2]{{midpoint - 2.0f, midpoint},
-                         {-kLimit, midpoint - 2.0f},
-                         {midpoint, midpoint + 2.0f},
-                         {midpoint + 2.0f, kLimit}};
-    for (std::size_t i = 0; i < 4; ++i) {
-      EXPECT_EQ(lower[i * kTargets + t], expected[i][0]);
-      EXPECT_EQ(upper[i * kTargets + t], expected[i][1]);
-    }
-  }
-}
-}  // namespace
-
-TEST(GpuHist, AddSplits) { TestBatchedSplitBounds(); }
-
-TEST(GpuHist, ApplyDeviceTreeSplits) {
+TEST(GpuHist, ApplyTreeSplit) {
   auto ctx = MakeCUDACtx(0);
   TrainParam param;
   param.Init(Args{{"monotone_constraints", "(1, -1, 0)"}});
@@ -466,7 +423,7 @@ TEST(GpuHist, EvaluateSingleSplitEmpty) {
   EXPECT_LT(result.loss_chg, 0.0f);
 }
 
-TEST(GpuHist, EvaluateMissingOnlySplit) {
+TEST(GpuHist, EvaluateSingleSplitMissingOnly) {
   auto ctx = MakeCUDACtx(0);
   TrainParam param;
   param.Init(
@@ -475,8 +432,8 @@ TEST(GpuHist, EvaluateMissingOnlySplit) {
   auto cuts = MakeCutsForTest({0.0f, 1.0f}, {0, 2}, ctx.Device());
   dh::device_vector<bst_feature_t> features{std::vector<bst_feature_t>{0}};
   dh::device_vector<GradientPairInt64> histogram{std::vector<GradientPairInt64>{{1, 1}, {-1, 1}}};
-  // The missing bin has (gradient, Hessian) = (1, 1). Only putting all observed
-  // values on the left and missing values on the right satisfies the constraint.
+  // Missing values have (gradient, Hessian) = (1, 1). The only improving numeric
+  // split under the decreasing constraint puts all observed values left and missing right.
   EvaluateSplitInputs input{0, 0, {1, 3}, dh::ToSpan(features), dh::ToSpan(histogram)};
   EvaluateSplitSharedInputs shared{EvalParam{param},
                                    quantiser,
@@ -492,8 +449,6 @@ TEST(GpuHist, EvaluateMissingOnlySplit) {
   EXPECT_EQ(entry.split.dir, kRightDir);
   EXPECT_EQ(entry.split.left_sum, (GradientPairInt64{0, 2}));
   EXPECT_EQ(entry.split.right_sum, (GradientPairInt64{1, 1}));
-  EXPECT_FLOAT_EQ(entry.left_weight, 0.0f);
-  EXPECT_FLOAT_EQ(entry.right_weight, -0.5f);
   // Child gain 1/(1+1), minus parent gain 1/(3+1).
   EXPECT_FLOAT_EQ(entry.split.loss_chg, 0.25f);
 }

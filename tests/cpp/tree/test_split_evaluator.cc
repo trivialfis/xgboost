@@ -147,11 +147,25 @@ TEST(TreeEvaluator, PropagateVectorBounds) {
         param, 2, 1, leaf_stats.Slice(2, linalg::All()), leaf_stats.Slice(3, linalg::All()),
         leaf_weight.Slice(2, linalg::All()), leaf_weight.Slice(3, linalg::All()));
 
-    constexpr float kExpected[4][2]{{-4.0f, 1.5f}, {0.0f, 1.5f}, {4.0f, 1.5f}, {0.0f, 1.5f}};
     auto h_leaf_weight = leaf_weight.HostView();
+    // Apply both f1 splits in one batch. Noncontiguous child IDs force bounds storage
+    // to grow; all four children must retain their parents' target-specific f0 bounds.
+    constexpr bst_node_t kFirstChild = 300;
+    tree_evaluator.AddSplits(2, kFirstChild + 3, [=](std::size_t i, bst_target_t t) {
+      auto parent = static_cast<bst_node_t>(i) + 1;
+      auto left = kFirstChild + 2 * static_cast<bst_node_t>(i);
+      return TreeEvaluator::SplitBounds{
+          parent, left, left + 1, 1, h_leaf_weight(2 * i, t), h_leaf_weight(2 * i + 1, t)};
+    });
+    evaluator = tree_evaluator.GetEvaluator();
+
+    constexpr float kExpected[4][2]{{-4.0f, 1.5f}, {0.0f, 1.5f}, {4.0f, 1.5f}, {0.0f, 1.5f}};
     for (std::size_t row = 0; row < 4; ++row) {
       for (bst_target_t target = 0; target < 2; ++target) {
         EXPECT_FLOAT_EQ(h_leaf_weight(row, target), monotone_direction * kExpected[row][target]);
+        auto weight = evaluator.CalcWeight(kFirstChild + static_cast<bst_node_t>(row), target,
+                                           param, h_leaf_stats(row, target));
+        EXPECT_FLOAT_EQ(weight, h_leaf_weight(row, target));
       }
     }
   }
