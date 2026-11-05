@@ -6,444 +6,21 @@
 #include <thrust/reduce.h>                       // for reduce_by_key
 #include <thrust/sort.h>                         // for stable_sort_by_key
 
-#include <algorithm>                 // for max
-#include <cub/block/block_scan.cuh>  // for BlockScan
-#include <cub/util_type.cuh>         // for KeyValuePair
-#include <cub/warp/warp_reduce.cuh>  // for WarpReduce
-#include <cuda/ptx>                  // for get_sreg_laneid
-#include <cuda/std/functional>       // for identity
-#include <cuda/std/tuple>            // for get, make_tuple, tuple
-#include <limits>                    // for numeric_limits
-#include <memory>                    // for make_unique
-#include <type_traits>               // for is_trivially_copyable_v
+#include <algorithm>       // for max
+#include <cuda/std/tuple>  // for get, make_tuple, tuple
+#include <memory>          // for make_unique
 
 #include "../../common/cuda_compat.cuh"  // for CUDA compatibility
 #include "../../common/cuda_context.cuh"
 #include "../../common/nvtx_utils.h"  // for xgboost_NVTX_FN_RANGE
 #include "../tree_view.h"             // for MultiTargetTreeView
+#include "evaluate_splits_impl.cuh"
 #include "multi_evaluate_splits.cuh"  // for MultiEvalauteSplitInputs, MultiEvaluateSplitSharedInputs
 #include "quantiser.cuh"              // for GradientQuantiser
 #include "xgboost/base.h"             // for GradientPairInt64
 #include "xgboost/span.h"             // for Span
 
 namespace xgboost::tree::cuda_impl {
-namespace {
-/**
- * @brief Calculate the gradient index for the reverse pass
- *
- * @note All inputs are global across features.
- */
-__device__ bst_bin_t RevBinIdx(bst_bin_t gidx_begin, bst_bin_t gidx_end, bst_bin_t bin_idx) {
-  return gidx_begin + (gidx_end - bin_idx - 1);
-}
-
-// Scan the histogram in 2 dim for all nodes
-struct ScanHistogramAgent {
-  using WarpScanT = cub::WarpScan<GradientPairInt64>;
-
-  typename WarpScanT::TempStorage *tmp_storage;
-  bst_bin_t gidx_begin;
-  bst_bin_t gidx_end;
-  bst_target_t n_targets;
-
-  template <typename BinIndexFn>
-  __device__ void ScanFeature(GradientPairInt64 const *node_histogram,
-                              GradientPairInt64 *scan_result, bst_target_t t,
-                              BinIndexFn &&bin_idx_fn) const {
-    auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
-    // The forward pass and the backward pass differs in where the bin is read, which is
-    // specified by the callback bin_idx_fn(). They write to the same output location.
-    GradientPairInt64 warp_aggregate;
-    for (auto scan_begin = gidx_begin; scan_begin < gidx_end; scan_begin += dh::WarpThreads()) {
-      auto bin_idx = scan_begin + lane_id;
-      bool thread_active = bin_idx < gidx_end;
-      // Read from histogram: [target][bins]
-      auto bin = thread_active ? node_histogram[bin_idx_fn(bin_idx)] : GradientPairInt64{};
-      if (lane_id == 0) {
-        bin += warp_aggregate;
-      }
-      WarpScanT(*tmp_storage).InclusiveScan(bin, bin, cuda::std::plus{}, warp_aggregate);
-      // Required by the warp scan.
-      __syncwarp();
-      if (thread_active) {
-        // Write to scan result: [bins][targets]
-        // The layout is changed from target-major to bin-major here.
-        scan_result[bin_idx * n_targets + t] = bin;
-      }
-    }
-  }
-  // Forward scan pass
-  __device__ void Forward(GradientPairInt64 const *node_histogram,
-                          common::Span<GradientPairInt64> scan_result, bst_target_t t) const {
-    this->ScanFeature(node_histogram, scan_result.data(), t, cuda::std::identity{});
-  }
-  // Backward scan pass for missing values
-  __device__ void Backward(GradientPairInt64 const *node_histogram,
-                           common::Span<GradientPairInt64> scan_result, bst_target_t t) const {
-    this->ScanFeature(node_histogram, scan_result.data(), t,
-                      [&](bst_bin_t bin_idx) { return RevBinIdx(gidx_begin, gidx_end, bin_idx); });
-  }
-
-  // One-hot pass for categorical features.
-  //
-  // For categorical features the two scan-buffer regions are not a forward/backward scan
-  // duality; they hold the two independent missing-direction candidates. We write the
-  // *non-missing child sum* for each direction:
-  //   - region_others: the matching category goes right with missing (missing-right). The
-  //     written non-missing child is the left.
-  //   - region_match: the matching category goes right without missing (missing-left). The
-  //     written non-missing child is the right.
-  __device__ void OneHot(GradientPairInt64 const *node_histogram,
-                         common::Span<GradientPairInt64> region_others,
-                         common::Span<GradientPairInt64> region_match, bst_target_t t) const {
-    auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
-    // Feature sum across all bins for this target.
-    GradientPairInt64 local{};
-    for (auto bin_idx = gidx_begin + lane_id; bin_idx < gidx_end; bin_idx += dh::WarpThreads()) {
-      local += node_histogram[bin_idx];
-    }
-    auto feature_sum = WarpSum(local);
-    // Per-bin child sums, written in the bin-major layout: [bins][targets].
-    for (auto bin_idx = gidx_begin + lane_id; bin_idx < gidx_end; bin_idx += dh::WarpThreads()) {
-      auto bin = node_histogram[bin_idx];
-      region_others[bin_idx * n_targets + t] = feature_sum - bin;
-      region_match[bin_idx * n_targets + t] = bin;
-    }
-  }
-
-  __device__ void Partition(GradientPairInt64 const *node_histogram,
-                            common::Span<std::size_t const> sorted_idx,
-                            common::Span<GradientPairInt64> forward,
-                            common::Span<GradientPairInt64> backward, bst_target_t t) const {
-    this->ScanFeature(node_histogram, forward.data(), t,
-                      [&](bst_bin_t bin_idx) { return sorted_idx[bin_idx]; });
-    this->ScanFeature(node_histogram, backward.data(), t, [&](bst_bin_t bin_idx) {
-      return sorted_idx[RevBinIdx(gidx_begin, gidx_end, bin_idx)];
-    });
-  }
-};
-}  // namespace
-
-// The scan kernel reads from target-major histogram layout and writes the bin-major scan
-// buffer. This helps us keep a reference to the bin in the split candidate.
-template <std::int32_t kBlockThreads, typename OutputBinScans>
-__global__ __launch_bounds__(kBlockThreads) void ScanHistogramKernel(
-    common::Span<MultiEvaluateSplitInputs const> nodes, MultiEvaluateSplitSharedInputs shared,
-    common::Span<std::size_t const> sorted_idx, OutputBinScans outputs) {
-  static_assert(kBlockThreads % dh::WarpThreads() == 0);
-
-  constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
-  auto const warp_id_in_blk = static_cast<std::int32_t>(threadIdx.x) / dh::WarpThreads();
-  // The warp index across the entire grid
-  auto const warp_id = warp_id_in_blk + kWarpsPerBlk * blockIdx.x;
-  bst_target_t const n_targets = shared.Targets();
-  auto const n_valid_warps = nodes.size() * shared.max_active_feature * n_targets;
-
-  if (warp_id >= n_valid_warps) {
-    return;
-  }
-
-  auto [nidx_in_set, fidx_in_set, target_idx] =
-      linalg::UnravelIndex(warp_id, nodes.size(), shared.max_active_feature, n_targets);
-  auto const &node = nodes[nidx_in_set];
-  auto out = outputs[nidx_in_set];
-  // This node might have a smaller number of sampled features.
-  if (fidx_in_set >= node.feature_set.size()) {
-    return;
-  }
-  auto fidx = node.feature_set[fidx_in_set];
-  // The histogram is full, regardless of whether a feature is sampled.
-  bst_bin_t gidx_begin = shared.feature_segments[fidx];
-  bst_bin_t gidx_end = shared.feature_segments[fidx + 1];
-
-  using AgentT = ScanHistogramAgent;
-  __shared__ typename AgentT::WarpScanT::TempStorage tmp_storage[kWarpsPerBlk];
-  ScanHistogramAgent agent{&tmp_storage[warp_id_in_blk], gidx_begin, gidx_end, n_targets};
-  auto t_hist =
-      node.histogram.subspan(shared.n_total_bins_per_tar * target_idx, shared.n_total_bins_per_tar);
-
-  if (shared.IsCategorical(fidx)) {
-    auto first = out.subspan(0, node.histogram.size());
-    auto second = out.subspan(node.histogram.size(), node.histogram.size());
-    auto n_bins = gidx_end - gidx_begin;
-    if (common::UseOneHot(n_bins, shared.param.max_cat_to_onehot)) {
-      // Both regions are always required (independent missing-directions), so `one_pass`
-      // does not apply to categorical features.
-      agent.OneHot(t_hist.data(), first, second, target_idx);
-    } else {
-      auto node_sorted_idx = sorted_idx.subspan(nidx_in_set * shared.n_total_bins_per_tar,
-                                                shared.n_total_bins_per_tar);
-      agent.Partition(t_hist.data(), node_sorted_idx, first, second, target_idx);
-    }
-    return;
-  }
-
-  if (shared.one_pass != MultiEvaluateSplitSharedInputs::kBackward) {
-    auto forward = out.subspan(0, node.histogram.size());
-    agent.Forward(t_hist.data(), forward, target_idx);
-  }
-  // TODO(jiamingy): Skip the backward pass if there's no missing value.
-  if (shared.one_pass != MultiEvaluateSplitSharedInputs::kForward) {
-    auto backward = out.subspan(node.histogram.size(), node.histogram.size());
-    agent.Backward(t_hist.data(), backward, target_idx);
-  }
-}
-
-namespace {
-struct QuantizedGradientSum {
-  GradientPairInt64 const *values;
-  common::Span<GradientQuantiser const> roundings;
-
-  [[nodiscard]] XGBOOST_DEVICE std::size_t Size() const { return roundings.size(); }
-  [[nodiscard]] XGBOOST_DEVICE GradientPairPrecise operator()(std::size_t t) const {
-    return roundings.data()[t].ToFloatingPoint(values[t]);
-  }
-};
-
-struct QuantizedGradientDifference {
-  GradientPairInt64 const *parent;
-  GradientPairInt64 const *child;
-  common::Span<GradientQuantiser const> roundings;
-
-  [[nodiscard]] XGBOOST_DEVICE std::size_t Size() const { return roundings.size(); }
-  [[nodiscard]] XGBOOST_DEVICE GradientPairPrecise operator()(std::size_t t) const {
-    return roundings.data()[t].ToFloatingPoint(parent[t] - child[t]);
-  }
-};
-
-static_assert(std::is_trivially_copyable_v<QuantizedGradientSum>);
-static_assert(std::is_trivially_copyable_v<QuantizedGradientDifference>);
-
-struct EvaluateSplitAgent {
-  using ArgMaxT = cub::KeyValuePair<std::uint32_t, double>;
-  using MaxReduceT = cub::WarpReduce<ArgMaxT>;
-
-  typename MaxReduceT::TempStorage *temp_storage;
-  bst_feature_t fidx;
-  TreeEvaluator::SplitEvaluator<EvalParam> evaluator;
-
-  // Calculate the split gain for one bin. `child_scan` has the bin-major layout
-  // [bins][targets] and stores the non-missing child sum.
-  template <DefaultDirection d_dir>
-  static __device__ double ComputeGain(MultiEvaluateSplitInputs const &node,
-                                       MultiEvaluateSplitSharedInputs const &shared,
-                                       common::Span<GradientPairInt64 const> child_scan,
-                                       bst_bin_t bin_idx, bst_target_t n_targets,
-                                       bst_feature_t fidx,
-                                       TreeEvaluator::SplitEvaluator<EvalParam> const &evaluator) {
-    auto offset = bin_idx * n_targets;
-    auto child_values = child_scan.subspan(offset, n_targets);
-    QuantizedGradientSum child{child_values.data(), shared.roundings};
-    QuantizedGradientDifference sibling{node.parent_sum.data(), child_values.data(),
-                                        shared.roundings};
-    if constexpr (d_dir == kRightDir) {
-      return evaluator.CalcSplitGain(shared.param, node.nidx, fidx, child, sibling);
-    } else {
-      return evaluator.CalcSplitGain(shared.param, node.nidx, fidx, sibling, child);
-    }
-  }
-
-  template <DefaultDirection d_dir>
-  __device__ void Numerical(MultiEvaluateSplitInputs const &node,
-                            MultiEvaluateSplitSharedInputs const &shared,
-                            common::Span<GradientPairInt64 const> node_scan,
-                            MultiSplitCandidate *best_split) {
-    // Calculate split gain for each bin
-    auto n_targets = shared.Targets();
-    auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
-
-    bst_bin_t gidx_begin = shared.feature_segments[fidx];
-    bst_bin_t gidx_end = shared.feature_segments[fidx + 1];
-
-    for (auto scan_begin = gidx_begin; scan_begin < gidx_end; scan_begin += dh::WarpThreads()) {
-      auto bin_idx = scan_begin + lane_id;
-      bool thread_active = bin_idx < gidx_end;
-
-      auto constexpr kNullGain = -std::numeric_limits<double>::infinity();
-      double gain = thread_active ? ComputeGain<d_dir>(node, shared, node_scan, bin_idx, n_targets,
-                                                       fidx, evaluator)
-                                  : kNullGain;
-
-      auto best = MaxReduceT(*temp_storage).Reduce({threadIdx.x, gain}, cub::ArgMax{});
-      auto best_thread = __shfl_sync(dh::WarpFullMask(), best.key, 0);
-
-      if (threadIdx.x == best_thread && !isinf(gain)) {
-        // Update
-        bst_bin_t split_gidx = bin_idx;
-        if (d_dir == kLeftDir) {
-          split_gidx = RevBinIdx(gidx_begin, gidx_end, bin_idx);
-        }
-        float fvalue;
-        if (d_dir == kRightDir) {
-          fvalue = shared.feature_values[split_gidx];
-        } else {
-          if (split_gidx == gidx_begin) {
-            fvalue = -std::numeric_limits<float>::infinity();
-          } else {
-            fvalue = shared.feature_values[split_gidx - 1];
-          }
-        }
-        // Scan result layout: [bins][targets] - all targets for this bin are contiguous
-        // bin_idx is the global bin index
-        auto scan_bin_offset = bin_idx * n_targets;
-        auto scan_bin = node_scan.subspan(scan_bin_offset, n_targets);
-        // Missing values go to right in the forward pass, go to left in the backward pass.
-        best_split->Update(gain, d_dir, fvalue, fidx, scan_bin, false);
-      }
-
-      __syncwarp();
-    }
-  }
-
-  // One-hot split for a categorical feature. `region` holds the non-missing child sum for
-  // one missing-direction (see ScanHistogramAgent::OneHot). Unlike the numerical backward
-  // pass there is no reverse indexing, and the split value is the category id stored at the
-  // bin. `d_dir` is the default (missing) direction: kRightDir pairs with `region_others`,
-  // kLeftDir pairs with `region_match`.
-  template <DefaultDirection d_dir>
-  __device__ void OneHot(MultiEvaluateSplitInputs const &node,
-                         MultiEvaluateSplitSharedInputs const &shared,
-                         common::Span<GradientPairInt64 const> region,
-                         MultiSplitCandidate *best_split) {
-    auto n_targets = shared.Targets();
-    auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
-
-    bst_bin_t gidx_begin = shared.feature_segments[fidx];
-    bst_bin_t gidx_end = shared.feature_segments[fidx + 1];
-
-    for (auto scan_begin = gidx_begin; scan_begin < gidx_end; scan_begin += dh::WarpThreads()) {
-      auto bin_idx = scan_begin + lane_id;
-      bool thread_active = bin_idx < gidx_end;
-
-      auto constexpr kNullGain = -std::numeric_limits<double>::infinity();
-      double gain = thread_active ? ComputeGain<d_dir>(node, shared, region, bin_idx, n_targets,
-                                                       fidx, evaluator)
-                                  : kNullGain;
-
-      auto best = MaxReduceT(*temp_storage).Reduce({threadIdx.x, gain}, cub::ArgMax{});
-      auto best_thread = __shfl_sync(dh::WarpFullMask(), best.key, 0);
-
-      if (threadIdx.x == best_thread && !isinf(gain)) {
-        // The split value is the category id (the cut value at this bin).
-        float fvalue = shared.feature_values[bin_idx];
-        // The scan_bin is directionless, `d_dir` is the carrier of the missing
-        // direction. We use it to recover the bin value and sibling value later.
-        auto scan_bin = region.subspan(bin_idx * n_targets, n_targets);
-        best_split->Update(gain, d_dir, fvalue, fidx, scan_bin, /*cat=*/true);
-      }
-
-      __syncwarp();
-    }
-  }
-
-  template <DefaultDirection d_dir>
-  __device__ void Partition(MultiEvaluateSplitInputs const &node,
-                            MultiEvaluateSplitSharedInputs const &shared,
-                            common::Span<GradientPairInt64 const> node_scan,
-                            MultiSplitCandidate *best_split) {
-    auto n_targets = shared.Targets();
-    auto lane_id = static_cast<bst_bin_t>(cuda::ptx::get_sreg_laneid());
-
-    bst_bin_t gidx_begin = shared.feature_segments[fidx];
-    bst_bin_t gidx_end = shared.feature_segments[fidx + 1];
-    bst_bin_t n_bins_feature = gidx_end - gidx_begin;
-    bst_bin_t n_bins = std::min(shared.param.max_cat_threshold, n_bins_feature);
-    if (n_bins <= 1) {
-      return;
-    }
-
-    // A partition must leave at least one category on each side.
-    for (bst_bin_t scan_begin = gidx_begin; scan_begin < gidx_begin + n_bins - 1;
-         scan_begin += dh::WarpThreads()) {
-      auto bin_idx = scan_begin + lane_id;
-      bool thread_active = bin_idx < gidx_begin + n_bins - 1;
-
-      auto constexpr kNullGain = -std::numeric_limits<double>::infinity();
-      double gain = thread_active ? ComputeGain<d_dir>(node, shared, node_scan, bin_idx, n_targets,
-                                                       fidx, evaluator)
-                                  : kNullGain;
-
-      auto best = MaxReduceT(*temp_storage).Reduce({threadIdx.x, gain}, cub::ArgMax{});
-      auto best_thread = __shfl_sync(dh::WarpFullMask(), best.key, 0);
-
-      if (threadIdx.x == best_thread && !isinf(gain)) {
-        auto scan_offset = bin_idx - gidx_begin;
-        auto thresh = d_dir == kLeftDir ? scan_offset
-                                        : static_cast<bst_bin_t>(n_bins_feature - scan_offset - 1);
-        auto scan_bin = node_scan.subspan(bin_idx * n_targets, n_targets);
-        // The forward scan selects a right-child prefix with missing values on the
-        // left. The backward scan selects a left-child suffix with missing on the right.
-        best_split->UpdateCat(gain, d_dir, static_cast<bst_cat_t>(thresh), fidx, scan_bin);
-      }
-
-      __syncwarp();
-    }
-  }
-};
-}  // namespace
-
-// Find the best split based on the scan result
-//
-// The scan buffer has a bin-major layout.
-template <std::int32_t kBlockThreads, typename BinScans>
-__global__ __launch_bounds__(kBlockThreads) void EvaluateSplitsKernel(
-    common::Span<MultiEvaluateSplitInputs const> nodes, MultiEvaluateSplitSharedInputs shared,
-    BinScans bin_scans, TreeEvaluator::SplitEvaluator<EvalParam> evaluator,
-    common::Span<MultiSplitCandidate> out_candidates) {
-  static_assert(kBlockThreads % dh::WarpThreads() == 0);
-
-  constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
-  auto const warp_id_in_blk = static_cast<std::int32_t>(threadIdx.x) / dh::WarpThreads();
-  // The warp index across the entire grid
-  auto const warp_id = warp_id_in_blk + kWarpsPerBlk * blockIdx.x;
-  auto const n_valid_warps = nodes.size() * shared.max_active_feature;
-
-  if (warp_id >= n_valid_warps) {
-    return;
-  }
-
-  using AgentT = EvaluateSplitAgent;
-  __shared__ typename AgentT::MaxReduceT::TempStorage temp_storage[kWarpsPerBlk];
-
-  const auto nidx = warp_id / shared.max_active_feature;
-  auto const &node = nodes[nidx];
-
-  bst_feature_t fidx_in_set = warp_id - (nidx * shared.max_active_feature);
-  // This node might have a smaller number of sampled features.
-  if (fidx_in_set >= node.feature_set.size()) {
-    return;
-  }
-  auto fidx = node.feature_set[fidx_in_set];
-  AgentT agent{&temp_storage[warp_id_in_blk], fidx, evaluator};
-  // The number of candidates is allocated using active features
-  auto candidate_idx = nidx * shared.max_active_feature + fidx_in_set;
-
-  if (shared.IsCategorical(fidx)) {
-    auto first = bin_scans[nidx].subspan(0, node.histogram.size());
-    auto second = bin_scans[nidx].subspan(node.histogram.size(), node.histogram.size());
-    auto n_bins = shared.feature_segments[fidx + 1] - shared.feature_segments[fidx];
-    if (common::UseOneHot(n_bins, shared.param.max_cat_to_onehot)) {
-      // Both regions are always evaluated (independent missing-directions), so `one_pass`
-      // does not apply to categorical features.
-      agent.template OneHot<kRightDir>(node, shared, first, &out_candidates[candidate_idx]);
-      agent.template OneHot<kLeftDir>(node, shared, second, &out_candidates[candidate_idx]);
-    } else {
-      agent.template Partition<kLeftDir>(node, shared, first, &out_candidates[candidate_idx]);
-      agent.template Partition<kRightDir>(node, shared, second, &out_candidates[candidate_idx]);
-    }
-    return;
-  }
-
-  if (shared.one_pass != MultiEvaluateSplitSharedInputs::kBackward) {
-    auto forward = bin_scans[nidx].subspan(0, node.histogram.size());
-    agent.template Numerical<kRightDir>(node, shared, forward, &out_candidates[candidate_idx]);
-  }
-  if (shared.one_pass != MultiEvaluateSplitSharedInputs::kForward) {
-    auto backward = bin_scans[nidx].subspan(node.histogram.size(), node.histogram.size());
-    agent.template Numerical<kLeftDir>(node, shared, backward, &out_candidates[candidate_idx]);
-  }
-}
-
 void MultiHistEvaluator::Reset(Context const *ctx,
                                common::Span<std::uint32_t const> feature_segments,
                                common::Span<FeatureType const> feature_types,
@@ -603,26 +180,29 @@ void MultiHistEvaluator::EvaluateSplits(Context const *ctx,
 
   // Launch histogram scan kernel, each warp handles one target of one feature of one node.
   {
-    std::uint32_t constexpr kBlockThreads = 512;
+    std::uint32_t constexpr kBlockThreads = 128;
     constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
     auto n_warps = n_nodes * n_targets * n_features;
     auto n_blocks = common::DivRoundUp(n_warps, kWarpsPerBlk);
     dh::LaunchKernel{n_blocks, kBlockThreads, 0, ctx->CUDACtx()->Stream()}(  // NOLINT
-        ScanHistogramKernel<kBlockThreads, decltype(d_scans)>, d_inputs, shared_inputs,
-        d_sorted_idx, d_scans);
+        split_kernel::ScanHistogramKernel<kBlockThreads, MultiEvaluateSplitInputs,
+                                          MultiEvaluateSplitSharedInputs, decltype(d_sorted_idx),
+                                          decltype(d_scans)>,
+        d_inputs, shared_inputs, n_features, d_sorted_idx, d_scans);
   }
 
   // Launch split evaluation kernel
-  dh::DeviceUVector<MultiSplitCandidate> d_splits(n_nodes * n_features, MultiSplitCandidate{},
-                                                  ctx->CUDACtx()->Stream());
+  dh::CachingDeviceUVector<MultiSplitCandidate> d_splits(n_nodes * n_features);
   {
-    std::uint32_t constexpr kBlockThreads = 512;
+    std::uint32_t constexpr kBlockThreads = 32;
     constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
     auto n_warps = n_nodes * n_features;
     auto n_blocks = common::DivRoundUp(n_warps, kWarpsPerBlk);
     dh::LaunchKernel{n_blocks, kBlockThreads, 0, ctx->CUDACtx()->Stream()}(  // NOLINT
-        EvaluateSplitsKernel<kBlockThreads, decltype(d_scans)>, d_inputs, shared_inputs, d_scans,
-        evaluator, dh::ToSpan(d_splits));
+        split_kernel::EvaluateSplitsKernel<kBlockThreads, MultiEvaluateSplitInputs,
+                                           MultiEvaluateSplitSharedInputs, decltype(d_scans),
+                                           MultiSplitCandidate>,
+        d_inputs, shared_inputs, n_features, d_scans, evaluator, dh::ToSpan(d_splits));
   }
 
   // Find best split for each node
@@ -672,7 +252,7 @@ void MultiHistEvaluator::EvaluateSplits(Context const *ctx,
     bst_node_t nidx = input.nidx;
     auto base_weight = d_weights.Base(nidx);
     auto roundings = shared_inputs.roundings;
-    QuantizedGradientSum parent_sum{input.parent_sum.data(), roundings};
+    split_kernel::QuantizedGradientSum parent_sum{input.parent_sum.data(), roundings};
     double parent_gain = evaluator.CalcGain(nidx, shared_inputs.param, parent_sum);
     double parent_hess = 0;
     for (bst_target_t t = 0; t < n_targets; ++t) {
@@ -721,8 +301,9 @@ void MultiHistEvaluator::EvaluateSplits(Context const *ctx,
     // The child_sum span in best_split points to scan_buffer_ which gets reused,
     // so we store it persistently indexed by node id.
     auto split_sum_dest = GetNodeSumImpl(d_split_sums, nidx, n_targets);
-    QuantizedGradientSum child{split_sum.data(), roundings};
-    QuantizedGradientDifference sibling{input.parent_sum.data(), split_sum.data(), roundings};
+    split_kernel::QuantizedGradientSum child{split_sum.data(), roundings};
+    split_kernel::QuantizedGradientDifference sibling{input.parent_sum.data(), split_sum.data(),
+                                                      roundings};
 
     double left_hess = 0, right_hess = 0;  // Sum of child hessians across all targets
 

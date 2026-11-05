@@ -466,6 +466,38 @@ TEST(GpuHist, EvaluateSingleSplitEmpty) {
   EXPECT_LT(result.loss_chg, 0.0f);
 }
 
+TEST(GpuHist, EvaluateMissingOnlySplit) {
+  auto ctx = MakeCUDACtx(0);
+  TrainParam param;
+  param.Init(
+      Args{{"min_child_weight", "0"}, {"reg_lambda", "1"}, {"monotone_constraints", "(-1)"}});
+  GradientQuantiser quantiser{{1.0, 1.0}, {1.0, 1.0}};
+  auto cuts = MakeCutsForTest({0.0f, 1.0f}, {0, 2}, ctx.Device());
+  dh::device_vector<bst_feature_t> features{std::vector<bst_feature_t>{0}};
+  dh::device_vector<GradientPairInt64> histogram{std::vector<GradientPairInt64>{{1, 1}, {-1, 1}}};
+  // The missing bin has (gradient, Hessian) = (1, 1). Only putting all observed
+  // values on the left and missing values on the right satisfies the constraint.
+  EvaluateSplitInputs input{0, 0, {1, 3}, dh::ToSpan(features), dh::ToSpan(histogram)};
+  EvaluateSplitSharedInputs shared{EvalParam{param},
+                                   quantiser,
+                                   {},
+                                   cuts.cut_ptrs_.ConstDeviceSpan(),
+                                   cuts.cut_values_.ConstDeviceSpan(),
+                                   false};
+  GPUHistEvaluator evaluator{param, 1, ctx.Device()};
+  evaluator.Reset(&ctx, cuts, {}, 1, param);
+  auto entry = evaluator.EvaluateSingleSplit(&ctx, input, shared);
+  ASSERT_EQ(entry.split.findex, 0);
+  EXPECT_EQ(entry.split.fvalue, 1.0f);
+  EXPECT_EQ(entry.split.dir, kRightDir);
+  EXPECT_EQ(entry.split.left_sum, (GradientPairInt64{0, 2}));
+  EXPECT_EQ(entry.split.right_sum, (GradientPairInt64{1, 1}));
+  EXPECT_FLOAT_EQ(entry.left_weight, 0.0f);
+  EXPECT_FLOAT_EQ(entry.right_weight, -0.5f);
+  // Child gain 1/(1+1), minus parent gain 1/(3+1).
+  EXPECT_FLOAT_EQ(entry.split.loss_chg, 0.25f);
+}
+
 // Feature 0 has a better split, but the algorithm must select feature 1
 TEST(GpuHist, EvaluateSingleSplitFeatureSampling) {
   auto ctx = MakeCUDACtx(0);

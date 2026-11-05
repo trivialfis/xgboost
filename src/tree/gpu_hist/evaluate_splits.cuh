@@ -83,6 +83,7 @@ class GPUHistEvaluator {
   dh::CachingDeviceUVector<GPUExpandEntry> d_split_candidates_;
   dh::PinnedMemory h_split_children_;
   dh::CachingDeviceUVector<ChildNodes> d_split_children_;
+  dh::CachingDeviceUVector<GradientPairInt64> scan_buffer_;
 
   // storage for categories for each node, used for sort based splits.
   dh::device_vector<CatST> split_cats_;
@@ -248,6 +249,12 @@ struct MultiEvaluateSplitSharedInputs {
     kForward,   // only perform the forward pass
     kBackward,  // only perform the backward pass
   } one_pass{kNone};
+
+  bool is_dense{false};
+
+  [[nodiscard]] XGBOOST_DEVICE bool NeedBackward() const {
+    return one_pass != kForward && (!is_dense || one_pass == kBackward);
+  }
 
   [[nodiscard]] XGBOOST_DEVICE bst_target_t Targets() const { return roundings.size(); }
   [[nodiscard]] XGBOOST_DEVICE bst_feature_t Features() const {
