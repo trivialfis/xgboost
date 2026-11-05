@@ -3,7 +3,7 @@
  */
 #include <thrust/transform.h>  // for transform
 
-#include <algorithm>            // for max
+#include <algorithm>            // for max, transform
 #include <cmath>                // for isnan
 #include <cstdint>              // for int32_t, uint32_t
 #include <cuda/std/functional>  // for plus
@@ -515,49 +515,57 @@ struct GPUHistMakerDevice {
     }
   }
 
-  void ApplySplit(const GPUExpandEntry& candidate, RegTree* p_tree) {
-    RegTree& tree = *p_tree;
+  void ApplySplit(std::vector<GPUExpandEntry> const& candidates, RegTree* p_tree) {
+    xgboost_NVTX_FN_RANGE();
+    CHECK(!candidates.empty());
+    std::vector<ExpandData<float>> batch(candidates.size());
+    std::transform(
+        candidates.cbegin(), candidates.cend(), batch.begin(), [this](auto const& candidate) {
+          // Sanity check - have we created a leaf with no training instances?
+          if (!collective::IsDistributed() && partitioners_.Size() == 1) {
+            CHECK(partitioners_.Front()->GetRows(candidate.nidx).size() > 0)
+                << "No training instances in this leaf!";
+          }
 
-    // Sanity check - have we created a leaf with no training instances?
-    if (!collective::IsDistributed() && partitioners_.Size() == 1) {
-      CHECK(partitioners_.Front()->GetRows(candidate.nidx).size() > 0)
-          << "No training instances in this leaf!";
+          auto base_weight = candidate.base_weight;
+          auto left_weight = candidate.left_weight;
+          auto right_weight = candidate.right_weight;
+          auto const& q = (*quantiser)[0];
+          auto parent_hess =
+              q.ToFloatingPoint(candidate.split.left_sum + candidate.split.right_sum).GetHess();
+          auto left_hess = q.ToFloatingPoint(candidate.split.left_sum).GetHess();
+          auto right_hess = q.ToFloatingPoint(candidate.split.right_sum).GetHess();
+
+          auto is_cat = candidate.split.is_cat;
+          common::Span<CatWordT const> cat_bits;
+          if (is_cat) {
+            // should be set to nan in evaluation split.
+            CHECK(common::CheckNAN(candidate.split.fvalue));
+            cat_bits = this->evaluator_.GetHostNodeCats(candidate.nidx);
+            auto n_bins_feature = cuts_->FeatureBins(candidate.split.findex);
+            auto n_words = common::CatBitField::ComputeStorageSize(n_bins_feature);
+            CHECK_LE(n_words, cat_bits.size());
+            cat_bits = cat_bits.subspan(0, n_words);
+
+          } else {
+            CHECK(!common::CheckNAN(candidate.split.fvalue));
+          }
+          return ExpandData<float>{
+              SplitInfo{candidate.nidx, static_cast<bst_feature_t>(candidate.split.findex),
+                        candidate.split.fvalue, candidate.split.dir == kLeftDir, cat_bits},
+              {base_weight, parent_hess},
+              {left_weight, left_hess},
+              {right_weight, right_hess},
+              candidate.split.loss_chg};
+        });
+    p_tree->Expand(common::Span<ExpandData<float> const>{batch});
+
+    for (auto const& candidate : candidates) {
+      evaluator_.ApplyTreeSplit(candidate, p_tree);
+      auto const& parent = (*p_tree)[candidate.nidx];
+      interaction_constraints.Split(ctx_, candidate.nidx, parent.SplitIndex(), parent.LeftChild(),
+                                    parent.RightChild());
     }
-
-    auto base_weight = candidate.base_weight;
-    auto left_weight = candidate.left_weight;
-    auto right_weight = candidate.right_weight;
-    auto const& q = (*quantiser)[0];
-    auto parent_hess =
-        q.ToFloatingPoint(candidate.split.left_sum + candidate.split.right_sum).GetHess();
-    auto left_hess = q.ToFloatingPoint(candidate.split.left_sum).GetHess();
-    auto right_hess = q.ToFloatingPoint(candidate.split.right_sum).GetHess();
-
-    auto is_cat = candidate.split.is_cat;
-    common::Span<CatWordT const> cat_bits;
-    if (is_cat) {
-      // should be set to nan in evaluation split.
-      CHECK(common::CheckNAN(candidate.split.fvalue));
-      cat_bits = this->evaluator_.GetHostNodeCats(candidate.nidx);
-      auto n_bins_feature = cuts_->FeatureBins(candidate.split.findex);
-      auto n_words = common::CatBitField::ComputeStorageSize(n_bins_feature);
-      CHECK_LE(n_words, cat_bits.size());
-      cat_bits = cat_bits.subspan(0, n_words);
-
-    } else {
-      CHECK(!common::CheckNAN(candidate.split.fvalue));
-    }
-    tree.Expand({SplitInfo{candidate.nidx, static_cast<bst_feature_t>(candidate.split.findex),
-                           candidate.split.fvalue, candidate.split.dir == kLeftDir, cat_bits},
-                 {base_weight, parent_hess},
-                 {left_weight, left_hess},
-                 {right_weight, right_hess},
-                 candidate.split.loss_chg});
-    evaluator_.ApplyTreeSplit(candidate, p_tree);
-
-    const auto& parent = tree[candidate.nidx];
-    interaction_constraints.Split(ctx_, candidate.nidx, parent.SplitIndex(), parent.LeftChild(),
-                                  parent.RightChild());
   }
 
   GPUExpandEntry InitRoot(DMatrix* p_fmat, RegTree* p_tree) {
@@ -604,9 +612,7 @@ struct GPUHistMakerDevice {
     // The set of leaves that can be expanded asynchronously
     auto expand_set = driver.Pop();
     while (!expand_set.empty()) {
-      for (auto& candidate : expand_set) {
-        this->ApplySplit(candidate, p_tree);
-      }
+      this->ApplySplit(expand_set, p_tree);
       // Get the candidates we are allowed to expand further
       // e.g. We do not bother further processing nodes whose children are beyond max depth
       std::vector<GPUExpandEntry> valid_candidates;

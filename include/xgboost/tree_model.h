@@ -287,6 +287,8 @@ class RegTree : public Model {
    * The optional right-child marker is used by the exact updater during construction.
    */
   void Expand(tree::ExpandData<float> const& node, bst_node_t leaf_right_child = kInvalidNodeId);
+  /** @brief Expand multiple scalar leaves, with category spans on the host. */
+  void Expand(common::Span<tree::ExpandData<float> const> batch);
   /** @brief Expand multiple vector leaves using unscaled weights. */
   void Expand(Context const* ctx, tree::ExpandBatch const& batch);
   /** @brief Initialize prediction leaves from base weights, applying the learning rate. */
@@ -522,10 +524,13 @@ class RegTree : public Model {
     int nd = param_.num_nodes++;
     CHECK_LT(param_.num_nodes, std::numeric_limits<int>::max())
         << "number of nodes in the tree exceed 2^31";
-    nodes_.HostVector().resize(param_.num_nodes);
-    stats_.HostVector().resize(param_.num_nodes);
-    split_types_.HostVector().resize(param_.num_nodes, FeatureType::kNumerical);
-    split_categories_segments_.HostVector().resize(param_.num_nodes);
+    // Batch expansion can allocate storage for all children ahead of time.
+    if (nodes_.Size() < static_cast<std::size_t>(param_.num_nodes)) {
+      nodes_.HostVector().resize(param_.num_nodes);
+      stats_.HostVector().resize(param_.num_nodes);
+      split_types_.HostVector().resize(param_.num_nodes, FeatureType::kNumerical);
+      split_categories_segments_.HostVector().resize(param_.num_nodes);
+    }
     return nd;
   }
   // delete a tree node, keep the parent field to allow trace back

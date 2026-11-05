@@ -369,34 +369,34 @@ class TreeEvaluator {
   }
 
   template <bool CompiledWithCuda = WITH_CUDA()>
-  void AddSplit(bst_node_t nodeid, bst_node_t leftid, bst_node_t rightid, bst_feature_t f,
+  void AddSplit(bst_node_t nidx, bst_node_t left_nidx, bst_node_t right_nidx, bst_feature_t f,
                 float left_weight, float right_weight) {
     if (!has_constraint_) {
       return;
     }
 
-    auto max_nidx = std::max(leftid, rightid);
+    auto max_nidx = std::max(left_nidx, right_nidx);
     this->EnsureBounds(max_nidx, 1u);
 
     common::Transform<>::Init(
         [=] XGBOOST_DEVICE(size_t, common::Span<float> lower, common::Span<float> upper,
                            common::Span<int> monotone) {
-          lower[leftid] = lower[nodeid];
-          upper[leftid] = upper[nodeid];
+          lower[left_nidx] = lower[nidx];
+          upper[left_nidx] = upper[nidx];
 
-          lower[rightid] = lower[nodeid];
-          upper[rightid] = upper[nodeid];
+          lower[right_nidx] = lower[nidx];
+          upper[right_nidx] = upper[nidx];
           int32_t c = monotone[f];
           float mid = (left_weight + right_weight) / 2.0f;
 
           SPAN_CHECK(!common::CheckNAN(mid));
 
           if (c < 0) {
-            lower[leftid] = mid;
-            upper[rightid] = mid;
+            lower[left_nidx] = mid;
+            upper[right_nidx] = mid;
           } else if (c > 0) {
-            upper[leftid] = mid;
-            lower[rightid] = mid;
+            upper[left_nidx] = mid;
+            lower[right_nidx] = mid;
           }
         },
         common::Range(0, 1), 1, device_)
