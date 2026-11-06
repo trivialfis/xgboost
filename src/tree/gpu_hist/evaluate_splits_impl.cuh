@@ -299,54 +299,13 @@ __device__ void RestoreWinner(MultiEvaluateSplitInputs const &node,
   __syncwarp();
 }
 
-// Common target counts expose loop bounds to the compiler. The default retains
-// the runtime target count and uses the same fused kernel for every other size.
-template <typename Fn>
-void DispatchFusedTargets(bst_target_t n_targets, Fn &&fn) {
-  switch (n_targets) {
-    case 1:
-      fn(std::integral_constant<bst_target_t, 1>{});
-      break;
-    case 2:
-      fn(std::integral_constant<bst_target_t, 2>{});
-      break;
-    case 3:
-      fn(std::integral_constant<bst_target_t, 3>{});
-      break;
-    case 4:
-      fn(std::integral_constant<bst_target_t, 4>{});
-      break;
-    case 8:
-      fn(std::integral_constant<bst_target_t, 8>{});
-      break;
-    case 16:
-      fn(std::integral_constant<bst_target_t, 16>{});
-      break;
-    case 32:
-      fn(std::integral_constant<bst_target_t, 32>{});
-      break;
-    case 64:
-      fn(std::integral_constant<bst_target_t, 64>{});
-      break;
-    case 128:
-      fn(std::integral_constant<bst_target_t, 128>{});
-      break;
-    default:
-      fn(std::integral_constant<bst_target_t, 0>{});
-      break;
-  }
-}
-
-template <bst_target_t kTargets, bool kHasCategorical = true, typename Input, typename SharedInput,
-          typename SortedIndex, typename Output>
+template <bool kHasCategorical = true, typename Input, typename SharedInput, typename SortedIndex,
+          typename Output>
 __global__ __launch_bounds__(32) void EvaluateSplitsKernel(
     common::Span<Input const> nodes, SharedInput shared_input, bst_feature_t features,
     SortedIndex sorted_idx, TreeEvaluator::SplitEvaluator<EvalParam> evaluator,
     common::Span<GradientPairInt64> scratch, common::Span<Output> out) {
   auto shared = GetSharedInput(shared_input, features);
-  if constexpr (kTargets != 0) {
-    shared.roundings = {shared.roundings.data(), kTargets};
-  }
   auto nidx = blockIdx.x / features;
   auto node = GetInput(nodes[nidx]);
   auto fi = blockIdx.x % features;
@@ -429,24 +388,16 @@ void LaunchEvaluateSplits(Context const *ctx, common::Span<Input const> nodes, S
                           TreeEvaluator::SplitEvaluator<EvalParam> evaluator,
                           common::Span<GradientPairInt64> scratch, common::Span<Output> out,
                           bool has_categorical) {
-  auto launch = [&](auto targets, auto categorical) {
+  auto launch = [&](auto categorical) {
     dh::LaunchKernel{static_cast<std::uint32_t>(nodes.size() * features), 32, 0,
                      ctx->CUDACtx()->Stream()}(
-        EvaluateSplitsKernel<decltype(targets)::value, decltype(categorical)::value, Input,
-                             SharedInput, SortedIndex, Output>,
+        EvaluateSplitsKernel<decltype(categorical)::value, Input, SharedInput, SortedIndex, Output>,
         nodes, shared, features, sorted, evaluator, scratch, out);
   };
-  auto dispatch = [&](auto targets) {
-    if (has_categorical) {
-      launch(targets, std::true_type{});
-    } else {
-      launch(targets, std::false_type{});
-    }
-  };
-  if constexpr (std::is_same_v<Input, EvaluateSplitInputs>) {
-    dispatch(std::integral_constant<bst_target_t, 1>{});
+  if (has_categorical) {
+    launch(std::true_type{});
   } else {
-    DispatchFusedTargets(shared.Targets(), dispatch);
+    launch(std::false_type{});
   }
 }
 }  // namespace split_kernel
