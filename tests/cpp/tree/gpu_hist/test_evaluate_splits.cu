@@ -5,13 +5,63 @@
 #include <thrust/host_vector.h>
 
 #include <algorithm>  // for max_element
+#include <cmath>      // for nextafter
 #include <limits>     // for numeric_limits
 
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
+#include "../../../../src/tree/gpu_hist/evaluate_splits_impl.cuh"
 #include "../../helpers.h"
 #include "../test_evaluate_splits.h"  // TestPartitionBasedSplit
 
 namespace xgboost::tree {
+void TestSplitArgMax() {
+  using Limits = std::numeric_limits<double>;
+  using cuda_impl::split_kernel::ArgMaxT;
+  using cuda_impl::split_kernel::IntegerArgMax;
+  auto ctx = MakeCUDACtx(0);
+  // Include adjacent doubles that round to the same float, subnormals, and unordered values.
+  std::vector<double> values{-Limits::infinity(),
+                             -Limits::max(),
+                             -1.0,
+                             std::nextafter(-1.0, 0.0),
+                             -Limits::min(),
+                             -Limits::denorm_min(),
+                             -0.0,
+                             0.0,
+                             Limits::denorm_min(),
+                             Limits::min(),
+                             1.0,
+                             std::nextafter(1.0, 2.0),
+                             Limits::max(),
+                             Limits::infinity(),
+                             Limits::quiet_NaN(),
+                             -Limits::quiet_NaN(),
+                             Limits::signaling_NaN()};
+  thrust::device_vector<double> d_values(values);
+  auto v = dh::ToSpan(d_values);
+  // Check each value pair with increasing, decreasing, and equal indices.
+  thrust::device_vector<int> d_matches(values.size() * values.size() * 3);
+  auto matches = dh::ToSpan(d_matches);
+  dh::LaunchN(d_matches.size(), ctx.CUDACtx()->Stream(), [=] __device__(std::size_t i) {
+    auto pair = i / 3;
+    auto order = i % 3;
+    cub::KeyValuePair<std::uint32_t, double> a{order == 0 ? 0u : 1u, v[pair / v.size()]};
+    cub::KeyValuePair<std::uint32_t, double> b{order == 1 ? 0u : 1u, v[pair % v.size()]};
+    auto expected = cub::ArgMax{}(a, b);
+    auto actual = IntegerArgMax{}(ArgMaxT{a.key, IntegerArgMax::Encode(a.value)},
+                                  ArgMaxT{b.key, IntegerArgMax::Encode(b.value)});
+    matches[i] =
+        actual.key == expected.key && actual.value == IntegerArgMax::Encode(expected.value);
+  });
+  ctx.CUDACtx()->Stream().Sync();
+  thrust::host_vector<int> h_matches(d_matches);
+  for (std::size_t i = 0; i < h_matches.size(); ++i) {
+    EXPECT_TRUE(h_matches[i]) << "pair=" << i / 3 << ", index order=" << i % 3;
+  }
+}
+
+TEST(GpuHist, SplitArgMax) { TestSplitArgMax(); }
+
 TEST(GpuHist, ApplyTreeSplit) {
   auto ctx = MakeCUDACtx(0);
   TrainParam param;

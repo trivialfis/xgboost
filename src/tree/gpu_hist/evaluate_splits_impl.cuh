@@ -4,16 +4,17 @@
  */
 #pragma once
 
-#include <cub/util_type.cuh>
-#include <cub/warp/warp_reduce.cuh>
-#include <cub/warp/warp_scan.cuh>
-#include <cuda/ptx>
-#include <cuda/std/functional>
-#include <limits>
-#include <type_traits>
+#include <cstdint>                   // for uint32_t, uint64_t
+#include <cub/util_type.cuh>         // for KeyValuePair, Uninitialized
+#include <cub/warp/warp_reduce.cuh>  // for WarpReduce
+#include <cub/warp/warp_scan.cuh>    // for WarpScan
+#include <cuda/ptx>                  // for get_sreg_laneid
+#include <cuda/std/functional>       // for plus
+#include <limits>                    // for numeric_limits
+#include <type_traits>               // for integral_constant, is_same_v, is_trivially_copyable_v
 
-#include "../../common/cuda_context.cuh"
-#include "evaluate_splits.cuh"
+#include "../../common/cuda_context.cuh"  // for CUDAContext
+#include "evaluate_splits.cuh"            // for EvaluateSplitInputs, MultiEvaluateSplitInputs
 
 namespace xgboost::tree::cuda_impl {
 namespace split_kernel {
@@ -105,9 +106,39 @@ static_assert(std::is_trivially_copyable_v<QuantizedGradientDifference>);
 // The scan is fused with scoring. Only one running prefix per target is retained;
 // the winning child sums are reconstructed once after all bins have been scored.
 using ScanT = cub::WarpScan<GradientPairInt64>;
-using ArgMaxT = cub::KeyValuePair<std::uint32_t, double>;
+using ArgMaxT = cub::KeyValuePair<std::uint32_t, std::uint64_t>;
 using MaxT = cub::WarpReduce<ArgMaxT>;
 using SumT = cub::WarpReduce<GradientPairInt64>;
+
+// Compare double gains without floating-point instructions, preserving cub::ArgMax's
+// lower-index tie breaking and unordered-comparison behavior.
+struct IntegerArgMax {
+  // Encode once per lane, before reduction. The original gain stays in that lane.
+  static __device__ std::uint64_t Encode(double gain) {
+    auto bits = static_cast<std::uint64_t>(__double_as_longlong(gain));
+    constexpr std::uint64_t kSign = std::uint64_t{1} << 63;
+    constexpr std::uint64_t kMagnitude = kSign - 1;
+    constexpr std::uint64_t kInfinity = 0x7ff0000000000000ULL;
+    // No non-NaN value maps to zero; reserve it for NaNs.
+    if ((bits & kMagnitude) > kInfinity) {
+      return 0;
+    }
+    // Signed zeros compare equal.
+    if ((bits & kMagnitude) == 0) {
+      bits = 0;
+    }
+    // Reverse negative encodings and put nonnegative encodings above them.
+    return bits ^ ((bits & kSign) ? ~std::uint64_t{0} : kSign);
+  }
+
+  __device__ ArgMaxT operator()(ArgMaxT const &a, ArgMaxT const &b) const {
+    // Both comparisons in cub::ArgMax are false if either operand is NaN.
+    if (a.value == 0 || b.value == 0) {
+      return a;
+    }
+    return b.value > a.value || (b.value == a.value && b.key < a.key) ? b : a;
+  }
+};
 
 enum class SplitKind { kNumerical, kOneHot, kPartition };
 
@@ -201,7 +232,9 @@ __device__ void Enumerate(MultiEvaluateSplitInputs const &node,
     if (bin_idx >= limit || !IsValidSplit(shared.param, left_hess / nt, right_hess / nt)) {
       gain = -std::numeric_limits<double>::infinity();
     }
-    auto max = MaxT(*max_storage).Reduce({static_cast<std::uint32_t>(lane), gain}, cub::ArgMax{});
+    auto max = MaxT(*max_storage)
+                   .Reduce({static_cast<std::uint32_t>(lane), IntegerArgMax::Encode(gain)},
+                           IntegerArgMax{});
     auto winner = __shfl_sync(dh::WarpFullMask(), max.key, 0);
     if (lane == winner && !isinf(gain) && static_cast<float>(gain) > best->loss_chg) {
       *best_bin = bin_idx;

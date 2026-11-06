@@ -154,6 +154,13 @@ class TreeEvaluator {
       return this->ApplyBounds(nidx, target, pooled_weight);
     }
 
+    [[nodiscard]] XGBOOST_DEVICE bool CheckConstraint(bst_feature_t fidx, float left,
+                                                      float right) const {
+      auto constraint = has_constraint ? constraints[fidx] : 0;
+      return constraint == 0 || (constraint > 0 && left <= right) ||
+             (constraint < 0 && left >= right);
+    }
+
     template <typename LeftGradientSumT, typename RightGradientSumT,
               split_impl::EnableScaGrad<LeftGradientSumT, RightGradientSumT> = 0>
     [[nodiscard]] XGBOOST_DEVICE std::tuple<float, float> CalcSplitWeights(
@@ -162,14 +169,7 @@ class TreeEvaluator {
       auto wleft = this->CalcWeight(nidx, target, param, left);
       auto wright = this->CalcWeight(nidx, target, param, right);
 
-      if (!has_constraint) {
-        return {wleft, wright};
-      }
-
-      auto constraint = constraints[fidx];
-      bool ordered = constraint == 0 || (constraint > 0 && wleft <= wright) ||
-                     (constraint < 0 && wleft >= wright);
-      if (ordered) {
+      if (this->CheckConstraint(fidx, wleft, wright)) {
         return {wleft, wright};
       }
 
@@ -183,12 +183,21 @@ class TreeEvaluator {
                                                        LeftGradientSumT const& left,
                                                        RightGradientSumT const& right, bool scalar,
                                                        double* gain) const {
-      auto [l_w, r_w] = this->CalcSplitWeights(param, nidx, fidx, target, left, right);
-      // Equal scalar leaf weights cannot improve on the parent. Reject before score
-      // subtraction can turn a zero gain into a positive gain through rounding.
-      if (scalar && l_w == r_w) {
-        *gain = -std::numeric_limits<double>::infinity();
-        return;
+      float l_w, r_w;
+      if (scalar) {
+        l_w = this->CalcWeight(nidx, target, param, left);
+        r_w = this->CalcWeight(nidx, target, param, right);
+        // Pooling a violating scalar split would make the weights equal, so reject it
+        // before computing the pooled weight. Equal weights cannot improve on the parent.
+        if (l_w == r_w || !this->CheckConstraint(fidx, l_w, r_w)) {
+          *gain = -std::numeric_limits<double>::infinity();
+          return;
+        }
+      } else {
+        auto [left_weight, right_weight] =
+            this->CalcSplitWeights(param, nidx, fidx, target, left, right);
+        l_w = left_weight;
+        r_w = right_weight;
       }
       *gain += tree::CalcGainGivenWeight(param, left.GetGrad(), left.GetHess(), l_w);
       *gain += tree::CalcGainGivenWeight(param, right.GetGrad(), right.GetHess(), r_w);
