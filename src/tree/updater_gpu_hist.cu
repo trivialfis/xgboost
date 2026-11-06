@@ -3,7 +3,7 @@
  */
 #include <thrust/transform.h>  // for transform
 
-#include <algorithm>            // for max, transform
+#include <algorithm>            // for max, copy_if
 #include <cmath>                // for isnan
 #include <cstdint>              // for int32_t, uint32_t
 #include <cuda/std/functional>  // for plus
@@ -520,48 +520,42 @@ struct GPUHistMakerDevice {
     CHECK(!candidates.empty());
     auto h_candidates = common::Span<GPUExpandEntry const>{candidates};
     evaluator_.PrepareTreeSplit(ctx_, h_candidates);
-    std::vector<ExpandData<float>> batch(candidates.size());
-    std::transform(
-        candidates.cbegin(), candidates.cend(), batch.begin(), [this](auto const& candidate) {
-          // Sanity check - have we created a leaf with no training instances?
-          if (!collective::IsDistributed() && partitioners_.Size() == 1) {
-            CHECK(partitioners_.Front()->GetRows(candidate.nidx).size() > 0)
-                << "No training instances in this leaf!";
-          }
+    for (auto const& candidate : candidates) {
+      // Sanity check - have we created a leaf with no training instances?
+      if (!collective::IsDistributed() && partitioners_.Size() == 1) {
+        CHECK(partitioners_.Front()->GetRows(candidate.nidx).size() > 0)
+            << "No training instances in this leaf!";
+      }
 
-          auto base_weight = candidate.base_weight;
-          auto left_weight = candidate.left_weight;
-          auto right_weight = candidate.right_weight;
-          auto const& q = (*quantiser)[0];
-          auto parent_hess =
-              q.ToFloatingPoint(candidate.split.left_sum + candidate.split.right_sum).GetHess();
-          auto left_hess = q.ToFloatingPoint(candidate.split.left_sum).GetHess();
-          auto right_hess = q.ToFloatingPoint(candidate.split.right_sum).GetHess();
+      auto base_weight = candidate.base_weight;
+      auto left_weight = candidate.left_weight;
+      auto right_weight = candidate.right_weight;
+      auto const& q = (*quantiser)[0];
+      auto parent_hess =
+          q.ToFloatingPoint(candidate.split.left_sum + candidate.split.right_sum).GetHess();
+      auto left_hess = q.ToFloatingPoint(candidate.split.left_sum).GetHess();
+      auto right_hess = q.ToFloatingPoint(candidate.split.right_sum).GetHess();
 
-          auto is_cat = candidate.split.is_cat;
-          common::Span<CatWordT const> cat_bits;
-          if (is_cat) {
-            // should be set to nan in evaluation split.
-            CHECK(common::CheckNAN(candidate.split.fvalue));
-            cat_bits = this->evaluator_.GetHostNodeCats(candidate.nidx);
-            auto n_bins_feature = cuts_->FeatureBins(candidate.split.findex);
-            auto n_words = common::CatBitField::ComputeStorageSize(n_bins_feature);
-            CHECK_LE(n_words, cat_bits.size());
-            cat_bits = cat_bits.subspan(0, n_words);
+      auto is_cat = candidate.split.is_cat;
+      common::Span<CatWordT const> cat_bits;
+      if (is_cat) {
+        // should be set to nan in evaluation split.
+        CHECK(common::CheckNAN(candidate.split.fvalue));
+        cat_bits = this->evaluator_.GetHostNodeCats(candidate.nidx);
+        auto n_bins_feature = cuts_->FeatureBins(candidate.split.findex);
+        auto n_words = common::CatBitField::ComputeStorageSize(n_bins_feature);
+        CHECK_LE(n_words, cat_bits.size());
+        cat_bits = cat_bits.subspan(0, n_words);
 
-          } else {
-            CHECK(!common::CheckNAN(candidate.split.fvalue));
-          }
-          return ExpandData<float>{
-              SplitInfo{candidate.nidx, static_cast<bst_feature_t>(candidate.split.findex),
-                        candidate.split.fvalue, candidate.split.dir == kLeftDir, cat_bits},
-              {base_weight, parent_hess},
-              {left_weight, left_hess},
-              {right_weight, right_hess},
-              candidate.split.loss_chg};
-        });
-    for (auto const& entry : batch) {
-      p_tree->Expand(entry);
+      } else {
+        CHECK(!common::CheckNAN(candidate.split.fvalue));
+      }
+      p_tree->Expand({SplitInfo{candidate.nidx, static_cast<bst_feature_t>(candidate.split.findex),
+                                candidate.split.fvalue, candidate.split.dir == kLeftDir, cat_bits},
+                      {base_weight, parent_hess},
+                      {left_weight, left_hess},
+                      {right_weight, right_hess},
+                      candidate.split.loss_chg});
     }
 
     evaluator_.ApplyTreeSplit(ctx_, *p_tree, h_candidates);
