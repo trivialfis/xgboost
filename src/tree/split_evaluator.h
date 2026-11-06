@@ -10,7 +10,6 @@
 
 #include <xgboost/base.h>
 
-#include <algorithm>    // for any_of
 #include <cstddef>      // for size_t
 #include <limits>       // for numeric_limits
 #include <tuple>        // for tuple
