@@ -83,7 +83,6 @@ class GPUHistEvaluator {
   dh::CachingDeviceUVector<GPUExpandEntry> d_split_candidates_;
   dh::PinnedMemory h_split_children_;
   dh::CachingDeviceUVector<ChildNodes> d_split_children_;
-  dh::CachingDeviceUVector<GradientPairInt64> scan_buffer_;
 
   // storage for categories for each node, used for sort based splits.
   dh::device_vector<CatST> split_cats_;

@@ -127,49 +127,15 @@ void GPUHistEvaluator::LaunchEvaluateSplits(Context const *ctx, bst_feature_t ma
   // Every block writes its candidate, no initialization is needed.
   dh::TemporaryArray<DeviceSplitCandidate> feature_best_splits(combined_num_features);
 
-  if (!has_categoricals_) {
-    dh::LaunchKernel{static_cast<std::uint32_t>(combined_num_features), 32, 0,
-                     ctx->CUDACtx()->Stream()}(
-        cuda_impl::split_kernel::FusedEvaluateSplitsKernel<1, EvaluateSplitInputs,
-                                                         EvaluateSplitSharedInputs,
-                                                         DeviceSplitCandidate>,
-        d_inputs, shared_inputs, max_active_features, evaluator,
-        common::Span<GradientPairInt64>{}, dh::ToSpan(feature_best_splits));
-  } else {
-    auto node_hist_size = shared_inputs.feature_values.size();
-    scan_buffer_.resize(d_inputs.size() * node_hist_size * 2);
-    auto scans = dh::ToSpan(scan_buffer_);
-    auto d_scans =
-        common::IterSpan{dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
-                           return scans.subspan(i * node_hist_size * 2, node_hist_size * 2);
-                         }),
-                         d_inputs.size()};
-    // Scalar category sorting stores global offsets; the shared scan uses node-local bins.
-    auto sorted = this->SortedIdx(d_inputs.size(), node_hist_size);
-    auto sorted_idx = common::IterSpan{dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
-                                         return sorted[i] - (i / node_hist_size) * node_hist_size;
-                                       }),
-                                       sorted.size()};
-
-    constexpr std::uint32_t kScanThreads = 128;
-    constexpr auto kWarpsPerBlock = kScanThreads / dh::WarpThreads();
-    auto n_blocks = common::DivRoundUp(combined_num_features, kWarpsPerBlock);
-    dh::LaunchKernel{static_cast<std::uint32_t>(n_blocks), kScanThreads, 0, ctx->CUDACtx()->Stream()}(
-        cuda_impl::split_kernel::ScanHistogramKernel<kScanThreads, EvaluateSplitInputs,
-                                                     EvaluateSplitSharedInputs, decltype(sorted_idx),
-                                                     decltype(d_scans)>,
-        d_inputs, shared_inputs, max_active_features, sorted_idx, d_scans);
-
-    constexpr std::uint32_t kEvalThreads = 32;
-    dh::LaunchKernel{static_cast<std::uint32_t>(combined_num_features), kEvalThreads, 0,
-                     ctx->CUDACtx()->Stream()}(
-        cuda_impl::split_kernel::EvaluateSplitsKernel<kEvalThreads, EvaluateSplitInputs,
-                                                      EvaluateSplitSharedInputs, decltype(d_scans),
-                                                      DeviceSplitCandidate>,
-        d_inputs, shared_inputs, max_active_features, d_scans, evaluator,
-        dh::ToSpan(feature_best_splits));
-
-  }
+  auto node_hist_size = shared_inputs.feature_values.size();
+  // Scalar sorting stores global offsets; the shared kernel consumes node-local bins.
+  auto sorted = this->SortedIdx(d_inputs.size(), node_hist_size);
+  auto sorted_idx = common::IterSpan{dh::MakeIndexTransformIter([=] XGBOOST_DEVICE(std::size_t i) {
+                                     return sorted[i] - (i / node_hist_size) * node_hist_size;
+                                   }), sorted.size()};
+  cuda_impl::split_kernel::LaunchEvaluateSplits(
+      ctx, d_inputs, shared_inputs, max_active_features, sorted_idx, evaluator,
+      common::Span<GradientPairInt64>{}, dh::ToSpan(feature_best_splits), has_categoricals_);
 
   // Reduce to get best candidate for left and right child over all features
   auto reduce_offset = dh::MakeTransformIterator<size_t>(

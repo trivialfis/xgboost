@@ -162,63 +162,11 @@ void MultiHistEvaluator::EvaluateSplits(Context const *ctx,
   auto d_sorted_idx = common::Span<std::size_t const>{dh::ToSpan(sorted_idx)};
 
   dh::CachingDeviceUVector<MultiSplitCandidate> d_splits(n_nodes * n_features);
-  if (n_targets <= 4 && shared_inputs.cat_storage_size == 0) {
-    // Only the winning sums for each feature need to survive the fused kernel.
-    scan_buffer_.resize(static_cast<std::size_t>(n_nodes) * n_features * n_targets);
-    split_kernel::DispatchFusedTargets(n_targets, [&](auto targets) {
-      dh::LaunchKernel{n_nodes * n_features, 32, 0, ctx->CUDACtx()->Stream()}(
-          split_kernel::FusedEvaluateSplitsKernel<decltype(targets)::value,
-                                                 MultiEvaluateSplitInputs,
-                                                 MultiEvaluateSplitSharedInputs,
-                                                 MultiSplitCandidate>,
-          d_inputs, shared_inputs, n_features, evaluator, dh::ToSpan(scan_buffer_),
-          dh::ToSpan(d_splits));
-    });
-  } else {
-    // Calculate total scan buffer size needed for all nodes
-    auto node_hist_size = shared_inputs.n_total_bins_per_tar * n_targets;
-    std::size_t total_hist_size = node_hist_size * n_nodes;
-
-    // Scan the histograms. One for forward and the other for backward.
-    // Since there's only store op on the scan buffer, no need to initialize it.
-    this->scan_buffer_.resize(total_hist_size * 2);
-
-    // Create spans for each node's scan results
-    auto in_scans = dh::ToSpan(this->scan_buffer_);
-    auto d_scans = common::IterSpan{
-        thrust::make_transform_iterator(
-            dh::make_counting_iterator(0ul),
-            [=] XGBOOST_DEVICE(std::size_t nidx_in_set) -> common::Span<GradientPairInt64> {
-              return in_scans.subspan(nidx_in_set * node_hist_size * 2, node_hist_size * 2);
-            }),
-        n_nodes};
-    // Launch histogram scan kernel, each warp handles one target of one feature of one node.
-    {
-      std::uint32_t constexpr kBlockThreads = 128;
-      constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
-      auto n_warps = n_nodes * n_targets * n_features;
-      auto n_blocks = common::DivRoundUp(n_warps, kWarpsPerBlk);
-      dh::LaunchKernel{n_blocks, kBlockThreads, 0, ctx->CUDACtx()->Stream()}(  // NOLINT
-          split_kernel::ScanHistogramKernel<kBlockThreads, MultiEvaluateSplitInputs,
-                                            MultiEvaluateSplitSharedInputs, decltype(d_sorted_idx),
-                                            decltype(d_scans)>,
-          d_inputs, shared_inputs, n_features, d_sorted_idx, d_scans);
-    }
-
-    // Launch split evaluation kernel
-    {
-      std::uint32_t constexpr kBlockThreads = 32;
-      constexpr std::int32_t kWarpsPerBlk = kBlockThreads / dh::WarpThreads();
-      auto n_warps = n_nodes * n_features;
-      auto n_blocks = common::DivRoundUp(n_warps, kWarpsPerBlk);
-      dh::LaunchKernel{n_blocks, kBlockThreads, 0, ctx->CUDACtx()->Stream()}(  // NOLINT
-          split_kernel::EvaluateSplitsKernel<kBlockThreads, MultiEvaluateSplitInputs,
-                                             MultiEvaluateSplitSharedInputs, decltype(d_scans),
-                                             MultiSplitCandidate>,
-          d_inputs, shared_inputs, n_features, d_scans, evaluator, dh::ToSpan(d_splits));
-    }
-
-  }
+  // Running scan prefixes are reused for the winning sums after evaluation.
+  scan_buffer_.resize(static_cast<std::size_t>(n_nodes) * n_features * n_targets);
+  split_kernel::LaunchEvaluateSplits(ctx, d_inputs, shared_inputs, n_features, d_sorted_idx,
+                                     evaluator, dh::ToSpan(scan_buffer_), dh::ToSpan(d_splits),
+                                     shared_inputs.cat_storage_size > 0);
 
   // Find best split for each node
   auto d_weights = this->GetNodeWeights(n_targets);
